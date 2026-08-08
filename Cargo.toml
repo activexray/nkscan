@@ -1,6 +1,6 @@
 [package]
 name = "nkscan"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
@@ -9,16 +9,10 @@ thiserror = "2"
 bitflags = "2"
 nusb = "0.2"
 tracing = "0.1"
-image = { version = "0.25", default-features = false, features = [
-  "rayon",
-  "tiff",
-] }
-moxcms = "0.9"
 
 # Python library dependencies
 #
-# abi3 so CI builds one wheel per platform rather than one per interpreter. The 3.13 floor is
-# what NegPy asks for, and it is the consumer this targets.
+# abi3 so CI builds one wheel per platform rather than one per interpreter
 pyo3 = { version = "0.29", optional = true, features = ["abi3-py313"] }
 # Tracks pyo3's version; the pairing is what makes the zero-copy handoff sound
 numpy = { version = "0.29", optional = true }
@@ -26,31 +20,35 @@ numpy = { version = "0.29", optional = true }
 # infer_signature is what turns a default into its actual repr rather than `...`; the rest of the
 # crate's defaults are type support for crates this does not use
 pyo3-stub-gen = { version = "0.23", optional = true, default-features = false, features = [
-  "numpy",
-  "infer_signature",
+    "numpy",
+    "infer_signature",
 ] }
 
 # The CLI stack, which a library consumer has no use for
 tracing-subscriber = { version = "0.3", features = [
-  "env-filter",
+    "env-filter",
 ], optional = true }
 clap = { version = "4", features = ["derive"], optional = true }
 anyhow = { version = "1", optional = true }
 indicatif = { version = "0.18", optional = true }
+image = { version = "0.25", default-features = false, features = [
+    "rayon",
+    "tiff",
+], optional = true }
+moxcms = { version = "0.9", optional = true }
+
 
 [features]
-cli = ["dep:tracing-subscriber", "dep:clap", "dep:anyhow", "dep:indicatif"]
+cli = [
+    "dep:tracing-subscriber",
+    "dep:clap",
+    "dep:anyhow",
+    "dep:indicatif",
+    "dep:image",
+    "dep:moxcms",
+]
 python = ["dep:pyo3", "dep:numpy", "dep:pyo3-stub-gen"]
-
-[[bin]]
-name = "nkscan"
-path = "src/bin/nkscan/main.rs"
-required-features = ["cli"]
-
-[[bin]]
-name = "stub_gen"
-path = "src/bin/stub_gen.rs"
-required-features = ["python"]
+default = ["cli"] # TODO: REMOVE
 
 [lib]
 name = "nkscan"
@@ -62,17 +60,16 @@ nix = { version = "0.31", features = ["ioctl"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = [
-  "Win32_Foundation",
-  "Win32_Storage_FileSystem",
-  "Win32_System_IO",
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 io-kit-sys = "0.5"
 
-[dev-dependencies]
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-clap = { version = "4", features = ["derive"] }
-anyhow = "1"
-indicatif = "0.18"
+[[bin]]
+name = "nkscan"
+path = "src/bin/nkscan/main.rs"
+required-features = ["cli"]

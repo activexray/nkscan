@@ -3,3 +3,18 @@
 *.tiff
 nkscan-wb.txt
 result
+
+# LibreOffice lock files, from opening the specs
+.~lock.*#
+
+# Raw scan dumps from examples/scan.rs
+scan.raw
+
+# CDB traces from examples/scan.rs
+ours.log
+*.log
+thumb.raw
+thumb.ppm
+thumb.pgm
+*.ppm
+*.pgm

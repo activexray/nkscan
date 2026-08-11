@@ -72,7 +72,11 @@ pub fn write_frame(
     // Positions within the color buffer, which carries only the color
     // channels of `pass.layout.channels`, in the same relative order
     let color_ids: Vec<u8> = pass.layout.colors().collect();
-    let plane = |channel: Channel| color_ids.iter().position(|&id| Channel::from(id) == channel);
+    let plane = |channel: Channel| {
+        color_ids
+            .iter()
+            .position(|&id| Channel::from(id) == channel)
+    };
 
     // R, G, B whatever order the stream interleaves them in. A unit that scans
     // one channel calls it the default rather than green

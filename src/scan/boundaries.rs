@@ -153,7 +153,9 @@ fn profile(image: &Image) -> Vec<u64> {
             band.clone()
                 .map(|y| {
                     let row = image.color_row(y);
-                    (0..stride).map(|c| u64::from(row[x * stride + c])).sum::<u64>()
+                    (0..stride)
+                        .map(|c| u64::from(row[x * stride + c]))
+                        .sum::<u64>()
                 })
                 .sum()
         })
@@ -346,7 +348,14 @@ mod tests {
                 }
             }
         }
-        (Samples { color: samples, ir: None }, sensor, feed)
+        (
+            Samples {
+                color: samples,
+                ir: None,
+            },
+            sensor,
+            feed,
+        )
     }
 
     fn image(samples: &Samples, sensor: usize, feed: usize) -> Image<'_> {

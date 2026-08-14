@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2]
+
+### Added
+
+- Frame discovery for adapters that offer no frame table and no perforation
+  read, such as a mount adapter (MA-21) carrying a single slide: the frame is
+  the whole opening the address page already describes, so `nkscan scan` runs
+  against them instead of refusing to start.
+
+### Fixed
+
+- CCD row-curve correction sized a `CcdData` reply against colors × types
+  from the measurement page, when 2-11-10 says a reply is CCD lines × types.
+  A unit whose line count differs from its color count, such as LS-50 and
+  LS-5000's 2-line CCD against 3 measured colors, scanned every frame
+  uncorrected instead.
+
 ## [0.4.1]
 
 ### Fixed

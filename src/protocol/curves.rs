@@ -38,15 +38,17 @@ impl Curves {
     /// correction from a misread table would be worse than none.
     pub fn parse(ccd: &CcdMeasurement, words: &[u16], rows: usize, kind: usize) -> Option<Self> {
         let points = ccd.points.len();
-        if points < 2 || rows == 0 || words.len() < ccd.curves() * points {
+        let types = usize::from(ccd.types);
+        // 2-11-10 lays the reply out per CCD line, `types` curves of `points`
+        // each, with no color axis of its own: `ccd.curves()` is colors ×
+        // types, a count of the measurements the unit makes, not of what one
+        // reply carries. Sizing against it instead rejects a unit whose line
+        // count and color count differ, which is not a fault in the data
+        if points < 2 || rows == 0 || kind >= types || words.len() < rows * types * points {
             return None;
         }
         // `repeat * types + type`, established by reading a real unit: curves
         // `i`, `i + types` and `i + 2 * types` agree while the types do not
-        let types = usize::from(ccd.types);
-        if kind >= types || rows * types > ccd.curves() {
-            return None;
-        }
         let curve = |row: usize| -> &[u16] {
             let at = (row * types + kind) * points;
             &words[at..at + points]

@@ -11,7 +11,7 @@ use nkscan::{
     device, dust,
     protocol::{
         caps::{film::FilmFormat, other::HostCooperation, set_window::ColorInterleaving},
-        data::FrameTable,
+        data::{Boundary, FrameTable},
         decode::Samples,
         model::Model,
         window::Channel,
@@ -193,7 +193,13 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
                 (FrameTable::Boundary(measured), frames)
             }
             Framing::Caller => {
-                bail!("Caller-supplied frame boundaries are not implemented yet");
+                let frame = framing::single_frame(session.capabilities())?;
+                (
+                    FrameTable::Boundary(Boundary {
+                        frames: vec![frame],
+                    }),
+                    vec![frame],
+                )
             }
             Framing::Perforation => {
                 // discard old data

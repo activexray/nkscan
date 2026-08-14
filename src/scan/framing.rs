@@ -118,3 +118,16 @@ pub fn table(caps: &Capabilities) -> Result<Boundary, Error> {
     }
     Ok(Boundary { frames })
 }
+
+/// The one frame a [`Framing::Caller`] unit never describes on its own: the whole opening each axis's range and boundary give
+pub fn single_frame(caps: &Capabilities) -> Result<Rect, Error> {
+    let (x, y) = (&caps.address.x_axis, &caps.address.y_axis);
+    let extent = super::window::whole_blocks(caps, y.boundary);
+    reachable(caps, extent)?;
+    Ok(Rect {
+        top: y.address_range.start,
+        left: x.address_range.start,
+        bottom: y.address_range.start + extent,
+        right: x.address_range.start + x.boundary,
+    })
+}

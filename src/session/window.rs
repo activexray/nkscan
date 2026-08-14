@@ -136,7 +136,8 @@ impl Session {
             _ => None,
         });
 
-        let layout = Layout::new(&self.caps, windows, self.divisor, truncation)?;
+        let mut layout = Layout::new(&self.caps, windows, self.divisor, truncation)?;
+        layout.multiline_registered = CooperativeAction::any_multiline_registration(&cooperations);
 
         Ok(Started {
             layout,

@@ -91,14 +91,18 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
 
     let mut color_interleave = ColorInterleaving::LINE_WITHOUT_DISTANCE;
 
-    // validate existence of multiline scanning before evaluating superfine; not supported on LS-40/LS-50
-    if !superfine
-        && session
-            .capabilities()
-            .features
-            .cooperation
-            .contains(HostCooperation::MULTI_LINE)
-    {
+    // A unit that never raises multi-line cooperation is never put into
+    // MULTILINE_SIMULTANEOUS below, superfine or not, so the flag has nothing
+    // to opt out of on it
+    let multiline_offered = session
+        .capabilities()
+        .features
+        .cooperation
+        .contains(HostCooperation::MULTI_LINE);
+    if superfine && !multiline_offered {
+        warn!("this unit never scans multi-line, so --superfine changes nothing");
+    }
+    if !superfine && multiline_offered {
         color_interleave = ColorInterleaving::MULTILINE_SIMULTANEOUS;
     }
 
@@ -362,8 +366,9 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
         if no_eject {
             break;
         }
-        session.eject()?;
-        info!("Ejected");
+        if session.eject()? {
+            info!("Ejected");
+        }
 
         // Naming frames is a targeted scan rather than a batch, and the
         // numbers mean nothing on the next holder anyway

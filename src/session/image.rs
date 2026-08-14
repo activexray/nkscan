@@ -176,7 +176,17 @@ impl Chunks<'_> {
             return None;
         }
         if self.remaining == 0 {
-            self.drain();
+            // Reading past the end is only worth it once the unit has said a
+            // re-registered multi-line pass left seams behind. Nothing else
+            // does, and a unit that never raised it is not guaranteed to
+            // answer a READ it was never going to get: some just stop
+            // answering the handle entirely
+            if self.layout.multiline_registered {
+                self.drain();
+            } else {
+                self.spent = true;
+                self.closed = true;
+            }
             return None;
         }
 

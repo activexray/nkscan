@@ -712,6 +712,7 @@ mod transposed {
             granule: 1,
             truncated_bytes_line: (0, 0),
             truncated_lines_frame: (0, 0),
+            multiline_registered: false,
         }
     }
 
@@ -829,6 +830,7 @@ mod transposed {
             granule: 1,
             truncated_bytes_line: (0, 0),
             truncated_lines_frame: (0, 0),
+            multiline_registered: false,
         }
     }
 

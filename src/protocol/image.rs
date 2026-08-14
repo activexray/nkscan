@@ -57,6 +57,9 @@ pub struct Layout {
     pub truncated_bytes_line: (u32, u32),
     /// Invalid lines attached to every image, so total lines before the first and after the last line per 2-11-5-3
     pub truncated_lines_frame: (u32, u32),
+    /// Whether the handshake raised [`MultiLineRegistration`](crate::protocol::sense::Coop::MultiLineRegistration),
+    /// which is the only thing that leaves seam bytes this layout's own count misses
+    pub multiline_registered: bool,
 }
 
 impl Layout {
@@ -81,6 +84,7 @@ impl Layout {
             granule: 1,
             truncated_bytes_line: (0, 0),
             truncated_lines_frame: (0, 0),
+            multiline_registered: false,
         }
     }
 }
@@ -232,6 +236,8 @@ impl Layout {
             granule: 1,
             truncated_bytes_line,
             truncated_lines_frame,
+            // Nothing here has heard the handshake; the session sets this once it has
+            multiline_registered: false,
         };
         layout.granule = read_granule(caps, &layout, truncated_by_driver);
 
@@ -622,6 +628,7 @@ mod readouts {
             granule: 1,
             truncated_bytes_line: (0, 0),
             truncated_lines_frame: (0, 0),
+            multiline_registered: false,
         }
     }
 

@@ -915,6 +915,14 @@ impl CooperativeAction {
         }
     }
 
+    /// Whether any of `cooperations` raised `MultiLineRegistration`, the only
+    /// one that leaves seam bytes past what a layout's own count reaches
+    pub fn any_multiline_registration(cooperations: &[Self]) -> bool {
+        cooperations
+            .iter()
+            .any(|c| matches!(c, Self::Geometry(Coop::MultiLineRegistration, _)))
+    }
+
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
         let unknown = || Some(Self::Unknown(b[0], b.to_vec()));
         let kind = Coop::from(*b.first()?);
@@ -1007,6 +1015,28 @@ mod tests {
         };
         assert_eq!(kind, Coop::Averaging);
         assert_eq!(g.readings_per_line, 16);
+    }
+
+    /// Thumbnail and averaging share the geometry record's shape with
+    /// multi-line registration, so the check has to dispatch on kind rather
+    /// than on which variant parsed
+    #[test]
+    fn only_multiline_registration_says_the_pass_left_seams() {
+        let geometry = |ascq| {
+            let mut b = [0u8; CooperativeAction::LENGTH];
+            b[0] = ascq;
+            CooperativeAction::from_bytes(&b).unwrap()
+        };
+
+        assert!(!CooperativeAction::any_multiline_registration(&[]));
+        assert!(!CooperativeAction::any_multiline_registration(&[
+            geometry(0x01), // Thumbnail
+            geometry(0x02), // Averaging
+        ]));
+        assert!(CooperativeAction::any_multiline_registration(&[
+            geometry(0x01),
+            geometry(0x04), // MultiLineRegistration
+        ]));
     }
 
     /// Type 7 redefines bytes 5-12 as one CCD measurement type per color, so

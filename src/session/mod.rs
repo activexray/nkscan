@@ -243,15 +243,22 @@ impl Session {
         self.test_unit_ready(MOVE_TIMEOUT)
     }
 
-    /// Give back whatever is loaded
+    /// Give back whatever is loaded, answering whether the unit did anything
     ///
     /// 2-15-3 `Unload`, which takes no parameter. The captures send an
     /// uninitialized one, so this sends zeros rather than copying that.
     ///
     /// An operation activation command, so the unit answers before the
-    /// mechanism has finished and [`execute`](Self::execute) waits it out
-    pub fn eject(&mut self) -> Result<(), Error> {
-        self.execute(Op::Unload, Operation::default(), MOVE_TIMEOUT)
+    /// mechanism has finished and [`execute`](Self::execute) waits it out.
+    /// An adapter with nothing to eject, such as a single-slide mount, does
+    /// not offer the operation at all: leaving it loaded is not a failure
+    pub fn eject(&mut self) -> Result<bool, Error> {
+        if !self.caps.features.execute.supports(Op::Unload) {
+            debug!("this unit has no UNLOAD");
+            return Ok(false);
+        }
+        self.execute(Op::Unload, Operation::default(), MOVE_TIMEOUT)?;
+        Ok(true)
     }
 
     /// What the scanner says it can do

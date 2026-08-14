@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3]
+
+### Fixed
+
+- `Chunks::drain` read past the end of every pass looking for multi-line
+  registration seams, whether or not the unit had raised that cooperation.
+  The LS-5000 never raises it and never answers that READ either, so metering
+  stalled for `MOVE_TIMEOUT` and the unit stopped answering anything after.
+  The READ is now sent only once `MultiLineRegistration` actually came off
+  the wire.
+- `eject` failed on an adapter with no `UNLOAD`, such as a single-slide mount,
+  ending an otherwise complete scan in an error. It is now a no-op there.
+- `--superfine` silently did nothing on a unit that never raises multi-line
+  cooperation, such as the LS-40/LS-50, since the scan was already single-line
+  either way. It now says so.
+
 ## [0.4.2]
 
 ### Added

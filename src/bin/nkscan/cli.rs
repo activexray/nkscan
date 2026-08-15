@@ -30,6 +30,15 @@ pub enum Action {
     Scan(Scan),
     /// Dump a scanner's INQUIRY pages. Reads only; nothing moves.
     Dump(Dump),
+    /// Eject the loaded film or holder
+    Eject(Eject),
+}
+
+/// Eject the loaded film or holder
+#[derive(clap::Args)]
+pub struct Eject {
+    /// The scanner to eject. Optional, will default to the first found.
+    pub device: Option<String>,
 }
 
 /// Which scanner to ask about itself

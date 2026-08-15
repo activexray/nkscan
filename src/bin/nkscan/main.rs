@@ -9,6 +9,7 @@ mod dump;
 mod io;
 mod mono;
 mod scan;
+mod eject;
 
 // Legacy windows command prompt doesn't interpret ANSI escapes until a process opts in via SetConsoleMode.
 // Without this, coloring anything on Windows prints raw escape codes instead of color.
@@ -60,6 +61,7 @@ fn main() -> anyhow::Result<()> {
         }
         cli::Action::Scan(args) => scan::run(args)?,
         cli::Action::Dump(args) => dump::run(args)?,
+        cli::Action::Eject(args) => eject::run(args)?,
     }
 
     // Donezo

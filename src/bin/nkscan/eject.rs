@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use nkscan::{
     device,
     error::Error,
@@ -8,11 +8,21 @@ use nkscan::{
 
 use crate::cli::Eject;
 
-pub fn run(_args: Eject) -> Result<()> {
-    let device = device::list()
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("No scanner found"))?;
+pub fn run(args: Eject) -> Result<()> {
+    let devices = device::list();
+
+    let device = (if let Some(d) = args.device {
+        device::Selector::Location(d)
+    } else {
+        device::Selector::Only
+    })
+    .resolve(&devices)
+    .map_err(|e| {
+        let list: Vec<_> = devices.iter().map(ToString::to_string).collect();
+        anyhow!("{e}\n\nattached:\n  {}", list.join("\n  "))
+    })?;
+
+    println!("{device}");
 
     let mut session = Session::open(device.open()?)?;
 

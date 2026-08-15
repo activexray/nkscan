@@ -366,7 +366,8 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
         if no_eject {
             break;
         }
-        if session.eject()? {
+        let ejected = session.eject()?;
+        if ejected {
             info!("Ejected");
         }
 
@@ -376,6 +377,21 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
             break;
         }
 
+        if !ejected {
+            // No UNLOAD, such as the MA-21, still gives a real not-ready
+            // blip when the operator takes out what's seated (2-1's Medium
+            // Not Present, case a). wait_for_film alone would not catch it:
+            // it only waits when media_loaded() is already false, and right
+            // after a scan whatever was loaded is still seated, so it would
+            // return at once and this frame would be scanned again
+            wait_for_unload(
+                &mut session,
+                &format!(
+                    "Take out the loaded {}",
+                    if uses_adapter { "film" } else { "holder" }
+                ),
+            )?;
+        }
         wait_for_film(&mut session, "Load the next strip")?;
     }
     Ok(())
@@ -476,6 +492,33 @@ fn wait_for_film(session: &mut Session, prompt: &str) -> anyhow::Result<()> {
         }
     }
     session.stage()?;
+    Ok(())
+}
+
+/// Wait until nothing is loaded
+///
+/// A mount with no UNLOAD, such as the MA-21, leaves the object it already
+/// had seated exactly as it was: media_loaded() reads true again at once
+/// unless the operator has actually taken it out, same as the not-ready blip
+/// a real eject gives, just by hand. `wait_for_film` needs that blip to have
+/// happened before its own "is one loaded yet" wait means anything
+fn wait_for_unload(session: &mut Session, prompt: &str) -> anyhow::Result<()> {
+    session.refresh()?;
+    if !session.media_loaded()? {
+        return Ok(());
+    }
+    info!("{prompt}");
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_message(format!("{prompt}. Ctrl-c to stop"));
+    spinner.enable_steady_tick(SPINNER_TICK);
+    loop {
+        std::thread::sleep(HOLDER_POLL);
+        session.refresh()?;
+        if !session.media_loaded()? {
+            spinner.finish_and_clear();
+            break;
+        }
+    }
     Ok(())
 }
 

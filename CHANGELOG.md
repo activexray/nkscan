@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.4]
+
+### Fixed
+
+- The batch scan loop treated `eject`'s no-op on a mount with no `UNLOAD`,
+  such as the MA-21, as ready to go: `media_loaded()` still read true off the
+  slide it already had seated, so the same frame was scanned again with no
+  prompt at all. It now waits for that slide to actually come out first.
+
 ## [0.4.3]
 
 ### Fixed

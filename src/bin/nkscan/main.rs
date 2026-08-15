@@ -6,10 +6,10 @@ use tracing_subscriber::EnvFilter;
 
 mod cli;
 mod dump;
+mod eject;
 mod io;
 mod mono;
 mod scan;
-mod eject;
 
 // Legacy windows command prompt doesn't interpret ANSI escapes until a process opts in via SetConsoleMode.
 // Without this, coloring anything on Windows prints raw escape codes instead of color.

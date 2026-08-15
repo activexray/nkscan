@@ -1,10 +1,5 @@
-use anyhow::{anyhow, Result};
-use nkscan::{
-    device,
-    error::Error,
-    protocol::sense::Intervention,
-    session::Session,
-};
+use anyhow::{Result, anyhow};
+use nkscan::{device, error::Error, protocol::sense::Intervention, session::Session};
 
 use crate::cli::Eject;
 

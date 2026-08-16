@@ -36,15 +36,22 @@ pub fn paths(basename: &Path, n: usize) -> (PathBuf, PathBuf) {
     )
 }
 
-/// The first frame number whose files are both free
+/// What a strip's thumbnail is named, numbered by the strip's first frame
+pub fn thumbnail_path(basename: &Path, n: usize) -> PathBuf {
+    PathBuf::from(format!("{}_{n}_thumbnail.tiff", basename.display()))
+}
+
+/// The first frame number whose files are all free
 ///
 /// A batch appends rather than overwrites, so a second strip through the same
-/// basename carries on where the first stopped
+/// basename carries on where the first stopped. The thumbnail counts: a strip
+/// with no frames on it still takes a number, and taking it again would
+/// overwrite the thumbnail that says why it had none
 pub fn next_free(basename: &Path) -> usize {
     (1..)
         .find(|&n| {
             let (color, ir) = paths(basename, n);
-            !color.exists() && !ir.exists()
+            !color.exists() && !ir.exists() && !thumbnail_path(basename, n).exists()
         })
         .expect("the range is unbounded")
 }
@@ -73,25 +80,8 @@ pub fn write_frame(
     mono: bool,
     infrared: bool,
 ) -> Result<Vec<PathBuf>> {
-    // Positions within the color buffer, which carries only the color
-    // channels of `pass.layout.channels`, in the same relative order
-    let color_ids: Vec<u8> = pass.layout.colors().collect();
-    let plane = |channel: Channel| {
-        color_ids
-            .iter()
-            .position(|&id| Channel::from(id) == channel)
-    };
-
-    // R, G, B whatever order the stream interleaves them in. A unit that scans
-    // one channel calls it the default rather than green
-    let color: Vec<usize> = [Channel::Red, Channel::Green, Channel::Blue]
-        .into_iter()
-        .filter_map(plane)
-        .collect();
-    let color = match color.is_empty() {
-        true => plane(Channel::Default).into_iter().collect(),
-        false => color,
-    };
+    let plane = |channel: Channel| plane_of(pass, channel);
+    let color = color_planes(pass);
 
     let (color_path, ir_path) = paths(basename, n);
     let mut written = Vec::new();
@@ -147,6 +137,55 @@ pub fn write_frame(
     }
 
     Ok(written)
+}
+
+/// Where `channel` sits in the color buffer, which carries only the color
+/// channels of `pass.layout.channels`, in the same relative order
+fn plane_of(pass: &Pass, channel: Channel) -> Option<usize> {
+    pass.layout
+        .colors()
+        .position(|id| Channel::from(id) == channel)
+}
+
+/// R, G, B whatever order the stream interleaves them in
+///
+/// A unit that scans one channel calls it the default rather than green
+fn color_planes(pass: &Pass) -> Vec<usize> {
+    let color: Vec<usize> = [Channel::Red, Channel::Green, Channel::Blue]
+        .into_iter()
+        .filter_map(|c| plane_of(pass, c))
+        .collect();
+    match color.is_empty() {
+        true => plane_of(pass, Channel::Default).into_iter().collect(),
+        false => color,
+    }
+}
+
+/// Write a strip's framing thumbnail, returning the file it made
+///
+/// This is the pass frame detection reads, kept as it arrived: no profile and
+/// no monochrome conversion, since what it is for is measuring the detector
+/// against, not looking at. The samples are stretched to full scale here
+/// rather than in the caller's buffer, which detection still has to read
+pub fn write_thumbnail(
+    basename: &Path,
+    n: usize,
+    samples: &Samples,
+    pass: &Pass,
+) -> Result<PathBuf> {
+    let color = color_planes(pass);
+
+    let mut samples = samples.clone();
+    to_full_scale(&mut samples, pass.layout.bits_per_sample);
+    let planes: Vec<&[u16]> = samples.colors.iter().map(Vec::as_slice).collect();
+
+    let path = thumbnail_path(basename, n);
+    match color.len() {
+        3 => write_planes::<RGB16>(&path, &planes, pass, Source::Planes(&color), None)?,
+        1 => write_planes::<Gray16>(&path, &planes, pass, Source::Planes(&color), None)?,
+        n => bail!("{n} color planes is not a thumbnail this writes"),
+    }
+    Ok(path)
 }
 
 /// Stretch a pass's samples to fill 16 bits, in place

@@ -95,6 +95,10 @@ pub struct Scan {
     #[arg(long)]
     pub no_eject: bool,
 
+    /// Keep the framing thumbnail as <basename>_<n>_thumbnail.tiff, on units that support this
+    #[arg(long)]
+    pub thumbnail: bool,
+
     /// Film format. One of: 135, 16, 645, 66, 67, 68, 69, or a custom frame length in mm. Defaults to what the holder reports (if any).
     #[arg(long, value_parser = parse_format)]
     pub format: Option<FilmFormat>,

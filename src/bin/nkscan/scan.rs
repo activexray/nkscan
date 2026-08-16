@@ -56,6 +56,7 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
         ir,
         clean,
         no_eject,
+        thumbnail: save_thumbnail,
         format,
         film,
     } = args;
@@ -147,6 +148,9 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
         // where the adapter offers it and the unit publishes no lengths.
         let framing = Framing::choose(session.capabilities());
         debug!(?framing, "Frame discovery mechanism");
+        if save_thumbnail && !matches!(framing, Framing::Thumbnail | Framing::Perforation) {
+            warn!("this unit frames without a thumbnail pass, so --thumbnail saves nothing");
+        }
 
         // Resolve the film format up front where it will be needed, so a
         // missing --format fails before the thumbnail pass
@@ -161,6 +165,11 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
             )?),
             _ => None,
         };
+
+        // Where this strip starts writing, so a second strip through the same
+        // basename carries on rather than overwriting the first. Taken before
+        // framing because the thumbnail is numbered with it
+        let first = io::next_free(&basename);
 
         let (_table, scan_frames) = match framing {
             Framing::Published => {
@@ -185,6 +194,11 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
                 let optical_dpi = session.capabilities().address.y_axis.optical_dpi;
                 let length = film_format.height_dots(optical_dpi);
                 info!(?film_format, length, "frame length");
+
+                if save_thumbnail {
+                    let path = io::write_thumbnail(&basename, first, &samples, &pass)?;
+                    info!("wrote {}", path.display());
+                }
 
                 // Write the detected frames to the scanner's boundary table
                 let measured =
@@ -225,6 +239,11 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
                 let optical_dpi = session.capabilities().address.y_axis.optical_dpi;
                 let length = film_format.height_dots(optical_dpi);
                 info!(?film_format, length, "frame length");
+
+                if save_thumbnail {
+                    let path = io::write_thumbnail(&basename, first, &samples, &pass)?;
+                    info!("wrote {}", path.display());
+                }
 
                 // Read perf data and use it to generate Boundary Type2 data for telling the scanner
                 // where the frames reside
@@ -272,10 +291,6 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
         if selected_frames.is_empty() {
             warn!("No frames on this strip");
         }
-
-        // Where this strip starts writing, so a second strip through the
-        // same basename carries on rather than overwriting the first
-        let first = io::next_free(&basename);
 
         // Scan each frame
         for (n, frame) in selected_frames.into_iter().enumerate() {

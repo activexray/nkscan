@@ -4,6 +4,8 @@
 
 use std::{fmt, io, time::Duration};
 
+#[cfg(target_os = "macos")]
+pub mod darwin;
 #[cfg(target_os = "linux")]
 pub mod linux;
 pub mod usb;
@@ -109,9 +111,9 @@ impl fmt::Debug for Sense {
 /// is willing to trust as `raw` together with the `tsc` value it can justify,
 /// since the platforms differ on how far the driver wrote
 ///
-/// The two SCSI passthroughs only: the USB wrapper carries its four sense bytes
+/// The SCSI passthroughs only: the USB wrapper carries its four sense bytes
 /// in a shape of its own and builds a [`Sense`] directly
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 fn sense_from_fixed(buffer: &[u8], tsc: Option<u8>) -> Sense {
     Sense {
         key: buffer[2] & 0xF,

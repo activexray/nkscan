@@ -83,7 +83,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-core-foundation = "0.10"
+core-foundation-sys = "0.8"
 io-kit-sys = "0.5"
 
 [[bin]]

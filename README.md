@@ -115,9 +115,9 @@ This library doesn't have anything scanner or adapter-specific so *theoretically
 
 | Scanner \ Holder | SA-21  | IA-20/21  | MA-20/21   | SA-30  | SF-210/200  |
 |------------------|:------:|:---------:|:----------:|:------:|:-----------:|
-| 5000             |   ⚠️   |  ⚠️      |    ⚠️     |  ⚠️    |   ⚠️       |
+| 5000             |   ⚠️   |  ⚠️      |    ✅     |  ⚠️    |   ⚠️       |
 | 4000             |   ⚠️   |  ⚠️      |    ⚠️     |  ⚠️    |   ⚠️       |
-| V                |   ✅   |  ⚠️      |    ⚠️     |  ✅    |   ⚠️       |
+| V                |   ✅   |  ⚠️      |    ✅     |  ✅    |   ⚠️       |
 | IV               |   ⚠️   |  ⚠️      |    ⚠️     |  ⚠️    |   ⚠️       |
 
 If you want to use a Firewire scanner on an old Mac that still has OS support for FireWire, let me know and I can scope it out.

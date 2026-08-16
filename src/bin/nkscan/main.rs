@@ -6,6 +6,7 @@ use tracing_subscriber::EnvFilter;
 
 mod cli;
 mod dump;
+mod eject;
 mod io;
 mod mono;
 mod scan;
@@ -60,6 +61,7 @@ fn main() -> anyhow::Result<()> {
         }
         cli::Action::Scan(args) => scan::run(args)?,
         cli::Action::Dump(args) => dump::run(args)?,
+        cli::Action::Eject(args) => eject::run(args)?,
     }
 
     // Donezo

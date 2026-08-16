@@ -128,6 +128,13 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
             .adapter_id
             .is_some_and(|id| id > 0);
 
+    let uses_ma21 = uses_adapter
+        && session
+            .capabilities()
+            .address
+            .connected_adapter
+            .is_some_and(|id| id == 34);
+
     // Nothing can be framed before something is loaded
     wait_for_film(
         &mut session,
@@ -366,6 +373,19 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
         if no_eject {
             break;
         }
+
+        if uses_ma21 {
+            println!();
+            println!("Scan complete.");
+            println!("Replace or advance the film in the MA-21, then press Enter.");
+            println!("Press Ctrl-C to stop.");
+
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+
+            continue;
+        }
+
         let ejected = session.eject()?;
         if ejected {
             info!("Ejected");

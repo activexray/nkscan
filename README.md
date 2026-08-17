@@ -101,6 +101,8 @@ Options:
 Our goal is to support all the scanners supported by Nikon Scan, which are enumerated here by testing status.
 This library doesn't have anything scanner or adapter-specific so *theoretically* it should work across devices.
 
+If you test with a ⚠️-marked scanner/adapter combo and it works, please send a PR indicating support!
+
 - ✅ Supported, and run against real hardware
 - ⚠️ Untested but theoretically should work
 

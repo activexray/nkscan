@@ -2,7 +2,7 @@
 
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/activexray/nkscan/ci.yml)
 
-A cross-platform and performant driver for Nikon film scanners.
+A cross-platform and performant driver for Nikon (Coolscan) film scanners.
 
 ## Usage
 

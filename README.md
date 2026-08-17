@@ -110,17 +110,17 @@ If you test with a ⚠️-marked scanner/adapter combo and it works, please send
 
 | Scanner \ Holder | 835M | 835S | 869S  | 869G  | 869GR  | 869M | 816 | 8G1 |
 |------------------|:----:|:----:|:-----:|:-----:|:------:|:----:|:---:|:---:|
-| 9000             | ⚠️  |  ⚠️   | ✅   | ⚠️   |  ⚠️   |  ⚠️ | ⚠️ |  ⚠️ |
-| 8000             | ⚠️  |  ⚠️   | ✅   | ✅   |  ⚠️   |  ⚠️ | ⚠️ |  ⚠️ |
+| Super Coolscan 9000 (LS-9000 ED)   | ⚠️  |  ⚠️   | ✅   | ⚠️   |  ⚠️   |  ⚠️ | ⚠️ |  ⚠️ |
+| Super Coolscan 8000 (LS-8000 ED)   | ⚠️  |  ⚠️   | ✅   | ✅   |  ⚠️   |  ⚠️ | ⚠️ |  ⚠️ |
 
 ### 35mm Scanners
 
 | Scanner \ Holder | SA-21  | IA-20/21  | MA-20/21   | SA-30  | SF-210/200  |
 |------------------|:------:|:---------:|:----------:|:------:|:-----------:|
-| 5000             |   ⚠️   |  ⚠️      |    ✅     |  ⚠️    |   ⚠️       |
-| 4000             |   ⚠️   |  ⚠️      |    ⚠️     |  ⚠️    |   ⚠️       |
-| V                |   ✅   |  ⚠️      |    ✅     |  ✅    |   ⚠️       |
-| IV               |   ⚠️   |  ⚠️      |    ⚠️     |  ⚠️    |   ⚠️       |
+| Super Coolscan 5000 (LS-5000 ED)    |   ⚠️   |  ⚠️      |    ✅     |  ⚠️    |   ⚠️       |
+| Super Coolscan 4000 (LS-5000 ED)    |   ⚠️   |  ⚠️      |    ⚠️     |  ⚠️    |   ⚠️       |
+| Coolscan V (LS-50 ED)      |   ✅   |  ⚠️      |    ✅     |  ✅    |   ⚠️       |
+| Coolscan IV (LS-40 ED)             |   ⚠️   |  ⚠️      |    ⚠️     |  ⚠️    |   ⚠️       |
 
 If you want to use a Firewire scanner on an old Mac that still has OS support for FireWire, let me know and I can scope it out.
 It is technically possible, but getting Rust to compile a binary for older MacOS is not something I have experience in.

@@ -316,7 +316,7 @@ fn read_chunks(
                 let waited = Instant::now();
                 let buf = match empty.recv() {
                     Ok(buf) => {
-                        debug!("got empty buffer");
+                        trace!("got empty buffer");
                         buf
                     }
                     Err(_) => return,

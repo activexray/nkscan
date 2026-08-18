@@ -36,7 +36,7 @@ impl Session {
             let cmd = Read::new(code, 0, width, want as u32);
             let slice = &mut buf[done..done + want];
 
-            debug!(
+            trace!(
                 cdb = ?cmd.cdb(),
                 want,
                 done,
@@ -46,7 +46,7 @@ impl Session {
 
             match self.run(&cmd.cdb(), Data::In(slice), MOVE_TIMEOUT) {
                 Ok(completion) => {
-                    debug!(
+                    trace!(
                         transferred = completion.transferred,
                         want, "image READ completed"
                     );
@@ -194,7 +194,7 @@ impl Chunks<'_> {
         buf.resize(want, 0);
         let layout = &self.layout;
 
-        debug!(
+        trace!(
             remaining = self.remaining,
             buf_len = buf.len(),
             "issuing image READ from fill"

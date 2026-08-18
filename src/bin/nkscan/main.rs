@@ -42,11 +42,13 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Set up logging. RUST_LOG overrides everything, since it can target individual modules
-    // Otherwise fall back to --log-level (default: info).
+    // Otherwise fall back to --log-level (default: info). nusb logs one line per USB
+    // transfer at debug, which drowns out everything else in a `--log debug` capture, so
+    // the default keeps it at warn; RUST_LOG can still ask for it by name.
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(cli.log.to_string())),
+                .unwrap_or_else(|_| EnvFilter::new(format!("{},nusb=warn", cli.log))),
         )
         .with_target(false)
         .with_ansi(stdout().is_terminal()) // Only emit color when stdout is a real terminal

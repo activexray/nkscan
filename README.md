@@ -121,12 +121,12 @@ If you test with a ⚠️-marked scanner/adapter combo and it works, please send
 
 ### 35mm Scanners
 
-| Scanner \ Holder | SA-21  | IA-20/21  | MA-20/21   | SA-30  | SF-210/200  |
-|------------------|:------:|:---------:|:----------:|:------:|:-----------:|
+| Scanner \ Holder                    | SA-21  | IA-20/21  | MA-20/21   | SA-30  | SF-210/200  |
+|-------------------------------------|:------:|:---------:|:----------:|:------:|:-----------:|
 | Super Coolscan 5000 (LS-5000 ED)    |   ⚠️   |  ⚠️      |    ✅     |  ⚠️    |   ⚠️       |
 | Super Coolscan 4000 (LS-5000 ED)    |   ⚠️   |  ⚠️      |    ⚠️     |  ⚠️    |   ⚠️       |
-| Coolscan V (LS-50 ED)      |   ✅   |  ⚠️      |    ✅     |  ✅    |   ⚠️       |
-| Coolscan IV (LS-40 ED)             |   ⚠️   |  ⚠️      |    ⚠️     |  ⚠️    |   ⚠️       |
+| Coolscan V (LS-50 ED)               |   ✅   |  ✅      |    ✅     |  ✅    |   ✅       |
+| Coolscan IV (LS-40 ED)              |   ⚠️   |  ⚠️      |    ⚠️     |  ⚠️    |   ⚠️       |
 
 If you want to use a Firewire scanner on an old Mac that still has OS support for FireWire, let me know and I can scope it out.
 It is technically possible, but getting Rust to compile a binary for older MacOS is not something I have experience in.

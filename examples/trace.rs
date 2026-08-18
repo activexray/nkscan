@@ -126,13 +126,15 @@ fn main() -> anyhow::Result<()> {
                     .and_then(PerfInformation::from_bytes)
                 {
                     Some(b) => {
-                        println!("[{n}] seq={} PERF ({} frame(s))", r.seq, b.perfs.len());
-                        for f in &b.perfs {
+                        // One record per line of the thumbnail, 2-11-8, so the
+                        // index is the line it was measured on
+                        println!("[{n}] seq={} PERF ({} line(s))", r.seq, b.perfs.len());
+                        for (line, f) in b.perfs.iter().enumerate() {
                             println!(
-                                "      perf num={} flag={} num_pat(decimal)={} num_pulse={}",
+                                "      line={line} perf num={} flag={} decimal={} pulse={}",
                                 f.perf_number,
                                 f.count_switching_flag,
-                                f.perf_number,
+                                f.perf_decimal,
                                 f.pulse_number
                             );
                         }

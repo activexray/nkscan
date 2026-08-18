@@ -135,6 +135,7 @@ pub fn frames_type2(
         .iter()
         .filter_map(|&col| {
             let top = origin + col as u32 * pitch;
+            debug!(col, top, "detected column");
             match top + length <= end {
                 true => FramePosition::new(top, perf_info),
                 false => None,
@@ -148,6 +149,9 @@ pub fn frames_type2(
         pitch = found.pitch as u32 * pitch,
         "measured the loaded strip"
     );
+    for (n, frame) in frames.iter().enumerate() {
+        debug!(frame = n + 1, ?frame, "frame position");
+    }
 
     Ok(BoundaryType2 { frames })
 }

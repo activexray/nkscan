@@ -327,18 +327,15 @@ impl FramePosition {
         }
     }
 
-    /// construct a FramePosition entry from detected y_start, as pixel location on the thumb strip
+    /// construct a FramePosition entry from a detected top, already in device
+    /// address units (the same conversion the rest of the boundary table uses,
+    /// 2-11-6's integer pitch, not a re-derived float ratio: the two disagree
+    /// by a fraction of a unit per thumbnail column, which used to compound
+    /// over the length of the strip)
     /// all other values are inferred using data read from 8Eh PerforationInformation
     /// the only valid positions on a strip are locations returned from 8Eh so we need to find the closest match
     /// in the table of returned positions, then use that as an index for the scanner's boundary information data
-    pub fn new(
-        dpi_device: u16,
-        dpi_thumb: u16,
-        y_start: u32,
-        perf_info: &PerfInformation,
-    ) -> Option<Self> {
-        // use approximation to find the closest perf match, then use that to calculate the address
-        let approx_addr = (y_start as f32 * dpi_device as f32 / dpi_thumb as f32).round() as u32;
+    pub fn new(approx_addr: u32, perf_info: &PerfInformation) -> Option<Self> {
         let perf = perf_info.nearest(approx_addr)?;
 
         Some(FramePosition {

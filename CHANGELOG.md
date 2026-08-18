@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1]
+
+### Fixed
+
+- Perforation framing (`frames_type2`, the SA-21/SA-30 on an LS-5000/LS-50) placed a frame's Y address with a different, un-truncated pitch than the one used to bound it, drifting further off the further a frame sat down the strip. It now reuses the one address the bounds check already computed.
+
 ## [0.5.0]
 
 ### Fixed

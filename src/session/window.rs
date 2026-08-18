@@ -97,7 +97,12 @@ impl Session {
         payload.extend_from_slice(&window.to_bytes());
 
         let cmd = SetWindow::new(payload.len() as u32);
-        debug!(id = window.id, "setting window");
+        debug!(
+            id = window.id,
+            ?window.origin,
+            ?window.size,
+            "setting window"
+        );
         // setting windows is not a cooperative action
         self.transport
             .execute(&cmd.cdb(), Data::Out(&payload), MOVE_TIMEOUT)?;

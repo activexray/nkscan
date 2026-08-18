@@ -100,6 +100,9 @@ pub fn frames(
         pitch = found.pitch as u32 * pitch,
         "measured the loaded strip"
     );
+    for (n, rect) in frames.iter().enumerate() {
+        debug!(frame = n + 1, ?rect, "frame rect");
+    }
     Ok(Boundary { frames })
 }
 
@@ -133,12 +136,7 @@ pub fn frames_type2(
         .filter_map(|&col| {
             let top = origin + col as u32 * pitch;
             match top + length <= end {
-                true => FramePosition::new(
-                    caps.address.x_axis.optical_dpi,
-                    caps.address.thumbnail_resolution.start,
-                    col as u32,
-                    perf_info,
-                ),
+                true => FramePosition::new(top, perf_info),
                 false => None,
             }
         })

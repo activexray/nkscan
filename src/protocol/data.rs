@@ -308,8 +308,8 @@ pub struct Rect {
 pub struct FramePosition {
     /// Bytes 4-7, Y address of the frame's top line
     ///
-    /// Only ever compared against a SET WINDOW Y to say which frame that window
-    /// asks for. Where the film actually stops is the perforation triple below
+    /// Only picks the frame a SET WINDOW Y asks for. The triple below is what
+    /// moves the film
     pub top: u32,
     /// Bytes 8-9, perforation number
     pub perf_number: u16,
@@ -329,13 +329,8 @@ impl FramePosition {
         }
     }
 
-    /// One frame's entry, from the thumbnail line its top was detected on
-    ///
-    /// `top` is the Y address of that line, which is only ever compared against
-    /// a SET WINDOW Y to pick the frame out of this table (2-11-9). The film
-    /// movement itself is driven by the perforation triple, and 8Eh publishes
-    /// one record per thumbnail line, so the triple is that line's record read
-    /// straight out of the table rather than anything re-derived from `top`
+    /// One frame's entry: a detected top, and that line's own perforation
+    /// reading rather than anything derived from the address
     pub fn new(top: u32, perf: &PerforationInformation) -> Self {
         FramePosition {
             top,
@@ -442,10 +437,8 @@ pub struct PerforationInformation {
 
 /// Perforation info from 8Eh, 2-11-8 (LS-5000)
 ///
-/// One record per line of the thumbnail that has just been read, in order:
-/// 2-11-8 calls each one "the absolute position information of the nth line of
-/// the thumbnail". The record index is the thumbnail column, so a frame's
-/// perforation position is a lookup rather than a calculation
+/// "The absolute position information of the nth line of the thumbnail": one
+/// record per line of the pass just read, in order, so the index is the line
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PerfInformation {
     pub perfs: Vec<PerforationInformation>,
@@ -501,13 +494,7 @@ impl PerfInformation {
         Some(Self { perfs })
     }
 
-    /// The perforation position the unit measured for one thumbnail line
-    ///
-    /// Positional, not searched. Matching on a computed address instead needs a
-    /// pulses-per-address constant to compare against, and any error in that
-    /// constant picks a record further and further off the wanted line the
-    /// longer the strip is, which is drift the table itself was published to
-    /// remove
+    /// What the unit measured at one thumbnail line
     pub fn at(&self, line: usize) -> Option<&PerforationInformation> {
         self.perfs.get(line)
     }
@@ -978,14 +965,11 @@ impl Header {
 mod tests {
     use super::*;
 
-    /// 2-11-8 is one record per thumbnail line, in order, so the line number is
-    /// the index. A frame detected on line 2 seeks by line 2's perforations
+    /// A frame detected on line 2 seeks by line 2's own reading
     #[test]
     fn a_perforation_table_is_read_in_thumbnail_line_order() {
         let mut b = vec![0x00, 0x00, 0x0d, 0x04];
         for line in 0..3u8 {
-            // Deliberately not evenly spaced: the readings are measured, and
-            // nothing may reconstruct them from a pitch
             b.extend_from_slice(&[0x00, line, 0x80 | line, line * 7]);
         }
 
@@ -1000,8 +984,6 @@ mod tests {
         assert!(second.count_switching_flag);
         assert_eq!(perfs.at(3), None);
 
-        // The address stays the thumbnail's own, and only the triple comes from
-        // the table
         let frame = FramePosition::new(4321, second);
         assert_eq!(frame.top, 4321);
         assert_eq!(

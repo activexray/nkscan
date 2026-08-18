@@ -129,10 +129,8 @@ pub fn frames_type2(
 
     let found = boundaries::detect(&image, (length / pitch) as usize, polarity);
 
-    // 8Eh publishes one perforation record per line of the pass just read, so a
-    // detected column indexes it directly. A table that does not run the length
-    // of the pass is not the one this pass produced, and the frames past its end
-    // would come out mispositioned rather than merely unfound
+    // A detected column indexes the perforation table directly, so a table that
+    // does not run the length of the pass is not the one this pass produced
     if perf_info.perfs.len() != image.cols {
         warn!(
             perfs = perf_info.perfs.len(),
@@ -150,8 +148,7 @@ pub fn frames_type2(
             let perf = perf_info.at(col);
             debug!(col, top, ?perf, "detected column");
             match top + length <= end {
-                // The stage moves by perforations, so a column the unit
-                // published no perforation reading for cannot be sought to
+                // A column with no reading is one the stage cannot be sent to
                 true => Some(FramePosition::new(top, perf?)),
                 false => None,
             }

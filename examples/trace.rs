@@ -126,8 +126,7 @@ fn main() -> anyhow::Result<()> {
                     .and_then(PerfInformation::from_bytes)
                 {
                     Some(b) => {
-                        // One record per line of the thumbnail, 2-11-8, so the
-                        // index is the line it was measured on
+                        // 2-11-8 is per thumbnail line, so the index is the line
                         println!("[{n}] seq={} PERF ({} line(s))", r.seq, b.perfs.len());
                         for (line, f) in b.perfs.iter().enumerate() {
                             println!(

@@ -17,6 +17,7 @@ use crate::{
     },
     scan::framing,
 };
+use tracing::*;
 
 /// The most times a line can be read, the count being half of 2-10 byte 40
 const MAX_SAMPLES: u8 = 16;
@@ -39,6 +40,28 @@ pub(crate) fn whole_blocks(caps: &Capabilities, extent: u32) -> u32 {
         0 | 1 => extent,
         block => extent.div_ceil(block) * block,
     }
+}
+
+/// The same, kept inside what the Y axis can reach
+///
+/// A format can be longer than the axis, and rounding it up past the boundary
+/// stalls the stage. The frame scans a fraction short instead.
+pub(crate) fn reachable_blocks(caps: &Capabilities, extent: u32) -> u32 {
+    let limit = caps.address.y_axis.boundary;
+    let grown = whole_blocks(caps, extent);
+    if grown <= limit {
+        return grown;
+    }
+
+    let kept = match block(caps) {
+        0 | 1 => limit,
+        block => limit / block * block,
+    };
+    debug!(
+        wanted = grown,
+        limit, kept, "the format is longer than the axis reaches, so the frame is trimmed"
+    );
+    kept
 }
 
 /// The color channels this unit scans
@@ -469,6 +492,31 @@ mod tests {
         caps.set_window.interleaving = ColorInterleaving::LINE_WITHOUT_DISTANCE;
         assert!(recipe().supported(&caps).is_err());
         assert!(recipe().windows(&caps, frame()).is_err());
+    }
+
+    /// 6x9 film is 84 mm and an LS-9000's Y axis stops at 13176 units, 83.65 mm.
+    /// Rounding the format up past that would stall the stage, so the frame is
+    /// trimmed to what the mechanism has rather than refused
+    #[test]
+    fn a_format_longer_than_the_axis_is_trimmed_to_it() {
+        use crate::protocol::caps::film::FilmFormat;
+
+        let mut caps = caps();
+        caps.address.y_axis.boundary = 13176;
+        caps.address.line_gap = 8;
+        caps.address.lines = 3;
+
+        let six_by_nine = FilmFormat::F69.height_dots(caps.address.y_axis.optical_dpi);
+        assert_eq!(six_by_nine, 13228);
+        assert!(
+            whole_blocks(&caps, six_by_nine) > caps.address.y_axis.boundary,
+            "the format has to overrun the axis for this to be the case under test"
+        );
+
+        let kept = reachable_blocks(&caps, six_by_nine);
+        assert_eq!(kept, 13176);
+        assert_eq!(kept % block(&caps), 0, "still whole blocks");
+        framing::reachable(&caps, kept).expect("the stage can step to a trimmed frame");
     }
 
     /// 56mm of 6x6 is 8819 dots at 4000 dpi, which the three-line readout

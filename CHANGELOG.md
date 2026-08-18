@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0]
+
+### Fixed
+
+- Lots of little bugs with the old frame-detection algorithm is out, we have rewritten the logic to be way more robust.
+- Every 120 format was scanned at the size its name says rather than the size it exposes. 6x4.5 is now 41.5 mm, 6x7 69.5 and 6x8 76.
+- 6x9 scans now work
+
+### Added
+
+- Frames that overlap come back as overlapping rectangles, each keeping the edge it was found by, so a strip the transport under-advanced is scanned with the film they share in both.
+- Every frame carries a little film either side, up to two percent of the format
+- `--format half` for 35mm shot half frame (18 x 24 mm).
+- `--format IX240` (or `aps`) now scans APS's 30.2 mm recorded frame
+
+### Changed
+
+- `scan::boundaries::detect` and `scan::thumbnail::frames`/`frames_type2` take the film's polarity rather than an `Option` of it.
+- `scan::boundaries::Detected` is the column each frame starts at and the pitch, nothing else.
+
 ## [0.4.5]
 
 ### Added

@@ -149,7 +149,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// The 50-byte SET WINDOW descriptor that follows the 8-byte header, in the
-/// fields the movement story needs and a few that pin down the scan behaviour
+/// fields the movement story needs and a few that pin down the scan behavior
 fn window_row(descriptor: &[u8]) -> String {
     let Ok(w) = Window::try_from(descriptor) else {
         return format!("{} bytes, not a descriptor", descriptor.len());

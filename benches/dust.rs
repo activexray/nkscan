@@ -14,6 +14,12 @@ fn main() {
 const ROWS: usize = 8964;
 const COLS: usize = 8820;
 
+/// 35mm full-frame at 4000 DPI: 36x24mm. No captured frame table for this
+/// format is in the corpus (only 6x9), so this is the geometric size,
+/// `mm / 25.4 * dpi`, not a measured one
+const ROWS_35: usize = 3780;
+const COLS_35: usize = 5669;
+
 /// A plane's worth of linear samples, the shape `to_density` actually sees
 fn plane(n: usize) -> Vec<u16> {
     (0..n).map(|i| (i % 65536) as u16).collect()
@@ -203,12 +209,12 @@ fn prescan_image() -> Prescan<'static> {
 }
 
 /// Nearest-neighbor decimate, so the prescan is the shape AE really hands us
-fn decimate(src: &[u16], step: usize) -> Vec<u16> {
-    let (rows, cols) = (ROWS / step, COLS / step);
+fn decimate(src: &[u16], step: usize, full_rows: usize, full_cols: usize) -> Vec<u16> {
+    let (rows, cols) = (full_rows / step, full_cols / step);
     let mut out = Vec::with_capacity(rows * cols);
     for y in 0..rows {
         for x in 0..cols {
-            out.push(src[y * step * COLS + x * step]);
+            out.push(src[y * step * full_cols + x * step]);
         }
     }
     out
@@ -228,8 +234,12 @@ struct Prescan6 {
 static SMALL_PRESCAN: LazyLock<Option<Prescan6>> = LazyLock::new(|| {
     let samples = SCAN.as_ref()?;
     Some(Prescan6 {
-        colors: samples.colors.iter().map(|p| decimate(p, 6)).collect(),
-        ir: decimate(samples.ir.as_ref()?, 6),
+        colors: samples
+            .colors
+            .iter()
+            .map(|p| decimate(p, 6, ROWS, COLS))
+            .collect(),
+        ir: decimate(samples.ir.as_ref()?, 6, ROWS, COLS),
     })
 });
 
@@ -261,5 +271,99 @@ fn clean(bencher: divan::Bencher) {
         .bench_values(|(mut r, mut g, mut b, ir, prescan)| {
             let cal = dust::calibrate(&prescan).expect("clear film in the prescan");
             dust::clean([&mut r, &mut g, &mut b], &ir, &cal, ROWS, COLS, &options())
+        });
+}
+
+/// splitmix64, so the synthetic 35mm frame gets index-seeded noise without
+/// pulling in a `rand` dependency just for a bench fixture
+fn splitmix(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E3779B97F4A7C15);
+    let mut z = x;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z ^ (z >> 31)
+}
+
+/// A synthetic IR plane shaped like real clear film: mostly a tight band
+/// near-white (`reconstruct_core`'s cost is data-dependent, so `clean_35mm`
+/// needs the mask density right, not just the pixel count), with ~0.4% of
+/// pixels dropped into dust range. That injection rate is tuned, not
+/// physical -- `decide()` flags a wider neighborhood than the seed pixels
+/// alone, and 0.4% lands the *flagged* fraction at ~1.2%, matching what
+/// `clean`'s real scan_1.tiff fixture flags (see its `mask_dump.tiff` note)
+fn synth_ir(n: usize) -> Vec<u16> {
+    (0..n)
+        .map(|i| {
+            let x = splitmix(i as u64 ^ 0xA1);
+            if x % 1000 < 4 {
+                2000 + (splitmix(x) % 4000) as u16
+            } else {
+                61000 + (x % 500) as u16
+            }
+        })
+        .collect()
+}
+
+/// A synthetic color plane: independent per-channel noise in a mid-scale
+/// band, uncorrelated with `synth_ir`'s dust dips the way a real dust speck's
+/// visible-channel signature is much weaker than its IR one
+fn synth_color(n: usize, salt: u64) -> Vec<u16> {
+    (0..n)
+        .map(|i| 30000 + (splitmix(i as u64 ^ salt) % 1000) as u16)
+        .collect()
+}
+
+/// Fully synthetic color+IR planes at the 35mm shape. There's no
+/// scan_1.tiff-equivalent capture for this format in the corpus, so unlike
+/// `clean` this bench can't lean on a real fixture at all
+static SYNTH_35: LazyLock<Planes> = LazyLock::new(|| {
+    let n = ROWS_35 * COLS_35;
+    Planes {
+        colors: vec![
+            synth_color(n, 0xB1),
+            synth_color(n, 0xB2),
+            synth_color(n, 0xB3),
+        ],
+        ir: synth_ir(n),
+    }
+});
+
+/// `SYNTH_35`'s prescan, decimated the same way `SMALL_PRESCAN` is off a real
+/// scan
+static SYNTH_35_PRESCAN: LazyLock<Planes> = LazyLock::new(|| Planes {
+    colors: vec![decimate(&SYNTH_35.colors[0], 6, ROWS_35, COLS_35)],
+    ir: decimate(&SYNTH_35.ir, 6, ROWS_35, COLS_35),
+});
+
+/// End-to-end `clean()` throughput on a synthetic 35mm frame at 4000 DPI --
+/// the shape a full-frame strip scan actually produces, which nothing else
+/// in this file exercises
+#[divan::bench]
+fn clean_35mm(bencher: divan::Bencher) {
+    let counted = SYNTH_35.colors.iter().map(Vec::len).sum::<usize>() + SYNTH_35.ir.len();
+    bencher
+        .counter(ItemsCount::new(counted))
+        .with_inputs(|| {
+            let [r, g, b]: [Vec<u16>; 3] =
+                SYNTH_35.colors.clone().try_into().expect("3 color planes");
+            let ir = SYNTH_35.ir.clone();
+            let prescan = Prescan {
+                red: &SYNTH_35_PRESCAN.colors[0],
+                ir: &SYNTH_35_PRESCAN.ir,
+                rows: ROWS_35 / 6,
+                cols: COLS_35 / 6,
+            };
+            (r, g, b, ir, prescan)
+        })
+        .bench_values(|(mut r, mut g, mut b, ir, prescan)| {
+            let cal = dust::calibrate(&prescan).expect("clear film in the synthetic prescan");
+            dust::clean(
+                [&mut r, &mut g, &mut b],
+                &ir,
+                &cal,
+                ROWS_35,
+                COLS_35,
+                &options(),
+            )
         });
 }

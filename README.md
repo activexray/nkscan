@@ -51,13 +51,13 @@ Options:
       --lock-ae
           Autoexpose the first frame and reuse that exposure across all frames
 
+      --dpi <DPI>
+          Resolution. Defaults to scanner maximum
+
       --log <LOG>
           Log verbosity: trace, debug, info, warn, error, or off
           
           [default: info]
-
-      --dpi <DPI>
-          Resolution. Defaults to scanner maximum
 
       --samples <SAMPLES>
           Number of samples. Defaults to 1
@@ -73,11 +73,17 @@ Options:
       --ir
           Include the IR pass
 
+      --clean
+          Remove dust and scratches using the infrared channel
+
       --no-eject
           Don't eject at the end of the strip
 
+      --thumbnail
+          Keep the framing thumbnail as <basename>_<n>_thumbnail.tiff, on units that support this
+
       --format <FORMAT>
-          Film format. One of: 135, 16, 645, 66, 67, 68, 69, or a custom frame length in mm. Defaults to what the holder reports (if any)
+          Film format. One of: 135, half, IX240, 16, 645, 66, 67, 68, 69, or a custom frame length in mm. Defaults to what the holder reports (if any)
 
       --film <FILM>
           Film type, which picks the color profile the scans are tagged with

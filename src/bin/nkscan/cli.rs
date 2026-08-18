@@ -1,5 +1,8 @@
 use clap::{Parser, Subcommand};
-use nkscan::{protocol::caps::film::FilmFormat, scan::profile};
+use nkscan::{
+    protocol::caps::film::FilmFormat,
+    scan::{boundaries::Polarity, profile},
+};
 use profile::Film;
 use std::{path::PathBuf, sync::LazyLock};
 use tracing_subscriber::filter::LevelFilter;
@@ -99,7 +102,7 @@ pub struct Scan {
     #[arg(long)]
     pub thumbnail: bool,
 
-    /// Film format. One of: 135, 16, 645, 66, 67, 68, 69, or a custom frame length in mm. Defaults to what the holder reports (if any).
+    /// Film format. One of: 135, half, IX240, 16, 645, 66, 67, 68, 69, or a custom frame length in mm. Defaults to what the holder reports (if any).
     #[arg(long, value_parser = parse_format)]
     pub format: Option<FilmFormat>,
 
@@ -132,20 +135,36 @@ impl From<FilmType> for Film {
     }
 }
 
+/// Which way the film reads against the unexposed film between two frames,
+/// which is what finding the frames on a strip needs
+impl From<FilmType> for Polarity {
+    fn from(f: FilmType) -> Self {
+        match f {
+            // Both are reversal films, whose unexposed film develops to maximum
+            // density
+            FilmType::Positive | FilmType::Kodachrome => Polarity::Positive,
+            // Both develop to their base, which is the brightest film on a
+            // strip whether or not it carries an orange mask
+            FilmType::Negative | FilmType::Mono => Polarity::Negative,
+        }
+    }
+}
+
 /// A log level flag, by name
 pub fn parse_log_level(flag: &str) -> Result<LevelFilter, String> {
     flag.parse()
         .map_err(|_| format!("'{flag}' is not a valid log level (expected one of: trace, debug, info, warn, error, off)"))
 }
 
-/// A film format flag, by name or as a frame height in millimetres
+/// A film format flag, by name or as a frame height in millimeters
 ///
 /// The named ones are what the holders take; anything else is a height, which
 /// is what a format nobody named still needs
 pub fn parse_format(flag: &str) -> Result<FilmFormat, String> {
     Ok(match flag {
-        "IX240" => FilmFormat::IX240,
+        "IX240" | "aps" | "APS" => FilmFormat::IX240,
         "135" => FilmFormat::F135,
+        "half" | "135half" => FilmFormat::F135Half,
         "16" => FilmFormat::F16,
         "645" => FilmFormat::F645,
         "66" => FilmFormat::F66,
@@ -162,8 +181,9 @@ pub fn parse_format(flag: &str) -> Result<FilmFormat, String> {
 /// What `parse_format` would take for this format, for saying what is on offer
 pub fn format_name(format: &FilmFormat) -> String {
     match format {
-        FilmFormat::IX240 => "24".into(),
+        FilmFormat::IX240 => "IX240".into(),
         FilmFormat::F135 => "135".into(),
+        FilmFormat::F135Half => "half".into(),
         FilmFormat::F16 => "16".into(),
         FilmFormat::F645 => "645".into(),
         FilmFormat::F66 => "66".into(),

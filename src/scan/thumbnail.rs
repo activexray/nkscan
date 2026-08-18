@@ -28,6 +28,9 @@ use crate::{
 };
 use tracing::*;
 
+/// The most film to leave either side of a frame, as the format over this
+const MARGIN: u32 = 50;
+
 /// Whether this unit and adapter will thumbnail at all
 ///
 /// Support follows the adapter rather than the model, so this is re-decided
@@ -43,18 +46,16 @@ pub fn available(caps: &Capabilities) -> bool {
 /// nothing advertises. Every rectangle comes out that long: the captures'
 /// measured tables move the tops about and leave the heights at the format.
 ///
-/// `polarity` of `None` is worked out from the strip.
+/// `polarity` is which way the loaded film reads, which the film type says.
 pub fn frames(
     caps: &Capabilities,
     pass: &Pass,
     samples: &Samples,
     length: u32,
-    polarity: Option<Polarity>,
+    polarity: Polarity,
 ) -> Result<Boundary, Error> {
-    // The window that scans a frame has to be whole readout blocks and has to
-    // sit inside the frame the table gives, so the table carries the rounding
-    let length = window::whole_blocks(caps, length);
-    framing::reachable(caps, length)?;
+    let format = window::reachable_blocks(caps, length);
+    framing::reachable(caps, format)?;
     let image = Image::new(&pass.layout, samples)?;
 
     // A thumbnail column is one line pitch of film, and the pass starts where
@@ -64,11 +65,26 @@ pub fn frames(
     let end = caps.address.y_axis.address_range.last;
     let (left, width) = opening(caps);
 
-    let found = boundaries::detect(&image, (length / pitch) as usize, polarity);
+    let found = boundaries::detect(&image, (format / pitch) as usize, polarity);
+
+    // A frame cut to the format exactly would sometimes clip the picture, since
+    // a column is a third of a millimeter. A little film either side takes that
+    // slack off the gap instead, and leaves an edge to see the frame against
+    let bleed = margin(format, found.pitch as u32 * pitch);
+    let length = window::reachable_blocks(caps, format + 2 * window::whole_blocks(caps, bleed));
+    framing::reachable(caps, length)?;
+    // Whatever the axis would not take comes off the margin, not the format
+    let margin = (length - format) / 2;
+
     let frames: Vec<Rect> = found
         .frames
         .iter()
-        .map(|frame| origin + frame.col as u32 * pitch)
+        // Off the top as well, so the frame stays centered on what was found
+        .map(|&col| {
+            (origin + col as u32 * pitch)
+                .saturating_sub(margin)
+                .max(origin)
+        })
         .filter(|top| top + length <= end)
         .map(|top| Rect {
             top,
@@ -80,7 +96,7 @@ pub fn frames(
 
     info!(
         frames = frames.len(),
-        polarity = ?found.polarity,
+        ?polarity,
         pitch = found.pitch as u32 * pitch,
         "measured the loaded strip"
     );
@@ -93,10 +109,11 @@ pub fn frames_type2(
     samples: &Samples,
     perf_info: &PerfInformation,
     length: u32,
-    polarity: Option<Polarity>,
+    polarity: Polarity,
 ) -> Result<BoundaryType2, Error> {
-    // The window that scans a frame has to be whole readout blocks.
-    let length = window::whole_blocks(caps, length);
+    // Whole readout blocks, and trimmed rather than refused where the format
+    // is taller than the axis reaches
+    let length = window::reachable_blocks(caps, length);
     framing::reachable(caps, length)?;
 
     let image = Image::new(&pass.layout, samples)?;
@@ -109,34 +126,48 @@ pub fn frames_type2(
 
     let found = boundaries::detect(&image, (length / pitch) as usize, polarity);
 
-    // genereate FramePosition table using detected frame boundaries + perforation data table
+    // The frame table the detected boundaries and the perforation data come to
     let frames: Vec<FramePosition> = found
         .frames
         .iter()
-        .filter_map(|frame| {
-            let top = origin + frame.col as u32 * pitch;
-
-            if top + length <= end {
-                FramePosition::new(
+        .filter_map(|&col| {
+            let top = origin + col as u32 * pitch;
+            match top + length <= end {
+                true => FramePosition::new(
                     caps.address.x_axis.optical_dpi,
                     caps.address.thumbnail_resolution.start,
-                    frame.col as u32,
+                    col as u32,
                     perf_info,
-                )
-            } else {
-                None
+                ),
+                false => None,
             }
         })
         .collect();
 
     info!(
         frames = frames.len(),
-        polarity = ?found.polarity,
+        ?polarity,
         pitch = found.pitch as u32 * pitch,
         "measured the loaded strip"
     );
 
     Ok(BoundaryType2 { frames })
+}
+
+/// Film to leave either side of a frame, in whatever units the format is given
+/// in
+///
+/// `wound` is how far the transport advanced between frames, 0 where nothing
+/// measured it. Never over half the wind, or the margin carries the frame next
+/// door; frames that overlap get none.
+fn margin(format: u32, wound: u32) -> u32 {
+    let most = format / MARGIN;
+    match wound {
+        // One frame on its own says nothing about the wind, and has the film to
+        // itself either way
+        0 => most,
+        wound => most.min(wound.saturating_sub(format) / 2),
+    }
 }
 
 /// Where the adapter's opening sits on the sensor, and how wide it is

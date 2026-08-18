@@ -1,6 +1,6 @@
 [package]
 name = "nkscan"
-version = "0.4.5"
+version = "0.5.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "A platform-agnostic, performant driver for Nikon film scanners"

@@ -201,8 +201,13 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
                 }
 
                 // Write the detected frames to the scanner's boundary table
-                let measured =
-                    thumbnail::frames(session.capabilities(), &pass, &samples, length, None)?;
+                let measured = thumbnail::frames(
+                    session.capabilities(),
+                    &pass,
+                    &samples,
+                    length,
+                    film.into(),
+                )?;
                 session.set_boundaries(&measured)?;
 
                 let frames = measured.frames.clone();
@@ -254,7 +259,7 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
                     &samples,
                     &perfs,
                     length,
-                    None,
+                    film.into(),
                 )?;
 
                 session.set_boundaries_type2(&measured)?;

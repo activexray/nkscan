@@ -150,7 +150,7 @@ impl Metering {
 }
 
 /// Full scale for a sample of `bits` valid bits
-fn ceiling(bits: u8) -> u16 {
+pub(crate) fn ceiling(bits: u8) -> u16 {
     match bits {
         0 | 16.. => u16::MAX,
         b => (1u16 << b) - 1,

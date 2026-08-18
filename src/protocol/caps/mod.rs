@@ -112,7 +112,7 @@ impl Page {
     /// How many bytes the page says it holds
     ///
     /// Clamped to what arrived, since a unit declaring more than it sent is no
-    /// licence to read past the buffer
+    /// license to read past the buffer
     fn declared_len(&self) -> usize {
         (4 + usize::from(self.bytes[3])).min(self.bytes.len())
     }

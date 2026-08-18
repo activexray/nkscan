@@ -395,8 +395,7 @@ impl Boundary {
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         // The count is one byte (2-11-6 byte 2), so more than 255 frames cannot
-        // be encoded. A silent `as u8` truncation sent a garbage table that the
-        // transport refused with EINVAL
+        // be encoded
         if self.frames.len() > u8::MAX as usize {
             return Err(Error::Unsupported {
                 op: "boundary",

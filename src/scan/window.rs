@@ -301,14 +301,14 @@ impl Recipe {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::protocol::caps::{
         Page, address::Address, identity::Identity, other::Features, set_window::SetWindowFunction,
     };
 
     /// An LS-9000 cut down to the fields a window builder reads
-    fn caps() -> Capabilities {
+    pub(crate) fn caps() -> Capabilities {
         let mut p = vec![0u8; 91];
         p[1] = Address::PAGE_CODE;
         p[3] = 87;

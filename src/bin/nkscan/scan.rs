@@ -9,9 +9,10 @@ use anyhow::{anyhow, bail};
 use indicatif::{ProgressBar, ProgressStyle};
 use nkscan::{
     device, dust,
+    error::Error,
     protocol::{
         caps::{film::FilmFormat, other::HostCooperation, set_window::ColorInterleaving},
-        data::{Boundary, FrameTable},
+        data::FrameTable,
         decode::Samples,
         model::Model,
         window::Channel,
@@ -136,6 +137,7 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
             "Load a film {}",
             if uses_adapter { "strip" } else { "holder" }
         ),
+        true,
     )?;
 
     // One buffer for every strip
@@ -215,14 +217,11 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
                 info!(frames = measured.frames.len(), "detected frames");
                 (FrameTable::Boundary(measured), frames)
             }
-            Framing::Caller => {
-                let frame = framing::single_frame(session.capabilities())?;
-                (
-                    FrameTable::Boundary(Boundary {
-                        frames: vec![frame],
-                    }),
-                    vec![frame],
-                )
+            Framing::Address => {
+                let table = framing::frames(session.capabilities())?;
+                let frames = table.frames.clone();
+                info!(frames = frames.len(), "framed from the address page");
+                (FrameTable::Boundary(table), frames)
             }
             Framing::Perforation => {
                 // discard old data
@@ -397,22 +396,26 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
             break;
         }
 
-        if !ejected {
-            // No UNLOAD, such as the MA-21, still gives a real not-ready
-            // blip when the operator takes out what's seated (2-1's Medium
-            // Not Present, case a). wait_for_film alone would not catch it:
-            // it only waits when media_loaded() is already false, and right
-            // after a scan whatever was loaded is still seated, so it would
-            // return at once and this frame would be scanned again
-            wait_for_unload(
-                &mut session,
-                &format!(
-                    "Take out the loaded {}",
-                    if uses_adapter { "film" } else { "holder" }
-                ),
-            )?;
+        // A unit with a supply behind the gate takes the next medium in itself,
+        // and is also the only one that can say when it has run out
+        if framing::self_feeding(session.capabilities()) {
+            session.refresh()?;
+            if !ready(&mut session, true)? {
+                info!("Nothing left to load");
+                break;
+            }
+            info!("Film loaded");
+            session.stage()?;
+            continue;
         }
-        wait_for_film(&mut session, "Load the next strip")?;
+
+        // A unit with no UNLOAD cannot give the medium back, and what the
+        // operator does with it is theirs to say: a strip holder is advanced
+        // where a mount is swapped, and neither has to leave the gate
+        if !ejected && !confirm("Replace or advance the film, then press Enter")? {
+            break;
+        }
+        wait_for_film(&mut session, "Load the next strip", false)?;
     }
     Ok(())
 }
@@ -489,13 +492,43 @@ fn clean_frame(samples: &mut Samples, pass: &Pass, model: Option<Model>) -> anyh
     Ok(count)
 }
 
+/// Whether there is film to scan
+///
+/// A feeder or a cartridge keeps its film behind the gate, so nothing reads as
+/// loaded until the unit is told to take some in. `take_in` is whether it may:
+/// false once a medium has been scanned and ejected, where loading again would
+/// only bring the same film back
+fn ready(session: &mut Session, take_in: bool) -> Result<bool, Error> {
+    if session.media_loaded()? {
+        return Ok(true);
+    }
+    if !take_in || !session.load()? {
+        return Ok(false);
+    }
+    // The address page now describes the medium that came in
+    session.refresh()?;
+    session.media_loaded()
+}
+
+/// The same, counting anything the operator can put right as "not yet": an open
+/// door is what the prompt is for
+fn waiting(session: &mut Session, take_in: bool) -> Result<bool, Error> {
+    match ready(session, take_in) {
+        Err(Error::Media(condition)) => {
+            debug!(%condition, "waiting on the operator");
+            Ok(false)
+        }
+        other => other,
+    }
+}
+
 /// Wait until a holder is loaded, then put the unit in a state to scan from
-fn wait_for_film(session: &mut Session, prompt: &str) -> anyhow::Result<()> {
+fn wait_for_film(session: &mut Session, prompt: &str, take_in: bool) -> anyhow::Result<()> {
     // An eject leaves what we know about the holder behind, so ask again before
     // believing anything is in there
     session.refresh()?;
 
-    if !session.media_loaded()? {
+    if !waiting(session, take_in)? {
         // The spinner is the affordance on a terminal, and hidden anywhere else, so the log says it too
         info!("{prompt}");
         let spinner = ProgressBar::new_spinner();
@@ -504,42 +537,24 @@ fn wait_for_film(session: &mut Session, prompt: &str) -> anyhow::Result<()> {
         loop {
             std::thread::sleep(HOLDER_POLL);
             session.refresh()?;
-            if session.media_loaded()? {
+            // Retrying the load is what picks up a supply that was refilled
+            if waiting(session, take_in)? {
                 spinner.finish_and_clear();
-                info!("Strip loaded");
                 break;
             }
         }
     }
+    info!("Film loaded");
     session.stage()?;
     Ok(())
 }
 
-/// Wait until nothing is loaded
-///
-/// A mount with no UNLOAD, such as the MA-21, leaves the object it already
-/// had seated exactly as it was: media_loaded() reads true again at once
-/// unless the operator has actually taken it out, same as the not-ready blip
-/// a real eject gives, just by hand. `wait_for_film` needs that blip to have
-/// happened before its own "is one loaded yet" wait means anything
-fn wait_for_unload(session: &mut Session, prompt: &str) -> anyhow::Result<()> {
-    session.refresh()?;
-    if !session.media_loaded()? {
-        return Ok(());
-    }
-    info!("{prompt}");
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_message(format!("{prompt}. Ctrl-c to stop"));
-    spinner.enable_steady_tick(SPINNER_TICK);
-    loop {
-        std::thread::sleep(HOLDER_POLL);
-        session.refresh()?;
-        if !session.media_loaded()? {
-            spinner.finish_and_clear();
-            break;
-        }
-    }
-    Ok(())
+/// Ask the operator for something and wait for them, answering whether anyone
+/// was there to answer
+fn confirm(prompt: &str) -> anyhow::Result<bool> {
+    eprintln!("{prompt}. Ctrl-c to stop");
+    let mut line = String::new();
+    Ok(std::io::stdin().read_line(&mut line)? > 0)
 }
 
 /// A bar for one pass

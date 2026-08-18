@@ -705,6 +705,8 @@ pub enum Op {
     FocusMove,
     /// Ejects
     Unload,
+    /// Takes in whatever the adapter has waiting, the mirror of [`Unload`](Self::Unload)
+    Load,
     /// A code neither spec names
     Other(u8),
 }
@@ -721,6 +723,7 @@ impl Op {
             Self::SetupShading => 0xB0,
             Self::FocusMove => 0xC1,
             Self::Unload => 0xD0,
+            Self::Load => 0xD1,
             Self::Other(code) => code,
         }
     }
@@ -738,6 +741,7 @@ impl From<u8> for Op {
             0xB0 => Self::SetupShading,
             0xC1 => Self::FocusMove,
             0xD0 => Self::Unload,
+            0xD1 => Self::Load,
             x => Self::Other(x),
         }
     }

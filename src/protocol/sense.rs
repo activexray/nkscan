@@ -108,7 +108,11 @@ pub enum Intervention {
 
     // 0x02-0x3A-0x00-xx  Medium Not Present
     #[error("No film or holder is loaded")]
-    NoMedium, // 0x00 and 0x01
+    NoMedium, // 0x01
+    /// A load was commanded and the adapter had nothing waiting to take in,
+    /// which is how a supply says it is empty
+    #[error("The adapter has nothing left to load")]
+    NothingToLoad, // 0x00
     #[error("SA-21/SA-30: a nonstandard film was inserted")]
     FilmOutOfStandard, // 0x03
     // 0x04 is "frame beyond the number of frames", which nobody has to touch
@@ -334,6 +338,7 @@ fn from_sense(s: &Sense) -> Outcome {
         (0x02, 0x04, 0x03) => NeedsOperator(Intervention::manual(s.tsc)),
         (0x02, 0x05, 0x00) => Working(Activity::Initializing),
         (0x02, 0x3A, 0x00) => match s.tsc {
+            Some(0x00) => NeedsOperator(Intervention::NothingToLoad),
             Some(0x03) => NeedsOperator(Intervention::FilmOutOfStandard),
             Some(0x04) => Refused(Refusal::FrameOutOfRange),
             _ => NeedsOperator(Intervention::NoMedium),

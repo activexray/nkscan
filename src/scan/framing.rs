@@ -7,9 +7,10 @@ use crate::{
     error::Error,
     protocol::{
         caps::{Capabilities, address::CoordinateBase, other::DataTypes},
-        data::{Boundary, Rect},
+        data::{Boundary, Op, Rect},
     },
 };
+use tracing::*;
 
 /// How a scan comes to know where each frame sits
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,8 +23,9 @@ pub enum Framing {
     Thumbnail,
     /// No rectangles at all. 135 film seeks by counting perforations: read `DataType::Perforation` and write `DataType::Boundary2` back
     Perforation,
-    /// Neither mechanism is offered, so the caller has to say where to scan
-    Caller,
+    /// No mechanism is offered, so the address page's own geometry is what says
+    /// where the frames are
+    Address,
 }
 
 impl Framing {
@@ -42,7 +44,7 @@ impl Framing {
             if thumbnail::available(caps) {
                 return Self::Thumbnail;
             }
-            return Self::Caller;
+            return Self::Address;
         }
 
         // Perforations are the other way a frame gets found, and only the families that read DataType::Perforation can do it
@@ -53,7 +55,7 @@ impl Framing {
         {
             return Self::Perforation;
         }
-        Self::Caller
+        Self::Address
     }
 }
 
@@ -119,15 +121,74 @@ pub fn table(caps: &Capabilities) -> Result<Boundary, Error> {
     Ok(Boundary { frames })
 }
 
-/// The one frame a [`Framing::Caller`] unit never describes on its own: the whole opening each axis's range and boundary give
-pub fn single_frame(caps: &Capabilities) -> Result<Rect, Error> {
+/// How many frames the addressable Y range holds, at one boundary each
+///
+/// More than one only where the window address is a position on the medium
+/// rather than the gate, 2-2-2-2 byte 17 bit 0
+pub fn frames_on_medium(caps: &Capabilities) -> u32 {
+    let y = &caps.address.y_axis;
+    let span = y.address_range.last.saturating_sub(y.address_range.start) + 1;
+    match y.boundary {
+        0 => 1,
+        boundary => (span / boundary).max(1),
+    }
+}
+
+/// Whether the unit fetches the next medium itself
+///
+/// A supply of single-frame media is a stack it works through. Anything longer
+/// is one medium and the operator swaps it
+pub fn self_feeding(caps: &Capabilities) -> bool {
+    caps.features.execute.supports(Op::Load) && frames_on_medium(caps) == 1
+}
+
+/// The frames a [`Framing::Address`] unit never describes on its own: one rect
+/// per frame the Y range holds, the whole opening wide
+pub fn frames(caps: &Capabilities) -> Result<Boundary, Error> {
     let (x, y) = (&caps.address.x_axis, &caps.address.y_axis);
-    let extent = super::window::whole_blocks(caps, y.boundary);
+    let extent = super::window::reachable_blocks(caps, y.boundary);
     reachable(caps, extent)?;
-    Ok(Rect {
-        top: y.address_range.start,
-        left: x.address_range.start,
-        bottom: y.address_range.start + extent,
-        right: x.address_range.start + x.boundary,
-    })
+
+    let count = frames_on_medium(caps);
+    debug!(
+        count,
+        pitch = y.boundary,
+        extent,
+        "framed from the address page"
+    );
+    let frames = (0..count)
+        .map(|n| {
+            let top = y.address_range.start + n * y.boundary;
+            Rect {
+                top,
+                left: x.address_range.start,
+                bottom: top + extent,
+                right: x.address_range.start + x.boundary,
+            }
+        })
+        .collect();
+    Ok(Boundary { frames })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scan::window::tests::caps;
+
+    /// A cartridge addresses the film itself, so its range runs the length of
+    /// the roll at one frame per boundary. These are an IA-20's
+    #[test]
+    fn a_medium_longer_than_the_gate_is_framed_along_its_range() {
+        let mut caps = caps();
+        assert_eq!(frames(&caps).expect("frames").frames.len(), 1);
+
+        caps.address.y_axis.address_range = (0..=111324).into();
+        caps.address.y_axis.boundary = 4453;
+        caps.address.line_gap = 0;
+
+        let found = frames(&caps).expect("frames").frames;
+        assert_eq!(found.len(), 25);
+        assert_eq!(found[0].bottom - found[0].top, 4453);
+        assert_eq!(found[24].top, 24 * 4453);
+    }
 }

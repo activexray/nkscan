@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lots of little bugs with the old frame-detection algorithm is out, we have rewritten the logic to be way more robust.
 - Every 120 format was scanned at the size its name says rather than the size it exposes. 6x4.5 is now 41.5 mm, 6x7 69.5 and 6x8 76.
 - 6x9 scans now work
+- The SF-210 never scanned anything. Its slides sit in the magazine rather than the gate, so nothing ever read as loaded. Units that advertise LOAD (2-15-3 D1h) are now asked to take film in.
+- The IA-20 scanned one frame and ejected the cartridge. Its Y address range spans every frame the loaded film carries, so a 25 exposure roll now comes back as 25 frames.
+- An FH-3 strip holder in an MA-21 could not be advanced. The batch waited for the holder to leave the gate, which sliding it along never does. Where the unit has no UNLOAD to give the film back with, the operator presses Enter once they have replaced or advanced it, from [#33](https://github.com/activexray/nkscan/pull/33)
 
 ### Added
 
@@ -19,11 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every frame carries a little film either side, up to two percent of the format
 - `--format half` for 35mm shot half frame (18 x 24 mm).
 - `--format IX240` (or `aps`) now scans APS's 30.2 mm recorded frame
+- A feeder works through its magazine a slide at a time, and the batch ends when the unit says the supply is empty
 
 ### Changed
 
 - `scan::boundaries::detect` and `scan::thumbnail::frames`/`frames_type2` take the film's polarity rather than an `Option` of it.
 - `scan::boundaries::Detected` is the column each frame starts at and the pitch, nothing else.
+- `Framing::Caller` is `Framing::Address`, and `framing::single_frame` is `framing::frames`, which returns every frame the address page describes rather than assuming the gate holds one.
+- `Session::load` takes film in, mirroring `Session::eject`. Both do nothing where the unit does not advertise the operation.
+- A load that found nothing to take is `Intervention::NothingToLoad` rather than `NoMedium`.
 
 ## [0.4.5]
 

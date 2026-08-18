@@ -261,6 +261,30 @@ impl Session {
         Ok(true)
     }
 
+    /// Take in whatever the adapter has waiting, answering whether anything came
+    ///
+    /// 2-15-3 `Load`, the mirror of [`eject`](Self::eject) and gated the same
+    /// way. A feeder or a cartridge keeps its film behind the gate, so there is
+    /// nothing to scan until the unit is told to take some in; an adapter the
+    /// operator fills by hand does not offer the operation at all.
+    ///
+    /// `Ok(false)` covers both nothing to do and nothing left: neither is a
+    /// failure, and either way the caller has to ask the operator
+    pub fn load(&mut self) -> Result<bool, Error> {
+        if !self.caps.features.execute.supports(Op::Load) {
+            debug!("this unit has no LOAD");
+            return Ok(false);
+        }
+        match self.execute(Op::Load, Operation::default(), MOVE_TIMEOUT) {
+            Ok(_) => Ok(true),
+            Err(Error::Media(Intervention::NothingToLoad)) => {
+                debug!("the adapter has nothing left to take in");
+                Ok(false)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// What the scanner says it can do
     pub fn capabilities(&self) -> &Capabilities {
         &self.caps

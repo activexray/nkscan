@@ -9,6 +9,7 @@
 //!
 //! session.stage()?; // homes the mechanism once a holder is loaded
 //! let caps = session.capabilities();
+//! # Ok::<(), nkscan::error::Error>(())
 //! ```
 
 pub mod device;

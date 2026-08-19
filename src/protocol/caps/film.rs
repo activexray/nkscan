@@ -87,7 +87,7 @@ impl FilmFormat {
 
     /// The formats a holder ID accepts, where it accepts more than one
     ///
-    /// Returns `None` where the holder fixes the format (see [`from_holder`])
+    /// Returns `None` where the holder fixes the format (see [`Self::from_holder`])
     /// or is unknown. Used to offer the operator a choice
     pub fn choices_for_holder(holder_id: u8) -> Option<&'static [Self]> {
         match holder_id {

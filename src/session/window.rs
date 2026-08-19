@@ -120,7 +120,7 @@ impl Session {
     /// `DataType::Cooperation` record and
     /// send SCAN again with nothing in between: it says what the host will owe
     /// the *data*, not what has to happen before the scan runs. Whatever it
-    /// asks for comes back on [`Started::cooperation`] for the caller to honor
+    /// asks for comes back on [`Started::cooperations`] for the caller to honor
     /// once the image is read.
     pub fn scan(&mut self, windows: &[Window]) -> Result<Started, Error> {
         // Checks every rule spanning the set on the way

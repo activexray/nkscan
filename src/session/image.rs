@@ -288,7 +288,7 @@ impl Chunks<'_> {
 ///
 /// Reading rather than ABORT deliberately: 2-13 stops the scan block where it
 /// is, and aborting one mid-move has to wait for the mechanism first or the
-/// handle wedges until a power cycle. [`drain`](Chunks::drain) gives up on the
+/// handle wedges until a power cycle. `drain` gives up on the
 /// first error, so there is nothing here to hang on a unit that has stopped
 /// answering
 impl Drop for Chunks<'_> {

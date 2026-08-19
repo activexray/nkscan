@@ -239,17 +239,13 @@ impl Session {
             .ok_or_else(|| malformed(format!("Setup was {} bytes", record.len())))
     }
 
-    /// The CCD's own response curves, for correcting its rows against each other
+    /// Read the CCD's own response curves once and cache them on the session
     ///
-    /// `kind` picks one of the measurement types `CcdMeasurement` counts, whose
-    /// meaning nothing states; 0 is the only one anything has used.
-    ///
-    /// `None` rather than an error where the unit offers no curves or the reply
-    /// Read the CCD response curves once and cache them on the session
-    ///
-    /// `CcdData` is not per-color, so one read covers every channel. `kind` is
-    /// the measurement type; 0 is the only one Nikon Scan or this driver uses.
-    /// Returns whether curves were cached
+    /// `CcdData` is not per-color, so one read covers every channel. The
+    /// measurement type is fixed at 0, the only one Nikon Scan or this
+    /// driver uses. Returns whether curves were cached; `false` covers both
+    /// a unit that offers none and a reply that does not match the page
+    /// describing it
     pub fn fetch_curves(&mut self) -> bool {
         let Some(ccd) = self.caps.ccd.clone() else {
             return false;

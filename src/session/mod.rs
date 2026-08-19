@@ -1,6 +1,6 @@
 //! An open, exclusive hold of a scanner
 //!
-//! Ties [`transport`](crate::transport) to [`protocol`](crate::protocol): holds
+//! Ties [`transport`] to [`protocol`](crate::protocol): holds
 //! the state that outlives a single command, wraps each CDB in the invariants
 //! its section imposes, and absorbs the retry and polling semantics. Deciding
 //! what a scan should do belongs above this.

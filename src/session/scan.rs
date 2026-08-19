@@ -103,7 +103,7 @@ impl Session {
     ///
     /// `timeout` bounds the wait for the unit to report ready after SCAN, and
     /// nothing else. Each read of the data that follows carries its own
-    /// [`MOVE_TIMEOUT`](super::MOVE_TIMEOUT), so a long pass is bounded a chunk
+    /// `MOVE_TIMEOUT`, so a long pass is bounded a chunk
     /// at a time rather than as a whole.
     ///
     /// The caller owes the unit a read: a scan whose data is never read locks
@@ -137,7 +137,7 @@ impl Session {
         self.scan_pass_with(windows, timeout, samples, |_| {})
     }
 
-    /// The same as [`scan_pass`], telling `on` how far along the pass is after every chunk
+    /// The same as [`Self::scan_pass`], telling `on` how far along the pass is after every chunk
     ///
     /// `on` runs on the decoding thread between chunks, so anything slow in it
     /// is time the unit spends waiting for the next read with its buffer filling

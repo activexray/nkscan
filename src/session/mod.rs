@@ -111,6 +111,18 @@ impl Session {
         match session.test_unit_ready(READY_TIMEOUT) {
             Ok(()) => {}
             Err(Error::Media(Intervention::NoMedium)) => debug!("nothing is loaded"),
+            // A scan the last process holding the unit never read to the end
+            // stays valid and refuses everything, TEST UNIT READY included,
+            // until it is stopped. `abort()` is 2-13's unconditional stop, the
+            // same recovery `stop_stale_scan` below reaches for at this same
+            // sense code, just against a command that can trip over it first
+            Err(Error::Device(fault))
+                if matches!(*fault, Fault::Rejected(Refusal::OutOfSequence, _)) =>
+            {
+                debug!("a scan was still valid from the last process, stopping it");
+                session.abort()?;
+                session.test_unit_ready(READY_TIMEOUT)?;
+            }
             Err(e) => return Err(e),
         }
         session.reserved = session.reserve()?;

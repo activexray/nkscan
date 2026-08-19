@@ -89,5 +89,12 @@ pub fn clean_frame(
         .colors
         .get_disjoint_mut([r, g, b])
         .expect("three distinct color planes");
-    Ok(dust::clean([pr, pg, pb], ir, &cal, pass.rows, pass.cols, &opts))
+    Ok(dust::clean(
+        [pr, pg, pb],
+        ir,
+        &cal,
+        pass.rows,
+        pass.cols,
+        &opts,
+    ))
 }

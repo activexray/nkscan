@@ -162,21 +162,14 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
         let first = io::next_free(&basename);
 
         let bar = pass_bar("thumbnail");
-        let discovery = framing::discover_with(
-            &mut session,
-            film_format,
-            film.into(),
-            &mut samples,
-            |p| {
+        let discovery =
+            framing::discover_with(&mut session, film_format, film.into(), &mut samples, |p| {
                 bar.report(p);
                 ControlFlow::Continue(())
-            },
-        )?;
+            })?;
         bar.finish_and_clear();
 
-        if save_thumbnail
-            && let Some(pass) = &discovery.thumbnail
-        {
+        if save_thumbnail && let Some(pass) = &discovery.thumbnail {
             let path = io::write_thumbnail(&basename, first, &samples, pass)?;
             info!("wrote {}", path.display());
         }

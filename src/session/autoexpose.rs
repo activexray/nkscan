@@ -64,7 +64,11 @@ impl Session {
         windows: &[Window],
         lock_white_balance: bool,
     ) -> Result<Exposures, Error> {
-        self.autoexpose_with(windows, lock_white_balance, |_, _| ControlFlow::Continue(()))
+        self.autoexpose_with(
+            windows,
+            lock_white_balance,
+            |_, _| ControlFlow::Continue(()),
+        )
     }
 
     /// The same as [`Self::autoexpose`], letting `on` cancel by returning `Break`

@@ -76,7 +76,8 @@ pub fn scan_frame_with(
         Some(locked) => locked.clone(),
         None => {
             let lock = options.lock_white_balance;
-            session.autoexpose_frame_with(frame, recipe, lock, |pass, p| on(Phase::Meter(pass), p))?
+            session
+                .autoexpose_frame_with(frame, recipe, lock, |pass, p| on(Phase::Meter(pass), p))?
         }
     };
     exposures.apply(&mut windows);

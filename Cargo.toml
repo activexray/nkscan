@@ -14,6 +14,7 @@ exclude = [
   "docs/*",
   "flake.nix",
   "flake.lock",
+  "nkscan.pyi",
   "pyproject.toml",
   "scripts/",
   "scsi_proxy/",
@@ -35,7 +36,7 @@ rayon = "1.12.0"
 pyo3 = { version = "0.29", optional = true, features = ["abi3-py313"] }
 # Tracks pyo3's version; the pairing is what makes the zero-copy handoff sound
 numpy = { version = "0.29", optional = true }
-# Generates python/nkscan.pyi from the bindings, so the two cannot drift
+# Generates nkscan.pyi from the bindings, so the two cannot drift
 # infer_signature is what turns a default into its actual repr rather than `...`; the rest of the
 # crate's defaults are type support for crates this does not use
 pyo3-stub-gen = { version = "0.23", optional = true, default-features = false, features = [
@@ -45,7 +46,9 @@ pyo3-stub-gen = { version = "0.23", optional = true, default-features = false, f
 
 # The CLI stack, which a library consumer has no use for
 anyhow = { version = "1", optional = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+tracing-subscriber = { version = "0.3", features = [
+  "env-filter",
+], optional = true }
 clap = { version = "4", features = ["derive"], optional = true }
 indicatif = { version = "0.18", optional = true }
 tiff = { version = "0.11", optional = true }
@@ -87,6 +90,11 @@ io-kit-sys = "0.5"
 name = "nkscan"
 path = "src/bin/nkscan/main.rs"
 required-features = ["cli"]
+
+[[bin]]
+name = "stub_gen"
+path = "src/bin/stub_gen.rs"
+required-features = ["python"]
 
 [dev-dependencies]
 divan = "0.1.21"

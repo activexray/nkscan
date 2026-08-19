@@ -37,17 +37,38 @@ create_exception!(
     PyRuntimeError,
     "Base for every error this crate raises"
 );
-create_exception!(nkscan, TransportError, ScannerError, "The link to the scanner failed");
-create_exception!(nkscan, DeviceBusy, ScannerError, "Something else has the scanner");
+create_exception!(nkscan, TransientError, ScannerError, "Worth retrying");
+create_exception!(
+    nkscan,
+    TransportError,
+    TransientError,
+    "The link to the scanner failed"
+);
+create_exception!(
+    nkscan,
+    DeviceBusy,
+    TransientError,
+    "Something else has the scanner"
+);
 create_exception!(nkscan, DeviceNotFound, ScannerError, "No such scanner");
-create_exception!(nkscan, MediaError, ScannerError, "Something a person has to go fix");
+create_exception!(
+    nkscan,
+    MediaError,
+    ScannerError,
+    "Something a person has to go fix"
+);
 create_exception!(
     nkscan,
     UnsupportedError,
     ScannerError,
     "This unit or adapter cannot do that. Carries `.op` and `.reason`"
 );
-create_exception!(nkscan, ScanCancelled, ScannerError, "A progress callback returned False");
+create_exception!(
+    nkscan,
+    ScanCancelled,
+    ScannerError,
+    "A progress callback returned False"
+);
 
 impl From<Error> for PyErr {
     fn from(error: Error) -> Self {
@@ -84,7 +105,7 @@ pub struct PyDevice(RustDevice);
 #[gen_stub_pymethods]
 #[pymethods]
 impl PyDevice {
-    /// Where it is, the form [`open`](Self::open) and every selector-by-location accepts
+    /// Where it is
     #[getter]
     fn location(&self) -> String {
         self.0.attach.to_string()
@@ -182,19 +203,33 @@ impl PySession {
     }
 }
 
+fn open_device(device: &RustDevice) -> Result<PySession, Error> {
+    let transport = device.open()?;
+    let session = RustSession::open(transport)?;
+    Ok(PySession(Mutex::new(Some(session))))
+}
+
 #[gen_stub_pymethods]
 #[pymethods]
 impl PySession {
+    /// Start a session against whatever `list_devices` reports at this `location`
+    #[new]
+    fn new(py: Python<'_>, location: &str) -> PyResult<Self> {
+        let location = location.to_string();
+        py.detach(move || {
+            let devices = device::list();
+            let device = device::Selector::Location(location)
+                .resolve(&devices)
+                .map_err(|e| DeviceNotFound::new_err(e.to_string()))?;
+            open_device(device).map_err(PyErr::from)
+        })
+    }
+
     /// Start a session against `device`
     #[staticmethod]
     fn open(py: Python<'_>, device: &PyDevice) -> PyResult<Self> {
         let dev = device.0.clone();
-        py.detach(move || {
-            let transport = dev.open()?;
-            let session = RustSession::open(transport)?;
-            Ok::<_, Error>(Self(Mutex::new(Some(session))))
-        })
-        .map_err(PyErr::from)
+        py.detach(move || open_device(&dev)).map_err(PyErr::from)
     }
 
     /// What the scanner says it can do
@@ -237,19 +272,21 @@ impl PySession {
         positive: bool,
         progress: Option<Py<PyAny>>,
     ) -> PyResult<Vec<(u32, u32, u32, u32)>> {
-        let format = format_mm.map(|mm| crate::protocol::caps::film::FilmFormat::Custom(mm.round() as u32));
-        let polarity = if positive { Polarity::Positive } else { Polarity::Negative };
+        let format =
+            format_mm.map(|mm| crate::protocol::caps::film::FilmFormat::Custom(mm.round() as u32));
+        let polarity = if positive {
+            Polarity::Positive
+        } else {
+            Polarity::Negative
+        };
 
         py.detach(move || {
             self.with(|session| {
                 let mut samples = Samples::default();
-                let discovery = framing::discover_with(
-                    session,
-                    format,
-                    polarity,
-                    &mut samples,
-                    |p| report(&progress, "discover", 0, p),
-                )?;
+                let discovery =
+                    framing::discover_with(session, format, polarity, &mut samples, |p| {
+                        report(&progress, "discover", 0, p)
+                    })?;
                 Ok(discovery
                     .frames
                     .into_iter()
@@ -261,9 +298,9 @@ impl PySession {
 
     /// Focus, meter, take the pass over `frame`, and optionally clean it
     ///
-    /// `frame` is `(top, left, bottom, right)`, one of [`discover_frames`](Self::discover_frames)'s.
-    /// `exposures`, keyed the way [`ScanResult.exposures`](PyScanResult) is,
-    /// reuses an exposure already decided rather than metering this frame fresh
+    /// `frame` is `(top, left, bottom, right)`, one of `discover_frames`'s. `exposures`,
+    /// keyed the way `ScanResult.exposures` is, reuses an exposure already decided
+    /// rather than metering this frame fresh
     #[pyo3(signature = (
         frame,
         dpi=None,
@@ -438,6 +475,7 @@ fn nkscan_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     let py = m.py();
     m.add("ScannerError", py.get_type::<ScannerError>())?;
+    m.add("TransientError", py.get_type::<TransientError>())?;
     m.add("TransportError", py.get_type::<TransportError>())?;
     m.add("DeviceBusy", py.get_type::<DeviceBusy>())?;
     m.add("DeviceNotFound", py.get_type::<DeviceNotFound>())?;

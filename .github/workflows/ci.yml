@@ -147,99 +147,94 @@ jobs:
             - name: Clippy
               run: cargo clippy --target ${{ matrix.target }} --all-targets --features cli -- --deny warnings
 
-    # The bindings went out with the rewrite: there is no src/python.rs and no
-    # stub_gen bin on this branch, so both jobs below would fail on a missing
-    # target rather than on anything real. Uncomment them with the bindings.
-#    # The stub is what a consumer sees of an abi3 extension, since one carries no introspectable
-#    # signatures. It is generated, so this only has to catch a commit that forgot to regenerate.
-#    stubs:
-#        name: Stub is up to date
-#        runs-on: ubuntu-latest
-#        steps:
-#            - name: Checkout repository
-#              uses: actions/checkout@v4
+    # The stub is what a consumer sees of an abi3 extension, since one carries no introspectable
+    # signatures. It is generated, so this only has to catch a commit that forgot to regenerate.
+    stubs:
+        name: Stub is up to date
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
 
-#            - name: Install Rust
-#              uses: dtolnay/rust-toolchain@master
-#              with:
-#                  toolchain: "1.96"
+            - name: Install the toolchain rust-toolchain.toml names
+              run: cargo --version
 
-#            - name: Cache Rust artifacts
-#              uses: Swatinem/rust-cache@v2
+            - name: Cache Rust artifacts
+              uses: Swatinem/rust-cache@v2
 
-#            # pyo3 needs an interpreter to build against. numpy is not needed: the generator
-#            # reads type information rather than calling into it.
-#            - name: Install Python
-#              uses: actions/setup-python@v5
-#              with:
-#                  python-version: "3.13"
+            # pyo3 needs an interpreter to build against. numpy is not needed: the generator
+            # reads type information rather than calling into it.
+            - name: Install Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.13"
 
-#            - name: Regenerate
-#              run: cargo run --features python --bin stub_gen
+            - name: Regenerate
+              run: cargo run --features python --bin stub_gen
 
-#            - name: Fail if it differs from what is committed
-#              run: |
-#                  if ! git diff --exit-code nkscan.pyi; then
-#                    echo "::error::nkscan.pyi is stale, run: cargo run --features python --bin stub_gen"
-#                    exit 1
-#                  fi
+            - name: Fail if it differs from what is committed
+              run: |
+                  if ! git diff --exit-code nkscan.pyi; then
+                    echo "::error::nkscan.pyi is stale, run: cargo run --features python --bin stub_gen"
+                    exit 1
+                  fi
 
-#    # The flake checks that the bindings compile, but only a manylinux build proves the wheel a
-#    # consumer would actually install. Nix cannot produce one: it links against nix-store glibc
-#    # with nix-store rpaths, and the result is tagged linux_x86_64, which no index accepts.
-#    #
-#    # Run on every change rather than at tag time, when a release is already half published.
-#    wheel:
-#        name: Build wheel
-#        runs-on: ubuntu-latest
-#        steps:
-#            - name: Checkout repository
-#              uses: actions/checkout@v4
+    # The flake checks that the bindings compile, but only a manylinux build proves the wheel a
+    # consumer would actually install. Nix cannot produce one: it links against nix-store glibc
+    # with nix-store rpaths, and the result is tagged linux_x86_64, which no index accepts.
+    #
+    # Run on every change rather than at tag time, when a release is already half published.
+    wheel:
+        name: Build wheel
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
 
-#            - name: Build wheel
-#              uses: PyO3/maturin-action@v1
-#              with:
-#                  args: --release --out dist
-#                  manylinux: auto
+            - name: Build wheel
+              uses: PyO3/maturin-action@v1
+              with:
+                  args: --release --out dist
+                  manylinux: auto
 
-#            # The runner's default python is older than the abi3 floor, so pip would refuse a
-#            # cp313 wheel. Both versions are installed to prove the point of abi3: one wheel
-#            # covers the floor and every interpreter after it.
-#            - name: Install the interpreters the wheel claims to support
-#              uses: actions/setup-python@v5
-#              with:
-#                  python-version: |
-#                      3.13
-#                      3.14
+            # The runner's default python is older than the abi3 floor, so pip would refuse a
+            # cp313 wheel. Both versions are installed to prove the point of abi3: one wheel
+            # covers the floor and every interpreter after it.
+            - name: Install the interpreters the wheel claims to support
+              uses: actions/setup-python@v5
+              with:
+                  python-version: |
+                      3.13
+                      3.14
 
-#            - name: Check it is tagged for redistribution
-#              run: |
-#                  ls -l dist/
-#                  # abi3 names one interpreter floor and works on every later one, so a wheel
-#                  # tagged for a single version means the abi3 feature stopped taking effect
-#                  for wheel in dist/*.whl; do
-#                    case "$wheel" in
-#                      *abi3-manylinux*) echo "ok: $wheel" ;;
-#                      *) echo "::error::$wheel will not install off this machine" && exit 1 ;;
-#                    esac
-#                  done
+            - name: Check it is tagged for redistribution
+              run: |
+                  ls -l dist/
+                  # abi3 names one interpreter floor and works on every later one, so a wheel
+                  # tagged for a single version means the abi3 feature stopped taking effect
+                  for wheel in dist/*.whl; do
+                    case "$wheel" in
+                      *abi3-manylinux*) echo "ok: $wheel" ;;
+                      *) echo "::error::$wheel will not install off this machine" && exit 1 ;;
+                    esac
+                  done
 
-#            - name: Check it installs and imports on every one of them
-#              run: |
-#                  for python in python3.13 python3.14; do
-#                    echo "--- $python"
-#                    "$python" -m pip install --upgrade pip
-#                    "$python" -m pip install dist/*.whl
-#                    "$python" - <<'PY'
-#                  import nkscan, sys
-#                  print("  running on", sys.version.split()[0])
-#                  # No scanner is attached to a runner, so this exercises enumeration finding none
-#                  assert nkscan.list_devices() == []
-#                  assert issubclass(nkscan.TransportError, nkscan.TransientError)
-#                  try:
-#                      nkscan.Session("nonsense")
-#                  except nkscan.DeviceNotFound:
-#                      pass
-#                  print("  import, enumeration and error hierarchy all fine")
-#                  PY
-#                  done
+            - name: Check it installs and imports on every one of them
+              run: |
+                  for python in python3.13 python3.14; do
+                    echo "--- $python"
+                    "$python" -m pip install --upgrade pip
+                    "$python" -m pip install dist/*.whl
+                    "$python" - <<'PY'
+                  import nkscan, sys
+                  print("  running on", sys.version.split()[0])
+                  # No scanner is attached to a runner, so this exercises enumeration finding none
+                  assert nkscan.list_devices() == []
+                  assert issubclass(nkscan.TransportError, nkscan.TransientError)
+                  try:
+                      nkscan.Session("nonsense")
+                  except nkscan.DeviceNotFound:
+                      pass
+                  print("  import, enumeration and error hierarchy all fine")
+                  PY
+                  done

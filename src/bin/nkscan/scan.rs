@@ -196,9 +196,12 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
 
         // Scan each frame
         for (n, frame) in selected_frames.into_iter().enumerate() {
-            let meter_bar = pass_bar("metering");
+            // Lazy, and at most one live at a time: metering may not run at
+            // all (a locked exposure), and indicatif has no idea what to do
+            // with two bars neither owns unless one finishes before the next starts
+            let mut meter_bar: Option<ProgressBar> = None;
+            let mut scan_bar: Option<ProgressBar> = None;
             let mut shown = 0;
-            let scan_bar = pass_bar(format!("frame {}", n + 1));
 
             let options = frame::Options {
                 exposures: locked.as_ref(),
@@ -214,26 +217,32 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
                 |phase, p| {
                     match phase {
                         Phase::Meter(pass) => {
+                            let bar = meter_bar.get_or_insert_with(|| pass_bar("metering"));
                             // Each pass starts over, so say which one it is
                             if pass != shown {
-                                meter_bar.set_message(format!("meter {pass}"));
+                                bar.set_message(format!("meter {pass}"));
                                 shown = pass;
                             }
-                            meter_bar.report(p);
+                            bar.report(p);
                         }
                         Phase::Scan => {
-                            if shown != 0 {
-                                meter_bar.finish_and_clear();
-                                shown = 0;
+                            if let Some(bar) = meter_bar.take() {
+                                bar.finish_and_clear();
                             }
-                            scan_bar.report(p);
+                            let bar = scan_bar
+                                .get_or_insert_with(|| pass_bar(format!("frame {}", n + 1)));
+                            bar.report(p);
                         }
                     }
                     ControlFlow::Continue(())
                 },
             )?;
-            meter_bar.finish_and_clear();
-            scan_bar.finish_and_clear();
+            if let Some(bar) = meter_bar {
+                bar.finish_and_clear();
+            }
+            if let Some(bar) = scan_bar {
+                bar.finish_and_clear();
+            }
 
             info!(frame = n + 1, exposures = ?scanned.exposures, "Metered");
             if lock_ae {

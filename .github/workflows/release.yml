@@ -5,8 +5,8 @@ on:
         tags:
             - "v*"
 
-# Attaching binaries to the release is all this does now that nothing is published to a
-# registry, so `contents` is the whole of it
+# The default for every job. `publish` below overrides this with its own `id-token: write`
+# for trusted publishing, since a job's `permissions:` replaces this rather than adding to it
 permissions:
     contents: write
 
@@ -112,6 +112,34 @@ jobs:
                     echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $crate"
                     exit 1
                   fi
+
+    # Gated on `build` as well as `version`: a tag that cannot build for every platform above
+    # should not reach the registry, where a publish can never be undone, only yanked
+    publish:
+        name: Publish to crates.io
+        needs: [build, version]
+        runs-on: ubuntu-latest
+        environment: crates-io
+        permissions:
+            # Trusted publishing: crates.io verifies this workflow by OIDC, so there is no
+            # long-lived token in the repository. Register the publisher once at
+            # crates.io/crates/nkscan/settings with owner, repo and this workflow's filename.
+            id-token: write
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Install the toolchain rust-toolchain.toml names
+              run: cargo --version
+
+            - name: Get a short-lived crates.io token
+              id: auth
+              uses: rust-lang/crates-io-auth-action@v1
+
+            - name: Publish
+              env:
+                  CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+              run: cargo publish
 
 #    sdist:
 #        name: Source distribution

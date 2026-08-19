@@ -14,12 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scan::clean::clean_frame`, the dust-removal glue (decimated calibration, falling back to the whole frame).
 - `Samples::to_full_scale`, stretching a pass's samples to 16 bits in place.
 - `nkscan scan` now runs on top of all four of the above rather than duplicating them.
-- `src/python.rs`, the `python` feature's pyo3 bindings: device enumeration, `Session` (open/capabilities/media_loaded/stage/eject/load/close, context manager), `Session.discover_frames`/`scan_frame` (numpy zero-copy output, GIL released for the duration of the call, a progress callback that can cancel), and a `ScannerError` exception hierarchy mapped from `error::Error`. `discover_frames` returns the thumbnail it detected against too, not just the rectangles, so a caller can show it and hand back nudged ones: `scan_frame` validates a frame against nothing, so a rectangle no discovery pass ever produced works the same as a detected one.
+- `src/python.rs`, the `python` feature's pyo3 bindings. See PYTHON.md.
 
 ### Changed
 
-- `Session::scan_pass_with`, `scan_thumbnail_with`, `autoexpose_with` and `autoexpose_frame_with` take a progress closure that returns `std::ops::ControlFlow<()>` instead of `()`.
-Returning `Break` cancels the pass with `Error::Cancelled`; the unread remainder is drained the same way a consumer that simply stopped reading already was, so nothing waits on the mechanism or sends `ABORT`.
+- `scan_pass_with`, `scan_thumbnail_with`, `autoexpose_with` and `autoexpose_frame_with`'s progress closure returns `ControlFlow<()>` now; `Break` cancels with `Error::Cancelled`, draining the rest rather than sending `ABORT`.
 - `anyhow` and `tracing-subscriber` moved behind the `cli` feature. Neither was ever used outside `src/bin/`; a library-only build no longer pulls either in.
 
 ## [0.6.0]

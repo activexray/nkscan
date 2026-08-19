@@ -1,5 +1,4 @@
 //! An implementation of IR-based dust removal following @a6o's [openICE](https://github.com/a6o/openICE)
-//! As to not break any GPL rules, we didn't look at the code at all and followed the pipeline document.
 //!
 //! Some design notes: gotta go fast at all costs.
 //! I don't care about matchin Nikon bit-for-bit. It need to look correct and not waste my time.

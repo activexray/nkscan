@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0]
+
+### Fixed
+
+- Type2 perforation framing picked each frame's perforation triple by matching a re-derived address against the table's nearest entry instead of just using the perforation record itself, which has an entry for every thumbnail column.
+
+### Changed
+
+- `FramePosition::new` takes the already-detected top and one `PerforationInformation` record directly, and no longer returns `Option`. `PerfInformation::nearest` is gone; look the record up with the new `PerfInformation::at` instead.
+- Per-chunk image READ logging dropped from `debug` to `trace`, and `nusb`'s own per-USB-transfer logging now defaults to `warn`, so `--log debug` isn't drowned out by either.
+- Crate-level usage docs added, and broken intra-doc links across the public API fixed, ahead of the crates.io release.
+
 ## [0.5.1]
 
 ### Fixed

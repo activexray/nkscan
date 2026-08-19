@@ -199,7 +199,9 @@ pub fn discover(
 
 /// The same as [`discover`], letting `on` cancel a thumbnail pass by returning `Break`
 ///
-/// `format` is only needed by [`Framing::Thumbnail`] and [`Framing::Perforation`]; `samples` is scratch, left holding the thumbnail where [`Discovery::thumbnail`] is `Some`
+/// `format` is only needed by [`Framing::Thumbnail`] and [`Framing::Perforation`], and even
+/// there only where [`FilmFormat::resolve`] cannot work it out from the loaded holder.
+/// `samples` is scratch, left holding the thumbnail where [`Discovery::thumbnail`] is `Some`
 pub fn discover_with(
     session: &mut Session,
     format: Option<FilmFormat>,
@@ -208,12 +210,7 @@ pub fn discover_with(
     on: impl FnMut(Progress) -> ControlFlow<()>,
 ) -> Result<Discovery, Error> {
     // Only the two mechanisms below need it, but both need it before they move
-    let need_format = || {
-        format.ok_or_else(|| Error::Unsupported {
-            op: "frame discovery",
-            reason: "this mechanism needs a film format, and none was given".into(),
-        })
-    };
+    let need_format = |session: &Session| FilmFormat::resolve(format, session.capabilities());
 
     let mechanism = Framing::choose(session.capabilities());
     debug!(?mechanism, "frame discovery");
@@ -230,7 +227,7 @@ pub fn discover_with(
             })
         }
         Framing::Thumbnail => {
-            let format = need_format()?;
+            let format = need_format(session)?;
             let pass = session.scan_thumbnail_with(samples, on)?;
             debug!(
                 rows = pass.rows,
@@ -263,7 +260,7 @@ pub fn discover_with(
             })
         }
         Framing::Perforation => {
-            let format = need_format()?;
+            let format = need_format(session)?;
             // Discard whatever a previous strip left behind
             let _ = session.read_perforations()?;
             let _ = session.read_boundaries_type2();

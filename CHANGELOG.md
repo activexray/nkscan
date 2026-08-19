@@ -15,11 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Samples::to_full_scale`, stretching a pass's samples to 16 bits in place.
 - `nkscan scan` now runs on top of all four of the above rather than duplicating them.
 - `src/python.rs`, the `python` feature's pyo3 bindings. See PYTHON.md.
+- `FilmFormat` implements `FromStr`/`Display`, and `FilmFormat::resolve` picks a format from an explicit one or the loaded holder/adapter, replacing the CLI's own copy of that logic.
 
 ### Changed
 
 - `scan_pass_with`, `scan_thumbnail_with`, `autoexpose_with` and `autoexpose_frame_with`'s progress closure returns `ControlFlow<()>` now; `Break` cancels with `Error::Cancelled`, draining the rest rather than sending `ABORT`.
 - `anyhow` and `tracing-subscriber` moved behind the `cli` feature. Neither was ever used outside `src/bin/`; a library-only build no longer pulls either in.
+- `framing::discover_with` resolves a missing `--format` itself now instead of requiring the caller to.
 
 ## [0.6.0]
 

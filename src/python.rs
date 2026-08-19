@@ -294,25 +294,29 @@ impl PySession {
 
     /// Find every frame on whatever is loaded
     ///
-    /// `format_mm` is the frame's length along the feed; only asked for by
-    /// the two of four discovery mechanisms that need a thumbnail pass to
-    /// find frames, so it may be left `None` on a masked or address-framed
-    /// adapter. `positive` is which way the loaded film reads.
+    /// `format` is one of "135", "half", "IX240", "16", "645", "66", "67",
+    /// "68", "69", or a custom frame length in mm as a string (e.g. "56").
+    /// Only asked for by the two of four discovery mechanisms that need a
+    /// thumbnail pass to find frames, and even there only where the loaded
+    /// holder does not fix or narrow it by itself, so it can usually be left
+    /// `None`. `positive` is which way the loaded film reads.
     /// `Discovery.thumbnail`, where the mechanism took one, is what a caller
     /// wanting to nudge `Discovery.frames` by hand shows the operator: a
     /// rectangle handed to `scan_frame` needs no match in it, so a nudged one
     /// works the same as a detected one, just slower if the stage has to home
     /// first to reach it
-    #[pyo3(signature = (format_mm=None, positive=false, progress=None))]
+    #[pyo3(signature = (format=None, positive=false, progress=None))]
     fn discover_frames(
         &self,
         py: Python<'_>,
-        format_mm: Option<f64>,
+        format: Option<&str>,
         positive: bool,
         progress: Option<Py<PyAny>>,
     ) -> PyResult<PyDiscovery> {
-        let format =
-            format_mm.map(|mm| crate::protocol::caps::film::FilmFormat::Custom(mm.round() as u32));
+        let format = format
+            .map(str::parse)
+            .transpose()
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
         let polarity = if positive {
             Polarity::Positive
         } else {

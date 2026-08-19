@@ -171,14 +171,16 @@ class Session:
         r"""
         Take in whatever the adapter has waiting, answering whether anything came
         """
-    def discover_frames(self, format_mm: typing.Optional[builtins.float] = None, positive: builtins.bool = False, progress: typing.Optional[typing.Any] = None) -> Discovery:
+    def discover_frames(self, format: typing.Optional[builtins.str] = None, positive: builtins.bool = False, progress: typing.Optional[typing.Any] = None) -> Discovery:
         r"""
         Find every frame on whatever is loaded
         
-        `format_mm` is the frame's length along the feed; only asked for by
-        the two of four discovery mechanisms that need a thumbnail pass to
-        find frames, so it may be left `None` on a masked or address-framed
-        adapter. `positive` is which way the loaded film reads.
+        `format` is one of "135", "half", "IX240", "16", "645", "66", "67",
+        "68", "69", or a custom frame length in mm as a string (e.g. "56").
+        Only asked for by the two of four discovery mechanisms that need a
+        thumbnail pass to find frames, and even there only where the loaded
+        holder does not fix or narrow it by itself, so it can usually be left
+        `None`. `positive` is which way the loaded film reads.
         `Discovery.thumbnail`, where the mechanism took one, is what a caller
         wanting to nudge `Discovery.frames` by hand shows the operator: a
         rectangle handed to `scan_frame` needs no match in it, so a nudged one

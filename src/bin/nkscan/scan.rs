@@ -11,7 +11,7 @@ use nkscan::{
     device,
     error::Error,
     protocol::{
-        caps::{film::FilmFormat, other::HostCooperation, set_window::ColorInterleaving},
+        caps::{other::HostCooperation, set_window::ColorInterleaving},
         decode::Samples,
     },
     scan::{
@@ -136,25 +136,11 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
     // A strip at a time until the operator stops feeding them
     loop {
         // Only to warn early if --thumbnail would save nothing; discover_with
-        // makes this same choice itself
+        // resolves --format itself, against whichever mechanism this picks
         let framing = Framing::choose(session.capabilities());
         if save_thumbnail && !matches!(framing, Framing::Thumbnail | Framing::Perforation) {
             warn!("this unit frames without a thumbnail pass, so --thumbnail saves nothing");
         }
-
-        // Resolve the film format up front where it will be needed, so a
-        // missing --format fails before the thumbnail pass
-        let film_format = match framing {
-            Framing::Thumbnail | Framing::Perforation => Some(resolve_format(
-                format,
-                if !uses_adapter {
-                    session.capabilities().address.holder_id
-                } else {
-                    session.capabilities().address.connected_adapter
-                },
-            )?),
-            _ => None,
-        };
 
         // Where this strip starts writing, so a second strip through the same
         // basename carries on rather than overwriting the first. Taken before
@@ -163,7 +149,7 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
 
         let bar = pass_bar("thumbnail");
         let discovery =
-            framing::discover_with(&mut session, film_format, film.into(), &mut samples, |p| {
+            framing::discover_with(&mut session, format, film.into(), &mut samples, |p| {
                 bar.report(p);
                 ControlFlow::Continue(())
             })?;
@@ -417,34 +403,4 @@ impl Report for ProgressBar {
         self.set_length(progress.total);
         self.set_position(progress.bytes);
     }
-}
-
-/// The film format to measure frames against, from the flag or the holder
-///
-/// A holder that takes one format fixes it. One that takes several cannot, and
-/// the frame length is not measurable from a thumbnail, so the caller has to say
-fn resolve_format(flag: Option<FilmFormat>, holder_id: Option<u8>) -> anyhow::Result<FilmFormat> {
-    if let Some(format) = flag {
-        return Ok(format);
-    }
-
-    let id = holder_id.ok_or_else(|| anyhow!("No holder loaded; supply --format"))?;
-
-    FilmFormat::from_holder(id)
-        .or_else(|| FilmFormat::from_adapter(id))
-        .ok_or_else(|| {
-            let choices = FilmFormat::choices_for_holder(id)
-                .map(|c| {
-                    format!(
-                        " (try: {})",
-                        c.iter()
-                            .map(cli::format_name)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                })
-                .unwrap_or_default();
-
-            anyhow!("This holder does not fix the film format; supply --format{choices}")
-        })
 }

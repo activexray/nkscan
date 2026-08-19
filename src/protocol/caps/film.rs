@@ -8,6 +8,9 @@
 //! The holder ID does fix it for the FH-869GR, which has a mask that selects
 //! the format physically. For everything else the operator supplies it.
 
+use crate::error::Error;
+use std::{fmt, str::FromStr};
+
 /// A film format, keyed by its frame height in millimeters
 ///
 /// The names are nominal and the gates are not: 6×4.5 exposes 41.5 mm of film
@@ -107,6 +110,90 @@ impl FilmFormat {
             0x35 => Some(Self::IX240), // IA-20
             0x32 => Some(Self::F135),  // SF-210
             _ => None,
+        }
+    }
+
+    /// The format for whatever is loaded: `explicit` wins, and otherwise the
+    /// holder or adapter ID fixes or narrows it
+    ///
+    /// `caps.identity.is_mf_scanner()` is what picks holder ID over adapter ID
+    pub fn resolve(explicit: Option<Self>, caps: &super::Capabilities) -> Result<Self, Error> {
+        if let Some(format) = explicit {
+            return Ok(format);
+        }
+
+        let uses_adapter =
+            !caps.identity.is_mf_scanner() && caps.address.adapter_id.is_some_and(|id| id > 0);
+        let id = if uses_adapter {
+            caps.address.connected_adapter
+        } else {
+            caps.address.holder_id
+        }
+        .ok_or_else(|| Error::Unsupported {
+            op: "film format",
+            reason: "no holder loaded; supply a format".into(),
+        })?;
+
+        Self::from_holder(id)
+            .or_else(|| Self::from_adapter(id))
+            .ok_or_else(|| {
+                let choices = Self::choices_for_holder(id)
+                    .map(|c| {
+                        format!(
+                            " (try: {})",
+                            c.iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })
+                    .unwrap_or_default();
+                Error::Unsupported {
+                    op: "film format",
+                    reason: format!("this holder does not fix it{choices}"),
+                }
+            })
+    }
+}
+
+impl FromStr for FilmFormat {
+    type Err = String;
+
+    /// The named ones are what the holders take; anything else is a height,
+    /// which is what a format nobody named still needs
+    fn from_str(s: &str) -> Result<Self, String> {
+        Ok(match s {
+            "IX240" | "aps" | "APS" => Self::IX240,
+            "135" => Self::F135,
+            "half" | "135half" => Self::F135Half,
+            "16" => Self::F16,
+            "645" => Self::F645,
+            "66" => Self::F66,
+            "67" => Self::F67,
+            "68" => Self::F68,
+            "69" => Self::F69,
+            mm => Self::Custom(
+                mm.parse()
+                    .map_err(|_| format!("'{mm}' is neither a film format nor a height in mm"))?,
+            ),
+        })
+    }
+}
+
+/// What [`FromStr`] would take back for this format, for saying what is on offer
+impl fmt::Display for FilmFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::IX240 => write!(f, "IX240"),
+            Self::F135 => write!(f, "135"),
+            Self::F135Half => write!(f, "half"),
+            Self::F16 => write!(f, "16"),
+            Self::F645 => write!(f, "645"),
+            Self::F66 => write!(f, "66"),
+            Self::F67 => write!(f, "67"),
+            Self::F68 => write!(f, "68"),
+            Self::F69 => write!(f, "69"),
+            Self::Custom(mm) => write!(f, "{mm}"),
         }
     }
 }

@@ -53,6 +53,33 @@ impl Samples {
             }
         }
     }
+
+    /// Stretch every plane from `bits` deep to fill 16, in place
+    ///
+    /// `dust::clean`'s thresholds assume a 65535 ceiling; left alone, a 14-bit frame reads as one enormous defect
+    pub fn to_full_scale(&mut self, bits: u8) {
+        let Some(table) = full_scale_table(bits) else {
+            return;
+        };
+        for plane in self.colors.iter_mut().chain(self.ir.as_mut()) {
+            for v in plane {
+                *v = table[usize::from(*v)];
+            }
+        }
+    }
+}
+
+/// A table stretching `bits`-deep samples to fill 16, or `None` where they already do
+fn full_scale_table(bits: u8) -> Option<Vec<u16>> {
+    if bits == 0 || bits >= 16 {
+        return None;
+    }
+    let top = u32::from(u16::MAX >> (16 - bits));
+    Some(
+        (0..=u32::from(u16::MAX))
+            .map(|v| ((v.min(top) * 65535 + top / 2) / top) as u16)
+            .collect(),
+    )
 }
 
 /// A view of an unscrambled pass

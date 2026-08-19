@@ -39,11 +39,8 @@ impl Session {
         })
     }
 
-    /// The same, telling `on` how far along each metering pass is and letting
-    /// it cancel by returning `Break`
-    ///
-    /// The first argument is which pass it is, counting from one, since metering
-    /// takes as many as it needs to settle and each one starts over
+    /// The same as [`Self::autoexpose_frame`], with `on` given which metering pass is running
+    /// (counting from one) and letting it cancel by returning `Break`
     pub fn autoexpose_frame_with(
         &mut self,
         frame: Rect,
@@ -70,11 +67,10 @@ impl Session {
         self.autoexpose_with(windows, lock_white_balance, |_, _| ControlFlow::Continue(()))
     }
 
-    /// The same, telling `on` how far along each metering pass is and letting
-    /// it cancel by returning `Break`
+    /// The same as [`Self::autoexpose`], letting `on` cancel by returning `Break`
     ///
-    /// A unit that meters for itself takes a pass we never read, so nothing is
-    /// reported for that mechanism, and it cannot be cancelled through `on`
+    /// A unit that meters for itself takes a pass we never read, so `on` never
+    /// runs and cannot cancel that mechanism
     pub fn autoexpose_with(
         &mut self,
         windows: &[Window],

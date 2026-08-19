@@ -7,9 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.7.0]
 
+### Added
+
+- `scan::framing::discover`/`discover_with`, moving the CLI's frame-discovery dispatch into the library
+- `scan::frame::scan_frame`/`scan_frame_with`, the same for one frame's focus/meter/scan/clean sequence.
+- `scan::clean::clean_frame`, the dust-removal glue (decimated calibration, falling back to the whole frame).
+- `Samples::to_full_scale`, stretching a pass's samples to 16 bits in place.
+- `nkscan scan` now runs on top of all four of the above rather than duplicating them.
+
 ### Changed
 
-- `Session::scan_pass_with`, `scan_thumbnail_with`, `autoexpose_with` and `autoexpose_frame_with` take a progress closure that returns `std::ops::ControlFlow<()>` instead of `()`. Returning `Break` cancels the pass with `Error::Cancelled`; the unread remainder is drained the same way a consumer that simply stopped reading already was, so nothing waits on the mechanism or sends `ABORT`. `scan_pass`, `scan_thumbnail`, `autoexpose` and `autoexpose_frame` are unaffected.
+- `Session::scan_pass_with`, `scan_thumbnail_with`, `autoexpose_with` and `autoexpose_frame_with` take a progress closure that returns `std::ops::ControlFlow<()>` instead of `()`.
+Returning `Break` cancels the pass with `Error::Cancelled`; the unread remainder is drained the same way a consumer that simply stopped reading already was, so nothing waits on the mechanism or sends `ABORT`.
+- `anyhow` and `tracing-subscriber` moved behind the `cli` feature. Neither was ever used outside `src/bin/`; a library-only build no longer pulls either in.
 
 ## [0.6.0]
 

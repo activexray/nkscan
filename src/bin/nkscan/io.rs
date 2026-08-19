@@ -176,7 +176,7 @@ pub fn write_thumbnail(
     let color = color_planes(pass);
 
     let mut samples = samples.clone();
-    to_full_scale(&mut samples, pass.layout.bits_per_sample);
+    samples.to_full_scale(pass.layout.bits_per_sample);
     let planes: Vec<&[u16]> = samples.colors.iter().map(Vec::as_slice).collect();
 
     let path = thumbnail_path(basename, n);
@@ -186,32 +186,6 @@ pub fn write_thumbnail(
         n => bail!("{n} color planes is not a thumbnail this writes"),
     }
     Ok(path)
-}
-
-/// Stretch a pass's samples to fill 16 bits, in place
-pub fn to_full_scale(samples: &mut Samples, bits: u8) {
-    let Some(table) = full_scale(bits) else {
-        return;
-    };
-    debug!(bits, "stretching samples to full scale");
-    for plane in samples.colors.iter_mut().chain(samples.ir.as_mut()) {
-        for v in plane {
-            *v = table[usize::from(*v)];
-        }
-    }
-}
-
-/// A table stretching `bits`-deep samples to fill 16, or `None` where they already do
-fn full_scale(bits: u8) -> Option<Vec<u16>> {
-    if bits == 0 || bits >= 16 {
-        return None;
-    }
-    let top = u32::from(u16::MAX >> (16 - bits));
-    Some(
-        (0..=u32::from(u16::MAX))
-            .map(|v| ((v.min(top) * 65535 + top / 2) / top) as u16)
-            .collect(),
-    )
 }
 
 /// Where a file's samples come from

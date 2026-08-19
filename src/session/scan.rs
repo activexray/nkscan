@@ -249,8 +249,7 @@ impl Session {
         self.scan_thumbnail_with(samples, |_| ControlFlow::Continue(()))
     }
 
-    /// The same, telling `on` how far along the pass is after every chunk and
-    /// letting it cancel the pass by returning `Break`
+    /// The same as [`Self::scan_thumbnail`], letting `on` cancel by returning `Break`
     pub fn scan_thumbnail_with(
         &mut self,
         samples: &mut Samples,

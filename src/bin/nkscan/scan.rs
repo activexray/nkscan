@@ -8,35 +8,24 @@ use crate::{cli, io};
 use anyhow::{anyhow, bail};
 use indicatif::{ProgressBar, ProgressStyle};
 use nkscan::{
-    device, dust,
+    device,
     error::Error,
     protocol::{
         caps::{film::FilmFormat, other::HostCooperation, set_window::ColorInterleaving},
-        data::FrameTable,
         decode::Samples,
-        model::Model,
-        window::Channel,
     },
     scan::{
         autoexpose::Exposures,
-        focus::Focus,
+        frame::{self, Phase},
         framing::{self, Framing},
-        meter::Metering,
-        pass::{Pass, Progress},
-        profile, thumbnail,
+        pass::Progress,
+        profile,
         window::Recipe,
     },
     session::Session,
 };
-use std::{
-    borrow::Cow,
-    ops::ControlFlow,
-    time::{Duration, Instant},
-};
+use std::{borrow::Cow, ops::ControlFlow, time::Duration};
 use tracing::*;
-
-/// Long enough for a full resolution pass over the largest frame
-pub const SCAN_TIMEOUT: Duration = Duration::from_secs(1800);
 
 /// How often to ask whether a holder has gone in
 const HOLDER_POLL: Duration = Duration::from_millis(500);
@@ -146,11 +135,9 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
 
     // A strip at a time until the operator stops feeding them
     loop {
-        // Decide how the frames are found from what this unit and adapter
-        // advertise. This picks one of four mechanisms; we only thumbnail
-        // where the adapter offers it and the unit publishes no lengths.
+        // Only to warn early if --thumbnail would save nothing; discover_with
+        // makes this same choice itself
         let framing = Framing::choose(session.capabilities());
-        debug!(?framing, "Frame discovery mechanism");
         if save_thumbnail && !matches!(framing, Framing::Thumbnail | Framing::Perforation) {
             warn!("this unit frames without a thumbnail pass, so --thumbnail saves nothing");
         }
@@ -171,129 +158,40 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
 
         // Where this strip starts writing, so a second strip through the same
         // basename carries on rather than overwriting the first. Taken before
-        // framing because the thumbnail is numbered with it
+        // discovery because the thumbnail is numbered with it
         let first = io::next_free(&basename);
 
-        let (_table, scan_frames) = match framing {
-            Framing::Published => {
-                let table = framing::table(session.capabilities())?;
-                let frames = table.frames.clone();
+        let bar = pass_bar("thumbnail");
+        let discovery = framing::discover_with(
+            &mut session,
+            film_format,
+            film.into(),
+            &mut samples,
+            |p| {
+                bar.report(p);
+                ControlFlow::Continue(())
+            },
+        )?;
+        bar.finish_and_clear();
 
-                (FrameTable::Boundary(table), frames)
-            }
-            Framing::Thumbnail => {
-                let bar = pass_bar("thumbnail");
-                let pass = session.scan_thumbnail_with(&mut samples, |p| {
-                    bar.report(p);
-                    ControlFlow::Continue(())
-                })?;
-                bar.finish_and_clear();
-                debug!(
-                    "thumbnail {} x {} in {} channels, complete={}",
-                    pass.cols,
-                    pass.rows,
-                    pass.layout.channels.len(),
-                    pass.complete
-                );
-
-                let film_format = film_format.expect("resolved before the pass");
-                let optical_dpi = session.capabilities().address.y_axis.optical_dpi;
-                let length = film_format.height_dots(optical_dpi);
-                info!(?film_format, length, "frame length");
-
-                if save_thumbnail {
-                    let path = io::write_thumbnail(&basename, first, &samples, &pass)?;
-                    info!("wrote {}", path.display());
-                }
-
-                // Write the detected frames to the scanner's boundary table
-                let measured = thumbnail::frames(
-                    session.capabilities(),
-                    &pass,
-                    &samples,
-                    length,
-                    film.into(),
-                )?;
-                session.set_boundaries(&measured)?;
-
-                let frames = measured.frames.clone();
-
-                info!(frames = measured.frames.len(), "detected frames");
-                (FrameTable::Boundary(measured), frames)
-            }
-            Framing::Address => {
-                let table = framing::frames(session.capabilities())?;
-                let frames = table.frames.clone();
-                info!(frames = frames.len(), "framed from the address page");
-                (FrameTable::Boundary(table), frames)
-            }
-            Framing::Perforation => {
-                // discard old data
-                let _ = session.read_perforations()?;
-                let _ = session.read_boundaries_type2();
-                let bar = pass_bar("thumbnail");
-
-                let pass = session.scan_thumbnail_with(&mut samples, |p| {
-                    bar.report(p);
-                    ControlFlow::Continue(())
-                })?;
-                bar.finish_and_clear();
-                debug!(
-                    "thumbnail {} x {} in {} channels, complete={}",
-                    pass.cols,
-                    pass.rows,
-                    pass.layout.channels.len(),
-                    pass.complete
-                );
-
-                let film_format = film_format.expect("resolved before the pass");
-                let optical_dpi = session.capabilities().address.y_axis.optical_dpi;
-                let length = film_format.height_dots(optical_dpi);
-                info!(?film_format, length, "frame length");
-
-                if save_thumbnail {
-                    let path = io::write_thumbnail(&basename, first, &samples, &pass)?;
-                    info!("wrote {}", path.display());
-                }
-
-                // Read perf data and use it to generate Boundary Type2 data for telling the scanner
-                // where the frames reside
-                let perfs = session.read_perforations()?;
-                let measured = thumbnail::frames_type2(
-                    session.capabilities(),
-                    &pass,
-                    &samples,
-                    &perfs,
-                    length,
-                    film.into(),
-                )?;
-
-                session.set_boundaries_type2(&measured)?;
-
-                let x_start = session.capabilities().address.x_axis.address_range.start;
-                let x_boundary = session.capabilities().address.x_axis.boundary;
-
-                let frames = measured
-                    .frames
-                    .iter()
-                    .map(|f| f.rect(x_start, x_boundary, length))
-                    .collect();
-                info!(frames = measured.frames.len(), "detected frames");
-                (FrameTable::BoundaryType2(measured), frames)
-            }
-        };
+        if save_thumbnail
+            && let Some(pass) = &discovery.thumbnail
+        {
+            let path = io::write_thumbnail(&basename, first, &samples, pass)?;
+            info!("wrote {}", path.display());
+        }
 
         // Select all or the requested subset of the frames to scan
         let selected_frames = if frames.is_empty() {
-            scan_frames
+            discovery.frames
         } else {
             frames
                 .iter()
                 .map(|&idx| {
-                    scan_frames.get(idx - 1).cloned().ok_or(anyhow!(
+                    discovery.frames.get(idx - 1).cloned().ok_or(anyhow!(
                         "Requested frame {} not available. Frames detected: {}",
                         idx,
-                        scan_frames.len()
+                        discovery.frames.len()
                     ))
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?
@@ -305,69 +203,59 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
 
         // Scan each frame
         for (n, frame) in selected_frames.into_iter().enumerate() {
-            // Build the scan windows (one for each color, shared resolution, size, etc) from the frame (just position/size in the scanner)
-            let mut windows = recipe.windows(session.capabilities(), frame)?;
+            let meter_bar = pass_bar("metering");
+            let mut shown = 0;
+            let scan_bar = pass_bar(format!("frame {}", n + 1));
 
-            // Autofocus at the center of this frame
-            let focused = session.focus_frame(frame, Focus::default())?;
-            info!(frame = n + 1, ?focused, "Focused");
-
-            // Autoexpose with reused exposure gains if locked
-            let exposures = match &locked {
-                Some(held) => held.clone(),
-                None => {
-                    let bar = pass_bar("metering");
-                    let mut shown = 0;
-                    let measured =
-                        session.autoexpose_frame_with(frame, &recipe, !unlock_wb, |pass, p| {
+            let options = frame::Options {
+                exposures: locked.as_ref(),
+                lock_white_balance: !unlock_wb,
+                clean,
+            };
+            let scanned = frame::scan_frame_with(
+                &mut session,
+                &recipe,
+                frame,
+                options,
+                &mut samples,
+                |phase, p| {
+                    match phase {
+                        Phase::Meter(pass) => {
                             // Each pass starts over, so say which one it is
                             if pass != shown {
-                                bar.set_message(format!("meter {pass}"));
+                                meter_bar.set_message(format!("meter {pass}"));
                                 shown = pass;
                             }
-                            bar.report(p);
-                            ControlFlow::Continue(())
-                        })?;
-                    bar.finish_and_clear();
-                    // If this was the first frame, save its exposure
-                    if lock_ae {
-                        locked = Some(measured.clone());
+                            meter_bar.report(p);
+                        }
+                        Phase::Scan => {
+                            if shown != 0 {
+                                meter_bar.finish_and_clear();
+                                shown = 0;
+                            }
+                            scan_bar.report(p);
+                        }
                     }
-                    measured
-                }
-            };
-            info!(frame = n + 1, ?exposures, "Metered");
-
-            // Apply the exposures to the windows
-            exposures.apply(&mut windows);
-
-            // Perform the scan pass
-            let bar = pass_bar(format!("frame {}", n + 1));
-            let pass =
-                session.scan_pass_with(&windows, SCAN_TIMEOUT, &mut samples, |p| {
-                    bar.report(p);
                     ControlFlow::Continue(())
-                })?;
-            bar.finish_and_clear();
+                },
+            )?;
+            meter_bar.finish_and_clear();
+            scan_bar.finish_and_clear();
+
+            info!(frame = n + 1, exposures = ?scanned.exposures, "Metered");
+            if lock_ae {
+                locked.get_or_insert_with(|| scanned.exposures.clone());
+            }
+
+            let pass = scanned.pass;
             if !pass.complete {
                 warn!(
                     frame = n + 1,
                     "The unit gave less than the pass promised, writing what arrived"
                 );
             }
-
-            // Everything after the pass assumes full-scale 16-bit samples
-            io::to_full_scale(&mut samples, pass.layout.bits_per_sample);
-
-            if clean {
-                let model = session.capabilities().identity.model();
-                let started = Instant::now();
-                let removed = clean_frame(&mut samples, &pass, model)?;
-                info!(
-                    frame = n + 1,
-                    "cleaned {removed} pixels in {} ms",
-                    started.elapsed().as_millis()
-                );
+            if let Some(removed) = scanned.cleaned {
+                info!(frame = n + 1, "cleaned {removed} pixels");
             }
 
             let written = io::write_frame(
@@ -429,78 +317,6 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
         wait_for_film(&mut session, "Load the next strip", false)?;
     }
     Ok(())
-}
-
-/// About how many pixels calibration wants to measure over
-const PRESCAN_PIXELS: usize = 2_500_000;
-
-/// Every `step`th pixel of a plane, which is all calibration needs
-fn decimate(plane: &[u16], cols: usize, step: usize) -> Vec<u16> {
-    let rows = plane.len() / cols;
-    let mut out = Vec::with_capacity((rows / step) * (cols / step));
-    for y in (0..rows - rows % step).step_by(step) {
-        for x in (0..cols - cols % step).step_by(step) {
-            out.push(plane[y * cols + x]);
-        }
-    }
-    out
-}
-
-/// Run dust removal over a finished pass, in place, returning how many pixels it rebuilt
-fn clean_frame(samples: &mut Samples, pass: &Pass, model: Option<Model>) -> anyhow::Result<usize> {
-    // The buffer holds the pass's color channels in the stream's own order
-    let ids: Vec<u8> = pass.layout.colors().collect();
-    let at = |want: Channel| ids.iter().position(|&id| Channel::from(id) == want);
-    let (Some(r), Some(g), Some(b)) = (at(Channel::Red), at(Channel::Green), at(Channel::Blue))
-    else {
-        bail!("--clean needs a red, green and blue plane, this pass has {ids:?}");
-    };
-
-    let model = model.map(dust::Model::from).unwrap_or_else(|| {
-        warn!("unrecognized scanner, cleaning with a default profile");
-        dust::Model::Ls9000
-    });
-    let opts = dust::Options {
-        model,
-        quality: dust::Quality::Normal,
-        dpi: pass.layout.dpi,
-        // What autoexpose::Plan hands the host meter
-        metering_target: Metering::default().target,
-    };
-
-    let Some(ir) = samples.ir.as_deref() else {
-        bail!("--clean needs the infrared pass");
-    };
-
-    // Red and infrared only: that is all calibration reads
-    let step = ((pass.rows * pass.cols) / PRESCAN_PIXELS).isqrt().max(1);
-    let small_red = decimate(&samples.colors[r], pass.cols, step);
-    let small_ir = decimate(ir, pass.cols, step);
-    let cal = dust::calibrate(&dust::Prescan {
-        red: &small_red,
-        ir: &small_ir,
-        rows: pass.rows / step,
-        cols: pass.cols / step,
-    })
-    .or_else(|| {
-        // A frame with little clear film can have none left after decimation while the full pass still has plenty
-        warn!("no clear film in the decimated prescan, calibrating off the whole frame");
-        dust::calibrate(&dust::Prescan {
-            red: &samples.colors[r],
-            ir,
-            rows: pass.rows,
-            cols: pass.cols,
-        })
-    })
-    .ok_or_else(|| anyhow!("no clear film in this frame to calibrate --clean against"))?;
-    debug!(?cal, step, "ICE calibration");
-
-    let [pr, pg, pb] = samples
-        .colors
-        .get_disjoint_mut([r, g, b])
-        .expect("three distinct color planes");
-    let count = dust::clean([pr, pg, pb], ir, &cal, pass.rows, pass.cols, &opts);
-    Ok(count)
 }
 
 /// Whether there is film to scan

@@ -2,14 +2,21 @@
 //!
 //! Four mechanisms, picked from what the unit and the loaded adapter advertise.
 
-use super::thumbnail;
+use super::{
+    boundaries::Polarity,
+    pass::{Pass, Progress},
+    thumbnail,
+};
 use crate::{
     error::Error,
     protocol::{
-        caps::{Capabilities, address::CoordinateBase, other::DataTypes},
-        data::{Boundary, Op, Rect},
+        caps::{Capabilities, address::CoordinateBase, film::FilmFormat, other::DataTypes},
+        data::{Boundary, FrameTable, Op, Rect},
+        decode::Samples,
     },
+    session::Session,
 };
+use std::ops::ControlFlow;
 use tracing::*;
 
 /// How a scan comes to know where each frame sits
@@ -168,6 +175,136 @@ pub fn frames(caps: &Capabilities) -> Result<Boundary, Error> {
         })
         .collect();
     Ok(Boundary { frames })
+}
+
+/// The discovered frame table, however that happened.
+/// If this required a thumbnail pass, this holds that thumbnail.
+pub struct Discovery {
+    pub table: FrameTable,
+    pub frames: Vec<Rect>,
+    pub thumbnail: Option<Pass>,
+}
+
+/// Find every frame on whatever is loaded, driving whatever pass the chosen mechanism needs
+pub fn discover(
+    session: &mut Session,
+    format: Option<FilmFormat>,
+    polarity: Polarity,
+    samples: &mut Samples,
+) -> Result<Discovery, Error> {
+    discover_with(session, format, polarity, samples, |_| {
+        ControlFlow::Continue(())
+    })
+}
+
+/// The same as [`discover`], letting `on` cancel a thumbnail pass by returning `Break`
+///
+/// `format` is only needed by [`Framing::Thumbnail`] and [`Framing::Perforation`]; `samples` is scratch, left holding the thumbnail where [`Discovery::thumbnail`] is `Some`
+pub fn discover_with(
+    session: &mut Session,
+    format: Option<FilmFormat>,
+    polarity: Polarity,
+    samples: &mut Samples,
+    on: impl FnMut(Progress) -> ControlFlow<()>,
+) -> Result<Discovery, Error> {
+    // Only the two mechanisms below need it, but both need it before they move
+    let need_format = || {
+        format.ok_or_else(|| Error::Unsupported {
+            op: "frame discovery",
+            reason: "this mechanism needs a film format, and none was given".into(),
+        })
+    };
+
+    let mechanism = Framing::choose(session.capabilities());
+    debug!(?mechanism, "frame discovery");
+
+    match mechanism {
+        Framing::Published => {
+            let boundary = table(session.capabilities())?;
+            let found = boundary.frames.clone();
+            info!(frames = found.len(), "published frames");
+            Ok(Discovery {
+                table: FrameTable::Boundary(boundary),
+                frames: found,
+                thumbnail: None,
+            })
+        }
+        Framing::Thumbnail => {
+            let format = need_format()?;
+            let pass = session.scan_thumbnail_with(samples, on)?;
+            debug!(
+                rows = pass.rows,
+                cols = pass.cols,
+                complete = pass.complete,
+                "thumbnail"
+            );
+            let optical_dpi = session.capabilities().address.y_axis.optical_dpi;
+            let length = format.height_dots(optical_dpi);
+            info!(?format, length, "frame length");
+
+            let measured =
+                thumbnail::frames(session.capabilities(), &pass, samples, length, polarity)?;
+            session.set_boundaries(&measured)?;
+            let found = measured.frames.clone();
+            info!(frames = found.len(), "detected frames");
+            Ok(Discovery {
+                table: FrameTable::Boundary(measured),
+                frames: found,
+                thumbnail: Some(pass),
+            })
+        }
+        Framing::Address => {
+            let boundary = frames(session.capabilities())?;
+            let found = boundary.frames.clone();
+            Ok(Discovery {
+                table: FrameTable::Boundary(boundary),
+                frames: found,
+                thumbnail: None,
+            })
+        }
+        Framing::Perforation => {
+            let format = need_format()?;
+            // Discard whatever a previous strip left behind
+            let _ = session.read_perforations()?;
+            let _ = session.read_boundaries_type2();
+
+            let pass = session.scan_thumbnail_with(samples, on)?;
+            debug!(
+                rows = pass.rows,
+                cols = pass.cols,
+                complete = pass.complete,
+                "thumbnail"
+            );
+            let optical_dpi = session.capabilities().address.y_axis.optical_dpi;
+            let length = format.height_dots(optical_dpi);
+            info!(?format, length, "frame length");
+
+            let perfs = session.read_perforations()?;
+            let measured = thumbnail::frames_type2(
+                session.capabilities(),
+                &pass,
+                samples,
+                &perfs,
+                length,
+                polarity,
+            )?;
+            session.set_boundaries_type2(&measured)?;
+
+            let x_start = session.capabilities().address.x_axis.address_range.start;
+            let x_boundary = session.capabilities().address.x_axis.boundary;
+            let found = measured
+                .frames
+                .iter()
+                .map(|f| f.rect(x_start, x_boundary, length))
+                .collect::<Vec<_>>();
+            info!(frames = found.len(), "detected frames");
+            Ok(Discovery {
+                table: FrameTable::BoundaryType2(measured),
+                frames: found,
+                thumbnail: Some(pass),
+            })
+        }
+    }
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scan::clean::clean_frame`, the dust-removal glue (decimated calibration, falling back to the whole frame).
 - `Samples::to_full_scale`, stretching a pass's samples to 16 bits in place.
 - `nkscan scan` now runs on top of all four of the above rather than duplicating them.
+- `src/python.rs`, the `python` feature's pyo3 bindings: device enumeration, `Session` (open/capabilities/media_loaded/stage/eject/load/close, context manager), `Session.discover_frames`/`scan_frame` (numpy zero-copy output, GIL released for the duration of the call, a progress callback that can cancel), and a `ScannerError` exception hierarchy mapped from `error::Error`.
 
 ### Changed
 

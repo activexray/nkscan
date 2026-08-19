@@ -15,6 +15,8 @@
 pub mod device;
 pub mod dust;
 pub mod error;
+#[cfg(feature = "python")]
+pub mod python;
 pub mod protocol;
 pub mod scan;
 pub mod session;

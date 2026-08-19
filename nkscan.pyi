@@ -10,6 +10,7 @@ __all__ = [
     "Device",
     "DeviceBusy",
     "DeviceNotFound",
+    "Discovery",
     "MediaError",
     "ScanCancelled",
     "ScanResult",
@@ -70,6 +71,20 @@ class DeviceNotFound(ScannerError):
     No such scanner
     """
     ...
+
+@typing.final
+class Discovery:
+    r"""
+    What discovery found
+    """
+    @property
+    def frames(self) -> builtins.list[tuple[builtins.int, builtins.int, builtins.int, builtins.int]]: ...
+    @property
+    def thumbnail(self) -> typing.Optional[builtins.dict[builtins.str, numpy.typing.NDArray[numpy.uint16]]]:
+        r"""
+        One array per channel, keyed the way `ScanResult.colors` is;
+        `None` where the mechanism that found `frames` needed no thumbnail pass
+        """
 
 class MediaError(ScannerError):
     r"""
@@ -156,14 +171,19 @@ class Session:
         r"""
         Take in whatever the adapter has waiting, answering whether anything came
         """
-    def discover_frames(self, format_mm: typing.Optional[builtins.float] = None, positive: builtins.bool = False, progress: typing.Optional[typing.Any] = None) -> builtins.list[tuple[builtins.int, builtins.int, builtins.int, builtins.int]]:
+    def discover_frames(self, format_mm: typing.Optional[builtins.float] = None, positive: builtins.bool = False, progress: typing.Optional[typing.Any] = None) -> Discovery:
         r"""
         Find every frame on whatever is loaded
         
         `format_mm` is the frame's length along the feed; only asked for by
         the two of four discovery mechanisms that need a thumbnail pass to
         find frames, so it may be left `None` on a masked or address-framed
-        adapter. `positive` is which way the loaded film reads
+        adapter. `positive` is which way the loaded film reads.
+        `Discovery.thumbnail`, where the mechanism took one, is what a caller
+        wanting to nudge `Discovery.frames` by hand shows the operator: a
+        rectangle handed to `scan_frame` needs no match in it, so a nudged one
+        works the same as a detected one, just slower if the stage has to home
+        first to reach it
         """
     def scan_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], dpi: typing.Optional[builtins.int] = None, samples: builtins.int = 1, superfine: builtins.bool = False, infrared: builtins.bool = False, clean: builtins.bool = False, lock_white_balance: builtins.bool = True, exposures: typing.Optional[typing.Mapping[builtins.str, builtins.int]] = None, progress: typing.Optional[typing.Any] = None) -> ScanResult:
         r"""

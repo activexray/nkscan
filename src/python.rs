@@ -188,6 +188,40 @@ fn channel_name(id: u8) -> String {
     format!("{:?}", Channel::from(id)).to_lowercase()
 }
 
+/// One plane, zero-copy, as a 2D numpy array
+fn plane_to_numpy(py: Python<'_>, plane: Vec<u16>, rows: usize, cols: usize) -> Py<PyArray2<u16>> {
+    plane
+        .into_pyarray(py)
+        .reshape([rows, cols])
+        .expect("plane is rows * cols long")
+        .unbind()
+}
+
+/// Zero-copy numpy arrays for `samples`, keyed by channel name, using `ids` (in `samples`'
+/// plane order) to name them
+fn colors_to_numpy(
+    py: Python<'_>,
+    ids: &[u8],
+    samples: Vec<Vec<u16>>,
+    rows: usize,
+    cols: usize,
+) -> HashMap<String, Py<PyArray2<u16>>> {
+    ids.iter()
+        .zip(samples)
+        .map(|(&id, plane)| (channel_name(id), plane_to_numpy(py, plane, rows, cols)))
+        .collect()
+}
+
+/// What discovery found
+#[gen_stub_pyclass]
+#[pyclass(name = "Discovery", frozen, get_all, module = "nkscan")]
+pub struct PyDiscovery {
+    frames: Vec<(u32, u32, u32, u32)>,
+    /// One array per channel, keyed the way `ScanResult.colors` is;
+    /// `None` where the mechanism that found `frames` needed no thumbnail pass
+    thumbnail: Option<HashMap<String, Py<PyArray2<u16>>>>,
+}
+
 // ----- a session -----
 
 /// An open, exclusive hold of a scanner
@@ -263,7 +297,12 @@ impl PySession {
     /// `format_mm` is the frame's length along the feed; only asked for by
     /// the two of four discovery mechanisms that need a thumbnail pass to
     /// find frames, so it may be left `None` on a masked or address-framed
-    /// adapter. `positive` is which way the loaded film reads
+    /// adapter. `positive` is which way the loaded film reads.
+    /// `Discovery.thumbnail`, where the mechanism took one, is what a caller
+    /// wanting to nudge `Discovery.frames` by hand shows the operator: a
+    /// rectangle handed to `scan_frame` needs no match in it, so a nudged one
+    /// works the same as a detected one, just slower if the stage has to home
+    /// first to reach it
     #[pyo3(signature = (format_mm=None, positive=false, progress=None))]
     fn discover_frames(
         &self,
@@ -271,7 +310,7 @@ impl PySession {
         format_mm: Option<f64>,
         positive: bool,
         progress: Option<Py<PyAny>>,
-    ) -> PyResult<Vec<(u32, u32, u32, u32)>> {
+    ) -> PyResult<PyDiscovery> {
         let format =
             format_mm.map(|mm| crate::protocol::caps::film::FilmFormat::Custom(mm.round() as u32));
         let polarity = if positive {
@@ -280,20 +319,34 @@ impl PySession {
             Polarity::Negative
         };
 
-        py.detach(move || {
+        let (frames, thumbnail, ids, samples, shape) = py.detach(move || {
             self.with(|session| {
                 let mut samples = Samples::default();
                 let discovery =
                     framing::discover_with(session, format, polarity, &mut samples, |p| {
                         report(&progress, "discover", 0, p)
                     })?;
-                Ok(discovery
+                let frames: Vec<_> = discovery
                     .frames
                     .into_iter()
                     .map(|r| (r.top, r.left, r.bottom, r.right))
-                    .collect())
+                    .collect();
+                match discovery.thumbnail {
+                    Some(pass) => {
+                        let ids: Vec<u8> = pass.layout.colors().collect();
+                        let shape = (pass.rows, pass.cols);
+                        Ok((frames, true, ids, samples.colors, shape))
+                    }
+                    None => Ok((frames, false, Vec::new(), Vec::new(), (0, 0))),
+                }
             })
-        })
+        })?;
+
+        let thumbnail = thumbnail.then(|| {
+            let (rows, cols) = shape;
+            Python::attach(|py| colors_to_numpy(py, &ids, samples, rows, cols))
+        });
+        Ok(PyDiscovery { frames, thumbnail })
     }
 
     /// Focus, meter, take the pass over `frame`, and optionally clean it
@@ -379,25 +432,8 @@ impl PySession {
                 let (rows, cols) = (scanned.pass.rows, scanned.pass.cols);
 
                 Python::attach(|py| {
-                    let colors = ids
-                        .iter()
-                        .zip(buf.colors)
-                        .map(|(&id, plane)| {
-                            let array = plane
-                                .into_pyarray(py)
-                                .reshape([rows, cols])
-                                .expect("plane is rows * cols long")
-                                .unbind();
-                            (channel_name(id), array)
-                        })
-                        .collect();
-                    let ir = buf.ir.map(|plane| {
-                        plane
-                            .into_pyarray(py)
-                            .reshape([rows, cols])
-                            .expect("plane is rows * cols long")
-                            .unbind()
-                    });
+                    let colors = colors_to_numpy(py, &ids, buf.colors, rows, cols);
+                    let ir = buf.ir.map(|plane| plane_to_numpy(py, plane, rows, cols));
                     let exposures = scanned
                         .exposures
                         .iter()
@@ -471,6 +507,7 @@ fn nkscan_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCapabilities>()?;
     m.add_class::<PySession>()?;
     m.add_class::<PyScanResult>()?;
+    m.add_class::<PyDiscovery>()?;
     m.add_function(wrap_pyfunction!(list_devices, m)?)?;
 
     let py = m.py();

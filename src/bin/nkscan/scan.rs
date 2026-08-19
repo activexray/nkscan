@@ -30,6 +30,7 @@ use nkscan::{
 };
 use std::{
     borrow::Cow,
+    ops::ControlFlow,
     time::{Duration, Instant},
 };
 use tracing::*;
@@ -182,7 +183,10 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
             }
             Framing::Thumbnail => {
                 let bar = pass_bar("thumbnail");
-                let pass = session.scan_thumbnail_with(&mut samples, |p| bar.report(p))?;
+                let pass = session.scan_thumbnail_with(&mut samples, |p| {
+                    bar.report(p);
+                    ControlFlow::Continue(())
+                })?;
                 bar.finish_and_clear();
                 debug!(
                     "thumbnail {} x {} in {} channels, complete={}",
@@ -229,7 +233,10 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
                 let _ = session.read_boundaries_type2();
                 let bar = pass_bar("thumbnail");
 
-                let pass = session.scan_thumbnail_with(&mut samples, |p| bar.report(p))?;
+                let pass = session.scan_thumbnail_with(&mut samples, |p| {
+                    bar.report(p);
+                    ControlFlow::Continue(())
+                })?;
                 bar.finish_and_clear();
                 debug!(
                     "thumbnail {} x {} in {} channels, complete={}",
@@ -319,6 +326,7 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
                                 shown = pass;
                             }
                             bar.report(p);
+                            ControlFlow::Continue(())
                         })?;
                     bar.finish_and_clear();
                     // If this was the first frame, save its exposure
@@ -336,7 +344,10 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
             // Perform the scan pass
             let bar = pass_bar(format!("frame {}", n + 1));
             let pass =
-                session.scan_pass_with(&windows, SCAN_TIMEOUT, &mut samples, |p| bar.report(p))?;
+                session.scan_pass_with(&windows, SCAN_TIMEOUT, &mut samples, |p| {
+                    bar.report(p);
+                    ControlFlow::Continue(())
+                })?;
             bar.finish_and_clear();
             if !pass.complete {
                 warn!(

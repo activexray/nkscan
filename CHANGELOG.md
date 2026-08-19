@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0]
+
+### Changed
+
+- `Session::scan_pass_with`, `scan_thumbnail_with`, `autoexpose_with` and `autoexpose_frame_with` take a progress closure that returns `std::ops::ControlFlow<()>` instead of `()`. Returning `Break` cancels the pass with `Error::Cancelled`; the unread remainder is drained the same way a consumer that simply stopped reading already was, so nothing waits on the mechanism or sends `ABORT`. `scan_pass`, `scan_thumbnail`, `autoexpose` and `autoexpose_frame` are unaffected.
+
 ## [0.6.0]
 
 ### Fixed

@@ -12,6 +12,7 @@ use crate::{
 };
 use std::{
     collections::VecDeque,
+    ops::ControlFlow,
     sync::{
         atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
@@ -134,19 +135,24 @@ impl Session {
         timeout: Duration,
         samples: &mut Samples,
     ) -> Result<Pass, Error> {
-        self.scan_pass_with(windows, timeout, samples, |_| {})
+        self.scan_pass_with(windows, timeout, samples, |_| ControlFlow::Continue(()))
     }
 
-    /// The same as [`Self::scan_pass`], telling `on` how far along the pass is after every chunk
+    /// The same as [`Self::scan_pass`], telling `on` how far along the pass is
+    /// after every chunk and letting it cancel the pass by returning `Break`
     ///
     /// `on` runs on the decoding thread between chunks, so anything slow in it
-    /// is time the unit spends waiting for the next read with its buffer filling
+    /// is time the unit spends waiting for the next read with its buffer filling.
+    /// A cancelled pass fails with [`Error::Cancelled`]; the unread remainder is
+    /// drained by [`Chunks`](super::image::Chunks)'s own `Drop`, the same path
+    /// a consumer that simply stops reading already takes, so nothing here has
+    /// to wait for the mechanism or send `ABORT`
     pub fn scan_pass_with(
         &mut self,
         windows: &[Window],
         timeout: Duration,
         samples: &mut Samples,
-        mut on: impl FnMut(Progress),
+        mut on: impl FnMut(Progress) -> ControlFlow<()>,
     ) -> Result<Pass, Error> {
         let started = self.start_pass(windows, timeout)?;
         let layout = started.layout.clone();
@@ -199,11 +205,15 @@ impl Session {
                     out = Err(e);
                     break;
                 }
-                on(Progress {
+                let flow = on(Progress {
                     bytes,
                     total,
                     blocks: decoder.decoded(),
                 });
+                if flow.is_break() {
+                    out = Err(Error::Cancelled);
+                    break;
+                }
             }
             out
         })?;
@@ -236,14 +246,15 @@ impl Session {
     /// Builds its own windows from the capabilities (whole strip, lowest dpi,
     /// one channel per color), seeds white balance, and takes the pass
     pub fn scan_thumbnail(&mut self, samples: &mut Samples) -> Result<Pass, Error> {
-        self.scan_thumbnail_with(samples, |_| {})
+        self.scan_thumbnail_with(samples, |_| ControlFlow::Continue(()))
     }
 
-    /// The same, telling `on` how far along the pass is after every chunk
+    /// The same, telling `on` how far along the pass is after every chunk and
+    /// letting it cancel the pass by returning `Break`
     pub fn scan_thumbnail_with(
         &mut self,
         samples: &mut Samples,
-        on: impl FnMut(Progress),
+        on: impl FnMut(Progress) -> ControlFlow<()>,
     ) -> Result<Pass, Error> {
         if !crate::scan::thumbnail::available(self.capabilities()) {
             return Err(Error::Unsupported {

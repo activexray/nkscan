@@ -14,7 +14,7 @@ use crate::{
     },
     session::Session,
 };
-use std::time::Duration;
+use std::{ops::ControlFlow, time::Duration};
 use tracing::*;
 
 /// Long enough for a low-resolution pass over a whole frame
@@ -34,10 +34,13 @@ impl Session {
         recipe: &Recipe,
         lock_white_balance: bool,
     ) -> Result<Exposures, Error> {
-        self.autoexpose_frame_with(frame, recipe, lock_white_balance, |_, _| {})
+        self.autoexpose_frame_with(frame, recipe, lock_white_balance, |_, _| {
+            ControlFlow::Continue(())
+        })
     }
 
-    /// The same, telling `on` how far along each metering pass is
+    /// The same, telling `on` how far along each metering pass is and letting
+    /// it cancel by returning `Break`
     ///
     /// The first argument is which pass it is, counting from one, since metering
     /// takes as many as it needs to settle and each one starts over
@@ -46,7 +49,7 @@ impl Session {
         frame: Rect,
         recipe: &Recipe,
         lock_white_balance: bool,
-        on: impl FnMut(usize, Progress),
+        on: impl FnMut(usize, Progress) -> ControlFlow<()>,
     ) -> Result<Exposures, Error> {
         let windows = recipe
             .metering(self.capabilities())
@@ -64,18 +67,19 @@ impl Session {
         windows: &[Window],
         lock_white_balance: bool,
     ) -> Result<Exposures, Error> {
-        self.autoexpose_with(windows, lock_white_balance, |_, _| {})
+        self.autoexpose_with(windows, lock_white_balance, |_, _| ControlFlow::Continue(()))
     }
 
-    /// The same, telling `on` how far along each metering pass is
+    /// The same, telling `on` how far along each metering pass is and letting
+    /// it cancel by returning `Break`
     ///
     /// A unit that meters for itself takes a pass we never read, so nothing is
-    /// reported for that mechanism
+    /// reported for that mechanism, and it cannot be cancelled through `on`
     pub fn autoexpose_with(
         &mut self,
         windows: &[Window],
         lock_white_balance: bool,
-        mut on: impl FnMut(usize, Progress),
+        mut on: impl FnMut(usize, Progress) -> ControlFlow<()>,
     ) -> Result<Exposures, Error> {
         let mechanism = AutoExposure::choose(self.capabilities(), lock_white_balance)?;
         debug!(?mechanism, "metering");

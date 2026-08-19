@@ -8,6 +8,16 @@ repository = "https://github.com/activexray/nkscan"
 readme = "README.md"
 keywords = ["scanner", "film", "nikon", "coolscan", "scsi"]
 categories = ["hardware-support", "multimedia::images"]
+exclude = [
+    ".envrc",
+    ".github/",
+    "docs/*",
+    "flake.nix",
+    "flake.lock",
+    "pyproject.toml",
+    "scripts/",
+    "scsi_proxy/",
+]
 
 [dependencies]
 thiserror = "2"

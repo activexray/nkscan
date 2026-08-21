@@ -150,9 +150,8 @@ fn read_granule(caps: &Capabilities, layout: &Layout, truncated: Option<&Truncat
     let simultaneous_rows = if layout
         .interleaving
         .contains(ColorInterleaving::MULTILINE_SIMULTANEOUS)
-        && layout.ccd_lines == 2
     {
-        2
+        usize::from(layout.ccd_lines).max(1)
     } else {
         1
     };

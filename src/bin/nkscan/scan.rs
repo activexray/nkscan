@@ -11,7 +11,7 @@ use nkscan::{
     device, dust,
     error::Error,
     protocol::{
-        caps::{film::FilmFormat, other::HostCooperation, set_window::ColorInterleaving},
+        caps::{film::FilmFormat, set_window::ColorInterleaving},
         data::FrameTable,
         decode::Samples,
         model::Model,
@@ -90,23 +90,33 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
             "No color profile for this unit and film, so the scans will carry none"
         );
     }
+    let caps = session.capabilities();
+    // Multi-line scanning capability is advertised by the SET WINDOW
+    // color-interleaving field. HostCooperation::MULTI_LINE instead means
+    // that the host is required to perform additional multi-line registration.
+    // The LS-5000 supports two-line simultaneous scanning but does not require
+    // that registration cooperation.
+    let multiline_supported = caps.address.lines > 1
+        && caps
+            .set_window
+            .interleaving
+            .contains(ColorInterleaving::MULTILINE_SIMULTANEOUS);
 
-    let mut color_interleave = ColorInterleaving::LINE_WITHOUT_DISTANCE;
+    let color_interleave = if !superfine && multiline_supported {
+        ColorInterleaving::MULTILINE_SIMULTANEOUS
+    } else {
+        ColorInterleaving::LINE_WITHOUT_DISTANCE
+    };
 
-    // A unit that never raises multi-line cooperation is never put into
-    // MULTILINE_SIMULTANEOUS below, superfine or not, so the flag has nothing
-    // to opt out of on it
-    let multiline_offered = session
-        .capabilities()
-        .features
-        .cooperation
-        .contains(HostCooperation::MULTI_LINE);
-    if superfine && !multiline_offered {
-        warn!("this unit never scans multi-line, so --superfine changes nothing");
+    if superfine && !multiline_supported {
+        warn!("this scanner has no multi-line scanning mode, so --superfine changes nothing");
     }
-    if !superfine && multiline_offered {
-        color_interleave = ColorInterleaving::MULTILINE_SIMULTANEOUS;
-    }
+
+    debug!(
+        ccd_lines = caps.address.lines,
+        ?color_interleave,
+        "selected scan interleaving"
+    );
 
     // What every frame gets scanned with
     // Checked before anything moves

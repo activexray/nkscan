@@ -306,8 +306,10 @@ pub struct Rect {
 /// One frame's rectangle as `DataType::BoundaryType2` carries it, 2-11-9 (LS-5000)
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FramePosition {
-    /// Bytes 4-7, Y address for line 1
-    /// address = 7 × (108 * perf_number + 22 * perf_decimal + pulse_number
+    /// Bytes 4-7, Y address of the frame's top line
+    ///
+    /// Only picks the frame a SET WINDOW Y asks for. The triple below is what
+    /// moves the film
     pub top: u32,
     /// Bytes 8-9, perforation number
     pub perf_number: u16,
@@ -327,23 +329,15 @@ impl FramePosition {
         }
     }
 
-    /// construct a FramePosition entry from a detected top, already in device
-    /// address units (the same conversion the rest of the boundary table uses,
-    /// 2-11-6's integer pitch, not a re-derived float ratio: the two disagree
-    /// by a fraction of a unit per thumbnail column, which used to compound
-    /// over the length of the strip)
-    /// all other values are inferred using data read from 8Eh PerforationInformation
-    /// the only valid positions on a strip are locations returned from 8Eh so we need to find the closest match
-    /// in the table of returned positions, then use that as an index for the scanner's boundary information data
-    pub fn new(approx_addr: u32, perf_info: &PerfInformation) -> Option<Self> {
-        let perf = perf_info.nearest(approx_addr)?;
-
-        Some(FramePosition {
-            top: PerfInformation::address(perf),
+    /// One frame's entry: a detected top, and that line's own perforation
+    /// reading rather than anything derived from the address
+    pub fn new(top: u32, perf: &PerforationInformation) -> Self {
+        FramePosition {
+            top,
             perf_number: perf.perf_number,
             perf_decimal: perf.perf_decimal,
             pulse_number: perf.pulse_number,
-        })
+        }
     }
 }
 
@@ -401,8 +395,7 @@ impl Boundary {
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         // The count is one byte (2-11-6 byte 2), so more than 255 frames cannot
-        // be encoded. A silent `as u8` truncation sent a garbage table that the
-        // transport refused with EINVAL
+        // be encoded
         if self.frames.len() > u8::MAX as usize {
             return Err(Error::Unsupported {
                 op: "boundary",
@@ -442,6 +435,9 @@ pub struct PerforationInformation {
 }
 
 /// Perforation info from 8Eh, 2-11-8 (LS-5000)
+///
+/// "The absolute position information of the nth line of the thumbnail": one
+/// record per line of the pass just read, in order, so the index is the line
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PerfInformation {
     pub perfs: Vec<PerforationInformation>,
@@ -497,20 +493,9 @@ impl PerfInformation {
         Some(Self { perfs })
     }
 
-    /// encoder-space address for a given perforation reading
-    /// used for calculating closest perf match to a given line address
-    fn address(perf: &PerforationInformation) -> u32 {
-        7 * (108 * perf.perf_number as u32
-            + 22 * perf.perf_decimal as u32
-            + perf.pulse_number as u32)
-    }
-
-    /// find nearest perf match corresponding to an image address
-    /// there's ~19 addresses per perf leading to a granularity of ~0.25mm with 35mm film (4.75mm perf pitch)
-    pub fn nearest(&self, addr: u32) -> Option<&PerforationInformation> {
-        self.perfs
-            .iter()
-            .min_by_key(|p| Self::address(p).abs_diff(addr))
+    /// What the unit measured at one thumbnail line
+    pub fn at(&self, line: usize) -> Option<&PerforationInformation> {
+        self.perfs.get(line)
     }
 }
 
@@ -978,6 +963,33 @@ impl Header {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A frame detected on line 2 seeks by line 2's own reading
+    #[test]
+    fn a_perforation_table_is_read_in_thumbnail_line_order() {
+        let mut b = vec![0x00, 0x00, 0x0d, 0x04];
+        for line in 0..3u8 {
+            b.extend_from_slice(&[0x00, line, 0x80 | line, line * 7]);
+        }
+
+        let perfs = PerfInformation::from_bytes(&b).expect("perforations");
+        assert_eq!(perfs.perfs.len(), 3);
+
+        let second = perfs.at(1).expect("line 1");
+        assert_eq!(second.perf_number, 1);
+        assert_eq!(second.perf_decimal, 1);
+        assert_eq!(second.pulse_number, 7);
+        // Bit 7 of the same byte is the sensor switch, not part of the decimal
+        assert!(second.count_switching_flag);
+        assert_eq!(perfs.at(3), None);
+
+        let frame = FramePosition::new(4321, second);
+        assert_eq!(frame.top, 4321);
+        assert_eq!(
+            (frame.perf_number, frame.perf_decimal, frame.pulse_number),
+            (1, 1, 7)
+        );
+    }
 
     /// 2-11-5-3's multi-line record: 4000 dpi, three colors, and a gap of 12
     #[test]

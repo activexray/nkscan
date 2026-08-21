@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0]
+
+### Added
+
+- `scan::framing::discover`/`discover_with`, moving the CLI's frame-discovery dispatch into the library
+- `scan::frame::scan_frame`/`scan_frame_with`, the same for one frame's focus/meter/scan/clean sequence.
+- `scan::clean::clean_frame`, the dust-removal glue (decimated calibration, falling back to the whole frame).
+- `Samples::to_full_scale`, stretching a pass's samples to 16 bits in place.
+- `nkscan scan` now runs on top of all four of the above rather than duplicating them.
+- `src/python.rs`, the `python` feature's pyo3 bindings. See PYTHON.md.
+- `FilmFormat` implements `FromStr`/`Display`, and `FilmFormat::resolve` picks a format from an explicit one or the loaded holder/adapter, replacing the CLI's own copy of that logic.
+
+### Changed
+
+- `scan_pass_with`, `scan_thumbnail_with`, `autoexpose_with` and `autoexpose_frame_with`'s progress closure returns `ControlFlow<()>` now; `Break` cancels with `Error::Cancelled`, draining the rest rather than sending `ABORT`.
+- `anyhow` and `tracing-subscriber` moved behind the `cli` feature. Neither was ever used outside `src/bin/`; a library-only build no longer pulls either in.
+- `framing::discover_with` resolves a missing `--format` itself now instead of requiring the caller to.
+
+## [0.6.0]
+
+### Fixed
+
+- Type2 perforation framing picked each frame's perforation triple by matching a re-derived address against the table's nearest entry instead of just using the perforation record itself, which has an entry for every thumbnail column.
+
+### Changed
+
+- `FramePosition::new` takes the already-detected top and one `PerforationInformation` record directly, and no longer returns `Option`. `PerfInformation::nearest` is gone; look the record up with the new `PerfInformation::at` instead.
+- Per-chunk image READ logging dropped from `debug` to `trace`, and `nusb`'s own per-USB-transfer logging now defaults to `warn`, so `--log debug` isn't drowned out by either.
+- Crate-level usage docs added, and broken intra-doc links across the public API fixed, ahead of the crates.io release.
+
 ## [0.5.1]
 
 ### Fixed

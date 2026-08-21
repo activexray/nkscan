@@ -5,8 +5,9 @@ on:
         tags:
             - "v*"
 
-# Attaching binaries to the release is all this does now that nothing is published to a
-# registry, so `contents` is the whole of it
+# The default for every job. `publish` and `publish-pypi` below each override this with their
+# own `id-token: write` for trusted publishing, since a job's `permissions:` replaces this
+# rather than adding to it
 permissions:
     contents: write
 
@@ -113,61 +114,124 @@ jobs:
                     exit 1
                   fi
 
-#    sdist:
-#        name: Source distribution
-#        runs-on: ubuntu-latest
-#        steps:
-#            - name: Checkout repository
-#              uses: actions/checkout@v4
+    # Gated on `build` as well as `version`: a tag that cannot build for every platform above
+    # should not reach the registry, where a publish can never be undone, only yanked
+    publish:
+        name: Publish to crates.io
+        needs: [build, version]
+        runs-on: ubuntu-latest
+        environment: crates-io
+        permissions:
+            # Trusted publishing: crates.io verifies this workflow by OIDC, so there is no
+            # long-lived token in the repository. Register the publisher once at
+            # crates.io/crates/nkscan/settings with owner, repo and this workflow's filename.
+            id-token: write
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
 
-#            - name: Build sdist
-#              uses: PyO3/maturin-action@v1
-#              with:
-#                  command: sdist
-#                  args: --out dist
+            - name: Install the toolchain rust-toolchain.toml names
+              run: cargo --version
 
-#            - name: Upload sdist
-#              uses: actions/upload-artifact@v4
-#              with:
-#                  name: wheel-sdist
-#                  path: dist
+            - name: Get a short-lived crates.io token
+              id: auth
+              uses: rust-lang/crates-io-auth-action@v1
 
-#    publish:
-#        name: Publish to PyPI
-#        needs: [version, wheels, sdist]
-#        runs-on: ubuntu-latest
-#        environment: pypi
-#        permissions:
-#            # Trusted publishing: PyPI verifies this workflow by OIDC, so there is no long-lived
-#            # token in the repository. Register the publisher once at
-#            # pypi.org/manage/account/publishing with owner, repo and this workflow's filename.
-#            id-token: write
-#        steps:
-#            - name: Collect every wheel and the sdist
-#              uses: actions/download-artifact@v4
-#              with:
-#                  pattern: wheel-*
-#                  path: dist
-#                  merge-multiple: true
+            - name: Publish
+              env:
+                  CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+              run: cargo publish
 
-#            - name: Publish
-#              uses: pypa/gh-action-pypi-publish@release/v1
-#              with:
-#                  packages-dir: dist
+    # One abi3 wheel per platform: the floor Cargo.toml pins covers every
+    # interpreter after it, so there is no per-Python-version matrix here.
+    # Linux targets glibc rather than `build`'s musl, since manylinux is what
+    # a wheel needs to be installable, not what makes a binary need no libc at all
+    wheels:
+        name: Wheel for ${{ matrix.target }}
+        runs-on: ${{ matrix.runner }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - runner: ubuntu-latest
+                      target: x86_64-unknown-linux-gnu
+                      manylinux: auto
+                    - runner: windows-latest
+                      target: x86_64-pc-windows-msvc
+                    - runner: macos-14
+                      target: aarch64-apple-darwin
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
 
-#    attach-wheels:
-#        name: Attach wheels to the release
-#        needs: [version, wheels, sdist]
-#        runs-on: ubuntu-latest
-#        steps:
-#            - name: Collect every wheel and the sdist
-#              uses: actions/download-artifact@v4
-#              with:
-#                  pattern: wheel-*
-#                  path: dist
-#                  merge-multiple: true
+            - name: Build wheel
+              uses: PyO3/maturin-action@v1
+              with:
+                  target: ${{ matrix.target }}
+                  args: --release --out dist
+                  manylinux: ${{ matrix.manylinux || 'auto' }}
 
-#            - name: Upload to release
-#              uses: softprops/action-gh-release@v2
-#              with:
-#                  files: dist/*
+            - name: Upload wheel
+              uses: actions/upload-artifact@v4
+              with:
+                  name: wheel-${{ matrix.target }}
+                  path: dist
+
+    sdist:
+        name: Source distribution
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Build sdist
+              uses: PyO3/maturin-action@v1
+              with:
+                  command: sdist
+                  args: --out dist
+
+            - name: Upload sdist
+              uses: actions/upload-artifact@v4
+              with:
+                  name: wheel-sdist
+                  path: dist
+
+    publish-pypi:
+        name: Publish to PyPI
+        needs: [version, wheels, sdist]
+        runs-on: ubuntu-latest
+        environment: pypi
+        permissions:
+            # Trusted publishing: PyPI verifies this workflow by OIDC, so there is no long-lived
+            # token in the repository. Register the publisher once at
+            # pypi.org/manage/account/publishing with owner, repo and this workflow's filename.
+            id-token: write
+        steps:
+            - name: Collect every wheel and the sdist
+              uses: actions/download-artifact@v4
+              with:
+                  pattern: wheel-*
+                  path: dist
+                  merge-multiple: true
+
+            - name: Publish
+              uses: pypa/gh-action-pypi-publish@release/v1
+              with:
+                  packages-dir: dist
+
+    attach-wheels:
+        name: Attach wheels to the release
+        needs: [version, wheels, sdist]
+        runs-on: ubuntu-latest
+        steps:
+            - name: Collect every wheel and the sdist
+              uses: actions/download-artifact@v4
+              with:
+                  pattern: wheel-*
+                  path: dist
+                  merge-multiple: true
+
+            - name: Upload to release
+              uses: softprops/action-gh-release@v2
+              with:
+                  files: dist/*

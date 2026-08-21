@@ -4,7 +4,7 @@ use nkscan::{
     scan::{boundaries::Polarity, profile},
 };
 use profile::Film;
-use std::{path::PathBuf, sync::LazyLock};
+use std::{path::PathBuf, str::FromStr, sync::LazyLock};
 use tracing_subscriber::filter::LevelFilter;
 
 /// The version, plus the notices for what is compiled in alongside our own code
@@ -103,7 +103,7 @@ pub struct Scan {
     pub thumbnail: bool,
 
     /// Film format. One of: 135, half, IX240, 16, 645, 66, 67, 68, 69, or a custom frame length in mm. Defaults to what the holder reports (if any).
-    #[arg(long, value_parser = parse_format)]
+    #[arg(long, value_parser = FilmFormat::from_str)]
     pub format: Option<FilmFormat>,
 
     /// Film type, which picks the color profile the scans are tagged with
@@ -154,42 +154,4 @@ impl From<FilmType> for Polarity {
 pub fn parse_log_level(flag: &str) -> Result<LevelFilter, String> {
     flag.parse()
         .map_err(|_| format!("'{flag}' is not a valid log level (expected one of: trace, debug, info, warn, error, off)"))
-}
-
-/// A film format flag, by name or as a frame height in millimeters
-///
-/// The named ones are what the holders take; anything else is a height, which
-/// is what a format nobody named still needs
-pub fn parse_format(flag: &str) -> Result<FilmFormat, String> {
-    Ok(match flag {
-        "IX240" | "aps" | "APS" => FilmFormat::IX240,
-        "135" => FilmFormat::F135,
-        "half" | "135half" => FilmFormat::F135Half,
-        "16" => FilmFormat::F16,
-        "645" => FilmFormat::F645,
-        "66" => FilmFormat::F66,
-        "67" => FilmFormat::F67,
-        "68" => FilmFormat::F68,
-        "69" => FilmFormat::F69,
-        mm => FilmFormat::Custom(
-            mm.parse()
-                .map_err(|_| format!("'{mm}' is neither a film format nor a height in mm"))?,
-        ),
-    })
-}
-
-/// What `parse_format` would take for this format, for saying what is on offer
-pub fn format_name(format: &FilmFormat) -> String {
-    match format {
-        FilmFormat::IX240 => "IX240".into(),
-        FilmFormat::F135 => "135".into(),
-        FilmFormat::F135Half => "half".into(),
-        FilmFormat::F16 => "16".into(),
-        FilmFormat::F645 => "645".into(),
-        FilmFormat::F66 => "66".into(),
-        FilmFormat::F67 => "67".into(),
-        FilmFormat::F68 => "68".into(),
-        FilmFormat::F69 => "69".into(),
-        FilmFormat::Custom(mm) => mm.to_string(),
-    }
 }

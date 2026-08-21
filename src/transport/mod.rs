@@ -20,7 +20,8 @@ const SENSE_REQUEST_LEN: usize = 96;
 
 /// The SCSI operation error type
 ///
-/// This will only exist if we didn't complete a SCSI transaction
+/// Only for a transaction that never completed. A completed one, even a
+/// failed one, comes back as a [`Completion`]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("io error: {0}")]
@@ -30,7 +31,7 @@ pub enum Error {
     Timeout(Duration),
 }
 
-/// Data phase types and their associated data
+/// Which way, if any, a command's data phase moves
 pub enum Data<'a> {
     /// No data to transfer
     None,
@@ -50,8 +51,7 @@ impl fmt::Debug for Data<'_> {
     }
 }
 
-/// The SCSI completion
-/// This contains status, sense, and how many bytes were transferred
+/// One SCSI command's result, once it completed
 #[derive(Clone, PartialEq, Eq)]
 pub struct Completion {
     /// The completion status
@@ -63,7 +63,8 @@ pub struct Completion {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-/// The sense codes and data, the precise meaning of these are delegated to the wire spec
+/// The sense codes and data, as raw as the transport reports them. Their
+/// precise meaning is [`crate::protocol::sense`]'s job, not this layer's
 pub struct Sense {
     /// Main sense key
     pub key: u8,
@@ -71,7 +72,9 @@ pub struct Sense {
     pub asc: u8,
     /// Additional sense code qualifier
     pub ascq: u8,
-    /// Tertiary sense code? Nikon never defines this but only uses in USB transport
+    /// Tertiary sense code, Nikon's own 4th sense element and not part of
+    /// any SCSI spec. Populated on every transport where the buffer runs
+    /// long enough to carry it
     pub tsc: Option<u8>,
     /// Incorrect length indicator, byte 2 bit 5. The transfer was shorter than
     /// asked for, and 2-11 uses it to say a read ran past what the unit holds
@@ -152,14 +155,15 @@ impl From<u8> for Status {
     }
 }
 
-/// The SCSI transport abstraction
+/// What one platform backend has to implement to carry a CDB and its data phase
 pub trait Transport: Send {
     /// The maximum size in bytes we can transfer in a single operation.
     fn max_transfer(&self) -> usize;
 
-    /// Perform a SCSI transaction with the "command data block" bytes `cdb` writing/reading the data phase contained in `data`.
+    /// Run one SCSI transaction: `cdb` is the command, `data` its data phase
     ///
-    /// This returns errors on link-layer errors and Ok on completion which includes sense data carried along the way.
-    /// `timeout` is not a promise as some backends (like Windows), don't have a mechanism for it.
+    /// Errors are link-layer only; a failed command still comes back `Ok` as
+    /// a [`Completion`] carrying its sense. `timeout` is best-effort: some
+    /// backends, Windows among them, have no way to enforce it
     fn execute(&mut self, cdb: &[u8], data: Data, timeout: Duration) -> Result<Completion, Error>;
 }

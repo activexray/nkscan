@@ -2,7 +2,7 @@
 //!
 //! Neither spec has a sense-code chapter; 1-1-5-2 cites a "table 4-1-1" that
 //! does not exist. The codes are spread across the per-command response tables
-//! in section 2, and [`from_sense`] is assembled from those.
+//! in section 2, and `from_sense` is assembled from those.
 //!
 //! CHECK CONDITION is the device's only out-of-band channel and carries
 //! progress, rounding and host-cooperation as well as faults, hence [`Outcome`]
@@ -26,7 +26,7 @@ pub enum Failure {
     #[error("unrecognized sense")]
     Unrecognized,
     /// Neither spec lists this one. It is SPC's OUT OF FOCUS: some units put it
-    /// directly on the command's own completion, and [`from_sense`] catches it
+    /// directly on the command's own completion, and `from_sense` catches it
     /// there; others report the generic `02h-04h-02h` and only reveal this
     /// through SEND DIAGNOSTIC afterward, which [`diagnosed`] reads
     #[error("autofocus did not reach focus")]

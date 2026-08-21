@@ -7,7 +7,9 @@
 
 pub mod autoexpose;
 pub mod boundaries;
+pub mod clean;
 pub mod focus;
+pub mod frame;
 pub mod framing;
 pub mod meter;
 pub mod pass;

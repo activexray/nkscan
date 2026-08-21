@@ -1,7 +1,7 @@
 //! Taking one scan pass over the film
 //!
 //! Every kind of pass, thumbnail, prescan and scan alike, is the same four
-//! commands. The I/O lives on [`Session`]; this module holds the pure types
+//! commands. The I/O lives on [`Session`](crate::session::Session); this module holds the pure types
 //! and the decoder builder.
 
 use crate::{

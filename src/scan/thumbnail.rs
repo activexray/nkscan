@@ -129,15 +129,27 @@ pub fn frames_type2(
 
     let found = boundaries::detect(&image, (length / pitch) as usize, polarity);
 
+    // A detected column indexes the perforation table directly, so a table that
+    // does not run the length of the pass is not the one this pass produced
+    if perf_info.perfs.len() != image.cols {
+        warn!(
+            perfs = perf_info.perfs.len(),
+            columns = image.cols,
+            "the perforation table does not cover the thumbnail line for line"
+        );
+    }
+
     // The frame table the detected boundaries and the perforation data come to
     let frames: Vec<FramePosition> = found
         .frames
         .iter()
         .filter_map(|&col| {
             let top = origin + col as u32 * pitch;
-            debug!(col, top, "detected column");
+            let perf = perf_info.at(col);
+            debug!(col, top, ?perf, "detected column");
             match top + length <= end {
-                true => FramePosition::new(top, perf_info),
+                // A column with no reading is one the stage cannot be sent to
+                true => Some(FramePosition::new(top, perf?)),
                 false => None,
             }
         })

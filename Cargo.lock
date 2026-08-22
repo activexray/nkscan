@@ -653,7 +653,7 @@ dependencies = [
  "anyhow",
  "bitflags",
  "clap",
- "core-foundation",
+ "core-foundation-sys",
  "divan",
  "indicatif",
  "io-kit-sys",

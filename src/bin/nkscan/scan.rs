@@ -337,11 +337,21 @@ fn waiting(session: &mut Session, take_in: bool) -> Result<bool, Error> {
     }
 }
 
+/// [`Session::refresh`], tolerating the medium-not-present it can itself hit:
+/// a strip feeder's gate sits empty between strips, and that is the state this
+/// is called from a loop to wait out, not a failure of the refresh
+fn refresh_while_empty(session: &mut Session) -> Result<(), Error> {
+    match session.refresh() {
+        Ok(()) | Err(Error::Media(_)) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Wait until a holder is loaded, then put the unit in a state to scan from
 fn wait_for_film(session: &mut Session, prompt: &str, take_in: bool) -> anyhow::Result<()> {
     // An eject leaves what we know about the holder behind, so ask again before
     // believing anything is in there
-    session.refresh()?;
+    refresh_while_empty(session)?;
 
     if !waiting(session, take_in)? {
         // The spinner is the affordance on a terminal, and hidden anywhere else, so the log says it too
@@ -351,7 +361,7 @@ fn wait_for_film(session: &mut Session, prompt: &str, take_in: bool) -> anyhow::
         spinner.enable_steady_tick(SPINNER_TICK);
         loop {
             std::thread::sleep(HOLDER_POLL);
-            session.refresh()?;
+            refresh_while_empty(session)?;
             // Retrying the load is what picks up a supply that was refilled
             if waiting(session, take_in)? {
                 spinner.finish_and_clear();

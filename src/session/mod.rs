@@ -269,8 +269,16 @@ impl Session {
             debug!("this unit has no UNLOAD");
             return Ok(false);
         }
-        self.execute(Op::Unload, Operation::default(), MOVE_TIMEOUT)?;
-        Ok(true)
+        match self.execute(Op::Unload, Operation::default(), MOVE_TIMEOUT) {
+            Ok(()) => Ok(true),
+            // `execute` confirms termination with TEST UNIT READY, and once
+            // UNLOAD has actually emptied the gate that reports medium not
+            // present. That is the operation succeeding, not it failing -
+            // the same reasoning `load` already applies to its own empty
+            // answer below
+            Err(Error::Media(Intervention::NoMedium)) => Ok(true),
+            Err(e) => Err(e),
+        }
     }
 
     /// Take in whatever the adapter has waiting, answering whether anything came

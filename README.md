@@ -145,9 +145,9 @@ MacOS *should* just work.
 ### FireWire Drivers
 
 Things *should* just work on Linux (assuming you've got the [SG](https://www.kernel.org/doc/html/latest/scsi/scsi-generic.html) module loaded) and Windows.
-MacOS dropped support for hardware FireWire a while ago and while there are [efforts](github.com/mrmidi/ASFireWire) to bring it back, it seems a bit hacky at the moment.
+MacOS dropped support for FireWire in Tahoe, but the open source [ASFireWire](https://github.com/mrmidi/ASFireWire) project brings it back on Apple Silicon as a third-party dext.
+nkscan is tested and verified to work well with ASFireWire.
 If you have an older mac with FireWire on it, you could just install Linux and have an OS that respects your freedom.
-If you have a newer mac and a cascade of dongles, maybe open an issue if you'd like support.
 
 ## Design Notes
 

@@ -139,7 +139,24 @@ fn pitches(caps: &Capabilities, window: &Window) -> Result<(u32, u32), Error> {
 /// protocol
 fn read_granule(caps: &Capabilities, layout: &Layout, truncated: Option<&Truncation>) -> usize {
     let transfer = caps.address.transfer;
-    let whole_line = (layout.bytes_per_line() as usize).max(1);
+
+    // The LS-5000 emits its two CCD rows as one physical acquisition in
+    // MULTILINE_SIMULTANEOUS mode. A READ must therefore not end between
+    // those two rows.
+    //
+    // Keep the existing behavior for three-line scanners such as the LS-9000,
+    // whose multiline transport/cooperation behavior is different and already
+    // works through the existing path.
+    let simultaneous_rows = if layout
+        .interleaving
+        .contains(ColorInterleaving::MULTILINE_SIMULTANEOUS)
+    {
+        usize::from(layout.ccd_lines).max(1)
+    } else {
+        1
+    };
+
+    let whole_line = (layout.bytes_per_line() as usize * simultaneous_rows).max(1);
 
     if transfer.contains(Transfer::READ_LINE_COLS) {
         return whole_line;

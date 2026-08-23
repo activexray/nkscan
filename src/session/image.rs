@@ -275,10 +275,11 @@ impl Chunks<'_> {
             // A stage move's budget here is what turns a unit that has stopped
             // answering into three silent minutes. The pass is already running,
             // so a chunk is either on its way or it is never coming
-            match self
-                .session
-                .read_image_within(&self.layout.clone(), &mut buf[..want], DRAIN_TIMEOUT)
-            {
+            match self.session.read_image_within(
+                &self.layout.clone(),
+                &mut buf[..want],
+                DRAIN_TIMEOUT,
+            ) {
                 Ok(0) => break,
                 Ok(got) => {
                     // Only what arrives past what the layout promised is

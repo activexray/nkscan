@@ -23,7 +23,10 @@ pub fn install() {
             if err.is_terminal() {
                 let _ = err.write_all(b"\r\x1b[2K");
             }
-            let _ = writeln!(err, "stopping at the next safe point, this can take a moment");
+            let _ = writeln!(
+                err,
+                "stopping at the next safe point, this can take a moment"
+            );
         }
     });
 }

@@ -10,7 +10,8 @@ use crate::{
     error::Error,
     protocol::{
         caps::{
-            Capabilities as RustCapabilities, other::HostCooperation,
+            Capabilities as RustCapabilities,
+            other::HostCooperation,
             set_window::{ColorInterleaving, ScanKind},
         },
         data::{Op, Rect},

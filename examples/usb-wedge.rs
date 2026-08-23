@@ -39,7 +39,9 @@ fn main() {
     let device = info.open().wait().expect("open");
     let interface = device.claim_interface(0).wait().expect("claim interface 0");
     let mut ep_in = interface.endpoint::<Bulk, In>(0x82).expect("bulk in 0x82");
-    let mut ep_out = interface.endpoint::<Bulk, Out>(0x01).expect("bulk out 0x01");
+    let mut ep_out = interface
+        .endpoint::<Bulk, Out>(0x01)
+        .expect("bulk out 0x01");
     let mps = ep_in.max_packet_size();
     println!("claimed interface 0, IN max packet {mps}\n");
 
@@ -55,7 +57,11 @@ fn main() {
         {
             Ok(b) => {
                 if reads == 0 {
-                    println!("   first read: {} bytes {:02X?}", b.len(), &b[..b.len().min(32)]);
+                    println!(
+                        "   first read: {} bytes {:02X?}",
+                        b.len(),
+                        &b[..b.len().min(32)]
+                    );
                 }
                 stale += b.len();
                 reads += 1;
@@ -78,11 +84,7 @@ fn main() {
         .transfer_blocking(Buffer::new(mps), SHORT)
         .into_result()
     {
-        Ok(b) => println!(
-            "   {} bytes {:02X?}",
-            b.len(),
-            &b[..b.len().min(32)]
-        ),
+        Ok(b) => println!("   {} bytes {:02X?}", b.len(), &b[..b.len().min(32)]),
         Err(e) => println!("   {e:?}"),
     }
     println!();
@@ -131,7 +133,11 @@ fn main() {
         .transfer_blocking(Buffer::new(mps), SHORT)
         .into_result()
     {
-        Ok(b) => println!("   phase IN {} bytes {:02X?}", b.len(), &b[..b.len().min(8)]),
+        Ok(b) => println!(
+            "   phase IN {} bytes {:02X?}",
+            b.len(),
+            &b[..b.len().min(8)]
+        ),
         Err(e) => println!("   phase IN {e:?}"),
     }
 }

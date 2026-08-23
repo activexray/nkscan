@@ -225,20 +225,19 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         // the metering bars are
         let takes_pass = matches!(framing, Framing::Thumbnail | Framing::Perforation);
         let mut bar: Option<ProgressBar> = None;
-        let discovery =
-            framing::discover_with(session, format, film.into(), &mut samples, |p| {
-                if takes_pass && bar.is_none() && p.total > 0 {
-                    bar = Some(pass_bar("thumbnail", p.total));
-                }
-                if let Some(bar) = &bar {
-                    bar.report(p);
-                }
-                if cancel::requested() {
-                    ControlFlow::Break(())
-                } else {
-                    ControlFlow::Continue(())
-                }
-            })?;
+        let discovery = framing::discover_with(session, format, film.into(), &mut samples, |p| {
+            if takes_pass && bar.is_none() && p.total > 0 {
+                bar = Some(pass_bar("thumbnail", p.total));
+            }
+            if let Some(bar) = &bar {
+                bar.report(p);
+            }
+            if cancel::requested() {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        })?;
         if let Some(bar) = bar {
             crate::progress::done(bar);
         }

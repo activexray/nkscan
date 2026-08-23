@@ -109,6 +109,11 @@ pub struct Scan {
     /// Film type, which picks the color profile the scans are tagged with
     #[arg(long, value_enum, default_value_t = FilmType::Negative)]
     pub film: FilmType,
+
+    /// Before scanning, show the detected frames and let the operator adjust
+    /// each one's start column. Needs an interactive terminal.
+    #[arg(long)]
+    pub review: bool,
 }
 
 /// The film types Nikon profiled, as flag values

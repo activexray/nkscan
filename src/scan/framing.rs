@@ -11,7 +11,7 @@ use crate::{
     error::Error,
     protocol::{
         caps::{Capabilities, address::CoordinateBase, film::FilmFormat, other::DataTypes},
-        data::{Boundary, FrameTable, Op, Rect},
+        data::{Boundary, BoundaryType2, FramePosition, FrameTable, Op, PerfInformation, Rect},
         decode::Samples,
     },
     session::Session,
@@ -183,6 +183,83 @@ pub struct Discovery {
     pub table: FrameTable,
     pub frames: Vec<Rect>,
     pub thumbnail: Option<Pass>,
+    /// Present only where `table` came from a thumbnail pass, so there is a
+    /// picture and a geometry to review it against. `None` for `Published`/
+    /// `Address`, which measure nothing themselves
+    pub review: Option<ReviewContext>,
+}
+
+/// What a caller needs to turn an operator-picked column back into a frame,
+/// the same way [`discover_with`] turned a detected one into one
+pub struct ReviewContext {
+    pub geometry: thumbnail::Geometry,
+    /// The column each of `Discovery::frames` was actually found at, same
+    /// order and length
+    pub columns: Vec<usize>,
+    /// `Some` only for [`Framing::Perforation`], whose columns need a real
+    /// reading to be addressable at all
+    pub perfs: Option<PerfInformation>,
+}
+
+/// Rebuild the boundary table from operator-picked frames and push it to the
+/// device, so autofocus and the stage resolve future frames against what the
+/// operator chose rather than what detection guessed
+///
+/// `frames` is `(column, width)` pairs, in thumbnail columns, replacing
+/// `discovery.review`'s own one for one - a caller that wants some left alone
+/// passes their already-detected column and `review.geometry.width()` back
+/// unchanged. Width is a per-frame choice only on the `Boundary` mechanism;
+/// `BoundaryType2`'s own frames carry no length of their own to vary, so
+/// there every frame scans at the strip's one shared width regardless of what
+/// its pair asks for, and a width is only ever used there to say whether a
+/// column is still on the axis. A pair with nothing to build a frame from is
+/// dropped rather than refused outright, the same as a detected one would be
+pub fn commit_frames(
+    session: &mut Session,
+    discovery: &Discovery,
+    frames: &[(usize, u32)],
+) -> Result<Vec<Rect>, Error> {
+    let Some(review) = &discovery.review else {
+        return Err(Error::Unsupported {
+            op: "commit frames",
+            reason: "this unit's framing mechanism was never reviewed against a thumbnail".into(),
+        });
+    };
+    match &discovery.table {
+        FrameTable::Boundary(_) => {
+            let rects: Vec<Rect> = frames
+                .iter()
+                .filter_map(|&(c, w)| review.geometry.rect(c, w))
+                .collect();
+            session.set_boundaries(&Boundary { frames: rects.clone() })?;
+            Ok(rects)
+        }
+        FrameTable::BoundaryType2(_) => {
+            let perfs = review
+                .perfs
+                .as_ref()
+                .expect("a Perforation review always carries its perforation table");
+            // The table itself carries no length - it is only ever the stage
+            // registration a `FramePosition` seeks against - so each frame's
+            // own width still reaches the rect it scans at, kept alongside
+            // the position rather than dropped once the table is built
+            let positions: Vec<(FramePosition, u32)> = frames
+                .iter()
+                .filter_map(|&(c, w)| review.geometry.frame_position(c, w, perfs).map(|f| (f, w)))
+                .collect();
+            let table = BoundaryType2 {
+                frames: positions.iter().map(|&(f, _)| f).collect(),
+            };
+            session.set_boundaries_type2(&table)?;
+
+            let x_start = session.capabilities().address.x_axis.address_range.start;
+            let x_boundary = session.capabilities().address.x_axis.boundary;
+            Ok(positions
+                .into_iter()
+                .map(|(f, w)| f.rect(x_start, x_boundary, review.geometry.dots(w)))
+                .collect())
+        }
+    }
 }
 
 /// Find every frame on whatever is loaded, driving whatever pass the chosen mechanism needs
@@ -224,6 +301,7 @@ pub fn discover_with(
                 table: FrameTable::Boundary(boundary),
                 frames: found,
                 thumbnail: None,
+                review: None,
             })
         }
         Framing::Thumbnail => {
@@ -239,7 +317,7 @@ pub fn discover_with(
             let length = format.height_dots(optical_dpi);
             info!(?format, length, "frame length");
 
-            let measured =
+            let (measured, geometry, columns) =
                 thumbnail::frames(session.capabilities(), &pass, samples, length, polarity)?;
             session.set_boundaries(&measured)?;
             let found = measured.frames.clone();
@@ -248,6 +326,11 @@ pub fn discover_with(
                 table: FrameTable::Boundary(measured),
                 frames: found,
                 thumbnail: Some(pass),
+                review: Some(ReviewContext {
+                    geometry,
+                    columns,
+                    perfs: None,
+                }),
             })
         }
         Framing::Address => {
@@ -257,6 +340,7 @@ pub fn discover_with(
                 table: FrameTable::Boundary(boundary),
                 frames: found,
                 thumbnail: None,
+                review: None,
             })
         }
         Framing::Perforation => {
@@ -277,7 +361,7 @@ pub fn discover_with(
             info!(?format, length, "frame length");
 
             let perfs = session.read_perforations()?;
-            let (measured, length) = thumbnail::frames_type2(
+            let (measured, geometry, columns) = thumbnail::frames_type2(
                 session.capabilities(),
                 &pass,
                 samples,
@@ -289,6 +373,7 @@ pub fn discover_with(
 
             let x_start = session.capabilities().address.x_axis.address_range.start;
             let x_boundary = session.capabilities().address.x_axis.boundary;
+            let length = geometry.dots(geometry.width());
             let found = measured
                 .frames
                 .iter()
@@ -299,6 +384,11 @@ pub fn discover_with(
                 table: FrameTable::BoundaryType2(measured),
                 frames: found,
                 thumbnail: Some(pass),
+                review: Some(ReviewContext {
+                    geometry,
+                    columns,
+                    perfs: Some(perfs),
+                }),
             })
         }
     }

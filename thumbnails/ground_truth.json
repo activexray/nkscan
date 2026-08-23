@@ -1,0 +1,237 @@
+{
+  "_readme": "Manually-verified frame placements for the thumbnails in this directory, to score boundaries::detect against instead of eyeballing annotated TIFFs. `frames` is each frame's start column; the frame is `length` columns wide, where length = format.height_dots(dpi) and dpi comes off the TIFF's own XResolution tag - neither is duplicated here so a re-scan at a different resolution doesn't go stale. Edit this with `scripts/annotate.py`, not by hand. Frame starts here come from examples/column_profile.rs's texture/density read, independent of detect()'s own dpi handling; `length` for scoring should still come from the TIFF's own XResolution tag at test time, read as RATIONAL (see examples/detect_frames.rs's `resolution()`), not assumed. Two files (*_overlapping_*) draw real frames that overlap on the film itself, so their entries keep detect()'s own columns as a lower-confidence reference rather than a fabricated split.",
+  "35mm_bw_6frames.tiff": {
+    "format": "f135",
+    "polarity": "negative",
+    "frames": [
+      2,
+      147,
+      290,
+      434,
+      578,
+      721
+    ],
+    "length": 139
+  },
+  "35mm_color_neg_5frames.tiff": {
+    "format": "f135",
+    "polarity": "negative",
+    "frames": [
+      3,
+      147,
+      291,
+      436,
+      578
+    ],
+    "length": 138
+  },
+  "35mm_color_neg_6frames.tiff": {
+    "format": "f135",
+    "polarity": "negative",
+    "frames": [
+      5,
+      148,
+      291,
+      436,
+      580,
+      724
+    ],
+    "length": 138
+  },
+  "35mm_color_neg_full_roll.tiff": {
+    "format": "f135",
+    "polarity": "negative",
+    "frames": [
+      0,
+      144,
+      287,
+      430,
+      573,
+      717,
+      860,
+      1003,
+      1146,
+      1289,
+      1433,
+      1576,
+      1719,
+      1862,
+      2006,
+      2149,
+      2292,
+      2435,
+      2579,
+      2722,
+      2865,
+      3008,
+      3152,
+      3295,
+      3438,
+      3581,
+      3725,
+      3868,
+      4011,
+      4154,
+      4298,
+      4441,
+      4584,
+      4727,
+      4871,
+      5014,
+      5157,
+      5300
+    ],
+    "note": "a whole roll fed through in one pass: 6104 columns, film to 5449 and holder past that. The wind is regular, so these are a least-squares ladder (pitch 143.246, first frame at 0.29) fitted over the frames the profile places unambiguously and then extended across the whole film span - residuals under 8 columns everywhere. Frames 1-4 are the leader end: 1 and 4 are unexposed base, 2 and 3 are thin but real. They are on the film and on the wind, so they count"
+  },
+  "35mm_color_neg_mising_frames.tiff": {
+    "format": "f135",
+    "polarity": "negative",
+    "frames": [
+      6,
+      149,
+      291,
+      434
+    ],
+    "note": "detect() reports 5 heavily-overlapping frames tiled across columns 6-560; the profile shows real content only at the ends of that span (6-130 and 430-570), flat unexposed base in between (density matches the confirmed gaps elsewhere in the file) - this strip has one frame's worth of film never exposed, not five real frames"
+  },
+  "6x45_bw_4frames.tiff": {
+    "format": "f645",
+    "polarity": "negative",
+    "frames": [
+      54,
+      214,
+      374,
+      534
+    ],
+    "length": 137
+  },
+  "6x45_color_neg_3frames.tiff": {
+    "format": "f645",
+    "polarity": "negative",
+    "frames": [
+      52,
+      212,
+      383
+    ],
+    "length": 140
+  },
+  "6x45_slide_4frames.tiff": {
+    "format": "f645",
+    "polarity": "positive",
+    "frames": [
+      50,
+      209,
+      372,
+      532
+    ]
+  },
+  "6x45_slide_dark_4frames.tiff": {
+    "format": "f645",
+    "polarity": "positive",
+    "frames": [
+      49,
+      213,
+      371,
+      536
+    ]
+  },
+  "6x6_bw_3frames.tiff": {
+    "format": "f66",
+    "polarity": "negative",
+    "frames": [
+      56,
+      262,
+      468
+    ],
+    "note": "frame 1 was placed at 120 here, at the first real texture. That is not its edge: the film's flat runs are 44-128, 239-267, 452-466 and 651-661, and 56/262/468 are the only columns that put a whole 183-wide frame between one flat run and the next. Frame 1 simply carries no exposure over its first 70 columns"
+  },
+  "6x6_bw_3frames_dense.tiff": {
+    "format": "f66",
+    "polarity": "negative",
+    "frames": [
+      60,
+      262,
+      477
+    ],
+    "note": "frame 1 was placed at 40, which is holder: the film starts at 44 and its first flat run is 44-56. Frames run gap to gap from 60, 243-261 and 660-669 being the flat runs that bracket them"
+  },
+  "6x6_bw_3frames_thin.tiff": {
+    "format": "f66",
+    "polarity": "negative",
+    "frames": [
+      56,
+      262,
+      467
+    ]
+  },
+  "6x6_color_neg_3frames.tiff": {
+    "format": "f66",
+    "polarity": "negative",
+    "frames": [
+      50,
+      250,
+      450
+    ]
+  },
+  "6x6_color_neg_overlapping_3frames.tiff": {
+    "format": "f66",
+    "polarity": "negative",
+    "frames": [
+      58,
+      211,
+      460
+    ],
+    "note": "overlapping by design (real under-advanced winding) - no clean gap to place a boundary against, kept detect()'s own columns as reference"
+  },
+  "6x6_slide_3frames.tiff": {
+    "format": "f66",
+    "polarity": "positive",
+    "frames": [
+      50,
+      260,
+      470
+    ]
+  },
+  "6x9_bw_2frames.tiff": {
+    "format": "f69",
+    "polarity": "negative",
+    "frames": [
+      55,
+      349
+    ]
+  },
+  "6x9_color_neg_2frames.tiff": {
+    "format": "f69",
+    "polarity": "negative",
+    "frames": [
+      50,
+      369
+    ]
+  },
+  "6x9_color_neg_overlapping_2frames.tiff": {
+    "format": "f69",
+    "polarity": "negative",
+    "frames": [
+      50,
+      294
+    ],
+    "note": "overlapping by design (real under-advanced winding) - no clean gap to place a boundary against, kept detect()'s own columns as reference"
+  },
+  "6x9_slide_2frames.tiff": {
+    "format": "f69",
+    "polarity": "positive",
+    "frames": [
+      62,
+      370
+    ]
+  },
+  "holga_bw_2frames.tiff": {
+    "format": "f66",
+    "polarity": "negative",
+    "frames": [
+      62,
+      238
+    ],
+    "note": "frame 2 was placed at 260, past the flat run at 215-268. 238 is the reading the film supports: it puts frame 2's far edge at 421, against the flat run at 422-435, and the two frames really do share 7 columns - this is a Holga, whose 6x6 mask is narrower than its wind"
+  }
+}

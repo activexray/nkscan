@@ -50,6 +50,7 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
         thumbnail: save_thumbnail,
         format,
         film,
+        review,
     } = args;
 
     // First grab the requested device, or the first one
@@ -148,7 +149,7 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
         let first = io::next_free(&basename);
 
         let bar = pass_bar("thumbnail");
-        let discovery =
+        let mut discovery =
             framing::discover_with(&mut session, format, film.into(), &mut samples, |p| {
                 bar.report(p);
                 ControlFlow::Continue(())
@@ -158,6 +159,19 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
         if save_thumbnail && let Some(pass) = &discovery.thumbnail {
             let path = io::write_thumbnail(&basename, first, &samples, pass)?;
             info!("wrote {}", path.display());
+        }
+
+        if review {
+            match crate::review::run(&mut session, &discovery, &samples)? {
+                crate::review::Outcome::Proceed(frames) => discovery.frames = frames,
+                crate::review::Outcome::Abort => {
+                    if !no_eject && session.eject()? {
+                        info!("Ejected");
+                    }
+                    info!("Review cancelled, nothing scanned");
+                    return Ok(());
+                }
+            }
         }
 
         // Select all or the requested subset of the frames to scan

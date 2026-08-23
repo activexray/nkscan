@@ -53,6 +53,13 @@ clap = { version = "4", features = ["derive"], optional = true }
 indicatif = { version = "0.18", optional = true }
 tiff = { version = "0.11", optional = true }
 moxcms = { version = "0.9", optional = true }
+# --review's inline thumbnail: kitty/iTerm2/sixel where the terminal offers
+# one, Unicode blocks otherwise, so nothing further has to detect which
+viuer = { version = "0.9", optional = true }
+image = { version = "0.25", optional = true }
+# --review's arrow-key nudge. Already in the tree via indicatif; named
+# directly since we read raw keys from it ourselves
+console = { version = "0.16", optional = true }
 
 
 [features]
@@ -63,6 +70,9 @@ cli = [
   "dep:indicatif",
   "dep:tiff",
   "dep:moxcms",
+  "dep:viuer",
+  "dep:image",
+  "dep:console",
 ]
 python = ["dep:pyo3", "dep:numpy", "dep:pyo3-stub-gen"]
 

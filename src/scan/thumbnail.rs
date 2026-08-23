@@ -40,6 +40,91 @@ pub fn available(caps: &Capabilities) -> bool {
         && caps.address.thumbnail_resolution.start > 0
 }
 
+/// What one column of a thumbnail becomes as a frame
+///
+/// Built once per strip from `boundaries::detect`'s converged length, and
+/// reused both for the frames it found and for whatever column and width an
+/// operator picks by hand afterward - `--review`'s whole reason to exist.
+/// Both `col` and `width` are thumbnail columns throughout, the same space
+/// `boundaries::detect` itself works in, not device dots. A pair that maps to
+/// nothing usable, on either mechanism, is `None` rather than a frame cut
+/// short: a stage address that does not exist is not a smaller frame.
+pub struct Geometry {
+    pitch: u32,
+    origin: u32,
+    end: u32,
+    /// The width this strip converged on, in thumbnail columns - what a
+    /// frame nobody touched still scans at
+    columns: u32,
+    /// Dots a device window's height has to be a whole number of, so a width
+    /// this picked can be quantized without needing `Capabilities` again
+    block: u32,
+    /// Rect case only: unused building a `FramePosition`
+    left: u32,
+    /// Rect case only: unused building a `FramePosition`
+    right_width: u32,
+}
+
+impl Geometry {
+    /// The width every frame this strip converged on shares, in thumbnail
+    /// columns - what a frame nobody touched still scans at
+    pub fn width(&self) -> u32 {
+        self.columns
+    }
+
+    /// `width` columns, grown to a whole number of device blocks - never
+    /// down, or a frame nudged narrower than one block silently vanishes
+    fn quantize(&self, width: u32) -> u32 {
+        let dots = width * self.pitch;
+        match self.block {
+            0 | 1 => dots,
+            block => dots.div_ceil(block) * block,
+        }
+    }
+
+    /// `width` columns, in the device dots a `FramePosition` needs to become
+    /// a `Rect` - the `BoundaryType2` mechanism's own frames carry no length,
+    /// only a shared one built once for the whole strip
+    pub fn dots(&self, width: u32) -> u32 {
+        self.quantize(width)
+    }
+
+    /// A frame's rect for the `Boundary` mechanism, `width` columns wide.
+    /// `None` past the axis
+    pub fn rect(&self, col: usize, width: u32) -> Option<Rect> {
+        let top = self.origin + col as u32 * self.pitch;
+        let length = self.quantize(width);
+        (top + length <= self.end).then(|| Rect {
+            top,
+            left: self.left,
+            bottom: top + length,
+            right: self.left + self.right_width,
+        })
+    }
+
+    /// A frame's registration for the `BoundaryType2` mechanism, `width`
+    /// columns wide. `None` past the axis, or where `perfs` has no reading at
+    /// `col` - the same warn-and-drop `frames_type2` already does for a
+    /// detected column
+    pub fn frame_position(&self, col: usize, width: u32, perfs: &PerfInformation) -> Option<FramePosition> {
+        let top = self.origin + col as u32 * self.pitch;
+        if top + self.quantize(width) > self.end {
+            // A column with no reading is one the stage cannot be sent to
+            return None;
+        }
+        match perfs.at(col) {
+            Some(perf) => Some(FramePosition::new(top, perf)),
+            None => {
+                // Past wherever the perforation table stopped: nothing to
+                // register this frame's stage position against, so unlike
+                // an unaddressable column this one is worth naming
+                warn!(col, top, "no perforation reading for this frame, dropped");
+                None
+            }
+        }
+    }
+}
+
 /// The frame table a thumbnail measures, 2-11-6
 ///
 /// `length` is the frame's extent along the feed, the film format, which
@@ -53,7 +138,7 @@ pub fn frames(
     samples: &Samples,
     length: u32,
     polarity: Polarity,
-) -> Result<Boundary, Error> {
+) -> Result<(Boundary, Geometry, Vec<usize>), Error> {
     let format = window::reachable_blocks(caps, length);
     framing::reachable(caps, format)?;
     let image = Image::new(&pass.layout, samples)?;
@@ -63,7 +148,8 @@ pub fn frames(
     let pitch = pass.layout.line_pitch.max(1);
     let origin = caps.address.y_axis.address_range.start;
     let end = caps.address.y_axis.address_range.last;
-    let (left, width) = opening(caps);
+    let (left, right_width) = opening(caps);
+    let block = window::block(caps);
 
     let found = boundaries::detect(&image, (format / pitch) as usize, polarity);
 
@@ -78,26 +164,36 @@ pub fn frames(
     let bleed = margin(format, found.pitch as u32 * pitch);
     let length = window::reachable_blocks(caps, format + 2 * window::whole_blocks(caps, bleed));
     framing::reachable(caps, length)?;
-    // Whatever the axis would not take comes off the margin, not the format
-    let margin = (length - format) / 2;
+    // Whatever the axis would not take comes off the margin, not the format.
+    // Kept in dots rather than rounded to a column first: a margin under one
+    // column wide would otherwise round away to nothing, and every frame
+    // would land that much later than it should, all in the same direction
+    let bleed = (length - format) / 2;
 
-    let frames: Vec<Rect> = found
+    let geometry = Geometry {
+        pitch,
+        origin,
+        end,
+        columns: length.div_ceil(pitch),
+        block,
+        left,
+        right_width,
+    };
+    // Placed to the dot, not through `Geometry::rect`'s column rounding - the
+    // column kept alongside each rect is only an approximation of where it
+    // landed, for a caller reviewing what was found to start editing from
+    let (columns, frames): (Vec<usize>, Vec<Rect>) = found
         .frames
         .iter()
-        // Off the top as well, so the frame stays centered on what was found
-        .map(|&col| {
-            (origin + col as u32 * pitch)
-                .saturating_sub(margin)
-                .max(origin)
+        .filter_map(|&col| {
+            let top = (origin + col as u32 * pitch).saturating_sub(bleed).max(origin);
+            let bottom = top + length;
+            (bottom <= end).then(|| {
+                let approx = (top - origin) / pitch;
+                (approx as usize, Rect { top, left, bottom, right: left + right_width })
+            })
         })
-        .filter(|top| top + length <= end)
-        .map(|top| Rect {
-            top,
-            left,
-            bottom: top + length,
-            right: left + width,
-        })
-        .collect();
+        .unzip();
 
     info!(
         frames = frames.len(),
@@ -108,7 +204,7 @@ pub fn frames(
     for (n, rect) in frames.iter().enumerate() {
         debug!(frame = n + 1, ?rect, "frame rect");
     }
-    Ok(Boundary { frames })
+    Ok((Boundary { frames }, geometry, columns))
 }
 
 pub fn frames_type2(
@@ -118,7 +214,7 @@ pub fn frames_type2(
     perf_info: &PerfInformation,
     length: u32,
     polarity: Polarity,
-) -> Result<(BoundaryType2, u32), Error> {
+) -> Result<(BoundaryType2, Geometry, Vec<usize>), Error> {
     // Whole readout blocks, and trimmed rather than refused where the format
     // is taller than the axis reaches
     let length = window::reachable_blocks(caps, length);
@@ -153,30 +249,29 @@ pub fn frames_type2(
         );
     }
 
-    // The frame table the detected boundaries and the perforation data come to
-    let frames: Vec<FramePosition> = found
+    let geometry = Geometry {
+        pitch,
+        origin,
+        end,
+        columns: length.div_ceil(pitch),
+        block: window::block(caps),
+        left: 0,
+        right_width: 0,
+    };
+
+    // The frame table the detected boundaries and the perforation data come
+    // to, kept alongside the columns they came from so a caller reviewing
+    // what was found can turn one back into a frame the same way this did
+    let (columns, frames): (Vec<usize>, Vec<FramePosition>) = found
         .frames
         .iter()
         .filter_map(|&col| {
-            let top = origin + col as u32 * pitch;
-            let perf = perf_info.at(col);
-            debug!(col, top, ?perf, "detected column");
-            if top + length > end {
-                // A column with no reading is one the stage cannot be sent to
-                return None;
-            }
-            match perf {
-                Some(perf) => Some(FramePosition::new(top, perf)),
-                None => {
-                    // Past wherever the perforation table stopped: nothing to
-                    // register this frame's stage position against, so unlike
-                    // an unaddressable column this one is worth naming
-                    warn!(col, top, "no perforation reading for this frame, dropped");
-                    None
-                }
-            }
+            debug!(col, perf = ?perf_info.at(col), "detected column");
+            geometry
+                .frame_position(col, geometry.width(), perf_info)
+                .map(|frame| (col, frame))
         })
-        .collect();
+        .unzip();
 
     info!(
         frames = frames.len(),
@@ -188,7 +283,7 @@ pub fn frames_type2(
         debug!(frame = n + 1, ?frame, "frame position");
     }
 
-    Ok((BoundaryType2 { frames }, length))
+    Ok((BoundaryType2 { frames }, geometry, columns))
 }
 
 /// Film to leave either side of a frame, in whatever units the format is given

@@ -141,7 +141,7 @@ pub fn write_frame(
 
 /// Where `channel` sits in the color buffer, which carries only the color
 /// channels of `pass.layout.channels`, in the same relative order
-fn plane_of(pass: &Pass, channel: Channel) -> Option<usize> {
+pub(crate) fn plane_of(pass: &Pass, channel: Channel) -> Option<usize> {
     pass.layout
         .colors()
         .position(|id| Channel::from(id) == channel)
@@ -150,7 +150,7 @@ fn plane_of(pass: &Pass, channel: Channel) -> Option<usize> {
 /// R, G, B whatever order the stream interleaves them in
 ///
 /// A unit that scans one channel calls it the default rather than green
-fn color_planes(pass: &Pass) -> Vec<usize> {
+pub(crate) fn color_planes(pass: &Pass) -> Vec<usize> {
     let color: Vec<usize> = [Channel::Red, Channel::Green, Channel::Blue]
         .into_iter()
         .filter_map(|c| plane_of(pass, c))

@@ -88,6 +88,17 @@ const THETA: f32 = 0.5;
 /// one, so a transport that under-advanced leaves two frames sharing film
 const MIN_PITCH: f32 = 0.75;
 
+/// The furthest apart a wind leaves two frames, as a fraction of the frame
+/// length. A spacing past this has a frame in it that showed nothing
+const MAX_PITCH: f32 = 1.4;
+
+/// How much of its own span a frame has to cover for the tiling to place one
+///
+/// Edges alone will otherwise pay for a frame: past the last picture on a
+/// strip the tiling packs frames into unexposed film, each buying its place
+/// with one end against the picture behind it
+const BODY: f32 = 0.4;
+
 /// What an edge at each end of a frame is worth, as a fraction of the frame
 /// length. Large, because within a picture the body score barely moves
 const EDGE_BONUS: f32 = 1.0;
@@ -99,9 +110,31 @@ const FRAME_COST: f32 = 0.08;
 /// this. Narrow enough to resolve the gap a 35mm wind leaves
 const EDGE_REACH: usize = 24;
 
-/// How far a spacing may sit off a whole number of pitches and still be even:
-/// the pitch over this
+/// How far a frame may sit off the wind and still be on it: the pitch over
+/// this
 const EVEN: usize = 10;
+
+/// How far the wind may be fitted off the spacing it was seeded from
+///
+/// Small. The seed is a spacing that was really measured, and a fit free to
+/// move off it will find a wind that explains any three frames at all
+const DRIFT: f32 = 0.05;
+
+/// How far either side of the nominal length a strip's own edges may be
+/// trusted over it, as a fraction of it
+///
+/// Generous: real gates run a few percent off nominal on 35mm and rather more
+/// on medium format, camera to camera. This is the entire safety net on how
+/// far a correction may move `length` - not a secondary check
+const GATE: f32 = 0.10;
+
+/// The fewest frames that have to sit on the wind before the rest of the strip
+/// is laid out from it, and what share of the frames found they have to be
+const ANCHORS: usize = 3;
+const SHARE: f32 = 2.0 / 3.0;
+
+/// How much of a wind position has to be film for a frame to go there
+const ON_FILM: f32 = 0.5;
 
 // ----- what comes out
 
@@ -132,6 +165,10 @@ pub struct Detected {
     /// Columns from one frame to the next, less than a frame where two
     /// overlap. 0 with nothing to measure it from
     pub pitch: usize,
+    /// The frame length this strip converged on. Equal to the caller's
+    /// nominal length unless enough of the strip's own edges agreed on a
+    /// different one
+    pub length: usize,
 }
 
 /// The frames in a thumbnail
@@ -161,10 +198,49 @@ pub fn detect(image: &Image, length: usize, polarity: Polarity) -> Detected {
         })
         .collect();
 
-    let min_pitch = ((length as f32 * MIN_PITCH) as usize).max(1);
-    let starts = tile(&picture, &gap, length, min_pitch);
-    let pitch = pitch(&starts);
-    let frames = ladder(&starts, pitch);
+    let sums = Sums::new(&picture, &gap);
+    let place = |length: usize| {
+        let min_pitch = ((length as f32 * MIN_PITCH) as usize).max(1);
+        let starts = tile(&sums, length, min_pitch);
+        let wind = Wind::fit(&starts, length);
+        (starts, wind)
+    };
+
+    let (starts, wind) = place(length);
+
+    // A real gate is not always the nominal format: where enough of the
+    // strip's own edges agree, refit against the length they measure rather
+    // than the one the caller gave. Second-guessed only if the second pass
+    // also earns the strip's trust - otherwise the first pass stands
+    let (length, starts, wind) = match wind.as_ref().filter(|w| w.carries(starts.len())) {
+        Some(w) => match recalibrate(&sums, w, &starts, length) {
+            Some(corrected) if corrected != length => {
+                let (starts2, wind2) = place(corrected);
+                match wind2.as_ref().filter(|w2| w2.carries(starts2.len())) {
+                    Some(_) => (corrected, starts2, wind2),
+                    None => (length, starts, wind),
+                }
+            }
+            _ => (length, starts, wind),
+        },
+        None => (length, starts, wind),
+    };
+
+    // A transport advances by the same amount every time, so the frames it
+    // left are a ladder. Where enough of them sit on one, it is what places
+    // the rest: an unexposed frame reads as the film between two frames
+    // because that is what it is, and one at either end of the pass has
+    // nothing beyond it to be found by
+    let (frames, pitch) = match wind {
+        Some(wind) => {
+            let frames = match wind.carries(starts.len()) {
+                true => wind.ladder(&film, length),
+                false => wind.fill(&starts),
+            };
+            (frames, wind.pitch.round() as usize)
+        }
+        None => (starts, 0),
+    };
 
     debug!(
         ?polarity,
@@ -173,7 +249,7 @@ pub fn detect(image: &Image, length: usize, polarity: Polarity) -> Detected {
         found = frames.len(),
         "measured the strip"
     );
-    Detected { frames, pitch }
+    Detected { frames, pitch, length }
 }
 
 // ----- what the film itself reads at
@@ -545,6 +621,43 @@ impl Sums {
     }
 }
 
+/// The end column near `start + length` that scores best as a real edge:
+/// picture on the inside, film with nothing on it outside
+///
+/// Searched within `tolerance` either side rather than assumed. `None` where
+/// nothing in the window scores as an edge at all
+fn locate_end(sums: &Sums, start: usize, length: usize, tolerance: usize, reach: usize) -> Option<usize> {
+    let nominal = start + length;
+    let lo = nominal.saturating_sub(tolerance).max(start + 1);
+    let hi = (nominal + tolerance).min(sums.cols);
+    (lo..=hi)
+        .map(|end| (end, sums.edge((end.saturating_sub(reach), end), (end, end + reach))))
+        .filter(|&(_, score)| score > 0.0)
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(end, _)| end)
+}
+
+/// What the strip's own edges say the frame length is, over the nominal one
+///
+/// Only the anchors the fit already trusts, and only where enough of them
+/// measure something conclusive. `None` leaves `length` exactly as given
+fn recalibrate(sums: &Sums, wind: &Wind, starts: &[usize], length: usize) -> Option<usize> {
+    let tolerance = ((length as f32 * GATE) as usize).max(1);
+    let reach = (length / EDGE_REACH).max(1);
+
+    let mut measured: Vec<usize> = starts
+        .iter()
+        .zip(&wind.on)
+        .filter(|&(_, &on)| on)
+        .filter_map(|(&start, _)| locate_end(sums, start, length, tolerance, reach).map(|end| end - start))
+        .collect();
+    if measured.len() < ANCHORS {
+        return None;
+    }
+    measured.sort_unstable();
+    Some(measured[measured.len().saturating_sub(1) / 2])
+}
+
 /// Where to put the frames: the best whole arrangement, not the best edges one
 /// at a time
 ///
@@ -552,13 +665,12 @@ impl Sums {
 /// gap costs, and a frame is worth extra for an edge at each end. Two frames
 /// may start closer than a frame is long; the film they share counts once, or
 /// the score would rise for packing frames in.
-fn tile(picture: &[f32], gap: &[f32], length: usize, min_pitch: usize) -> Vec<usize> {
-    let cols = picture.len();
+fn tile(sums: &Sums, length: usize, min_pitch: usize) -> Vec<usize> {
+    let cols = sums.cols;
     if length == 0 || cols < length {
         return Vec::new();
     }
 
-    let sums = Sums::new(picture, gap);
     let last = cols - length;
     let reach = (length / EDGE_REACH).max(1);
     let bonus = EDGE_BONUS * length as f32;
@@ -576,6 +688,17 @@ fn tile(picture: &[f32], gap: &[f32], length: usize, min_pitch: usize) -> Vec<us
         let edges = bonus * sums.edges(start, end, reach);
         let alone = sums.worth(start, end) + edges - cost;
 
+        // Nothing here is a frame at all, whatever its ends look like
+        if sums.mean(&sums.covered, (start, end)) < BODY {
+            best[start] = f32::MIN;
+            prior[start] = usize::MAX;
+            highest[start] = match start > 0 {
+                true => highest[start - 1],
+                false => (0.0, usize::MAX),
+            };
+            continue;
+        }
+
         // On its own, or first after a frame that ended before this one began
         let (mut score, mut from) = (alone, usize::MAX);
         if start >= length {
@@ -589,6 +712,9 @@ fn tile(picture: &[f32], gap: &[f32], length: usize, min_pitch: usize) -> Vec<us
         if start >= min_pitch {
             let first = (start + 1).saturating_sub(length);
             for (prev, before) in (first..).zip(&best[first..=start - min_pitch]) {
+                if *before <= 0.0 {
+                    continue;
+                }
                 let shared = before + sums.worth(prev + length, end) + edges - cost;
                 if shared > score {
                     (score, from) = (shared, prev);
@@ -619,51 +745,187 @@ fn tile(picture: &[f32], gap: &[f32], length: usize, min_pitch: usize) -> Vec<us
     out
 }
 
-/// Columns from one frame to the next
+/// The regular advance the transport left, fitted to the frames that were
+/// found
 ///
-/// The middle spacing, which one start in the wrong place cannot move. A frame
-/// that showed nothing makes a spacing a multiple too big and two that overlap
-/// make one too small, so of two middles keep the lower.
-fn pitch(columns: &[usize]) -> usize {
-    let mut gaps: Vec<usize> = columns.windows(2).map(|pair| pair[1] - pair[0]).collect();
+/// A whole roll drifts: a wind that is a fraction of a column out of a whole
+/// number is a frame out by the end of the roll, so this is fitted as a line
+/// rather than counted in columns.
+struct Wind {
+    /// Where the frame the fit is indexed from starts. Not a column, and not
+    /// always on the strip: the ladder is placed from it either way
+    first: f32,
+    /// Columns from one frame to the next
+    pitch: f32,
+    /// How many of the frames it was fitted to came out on it
+    anchors: usize,
+    /// Which of the starts it was fitted to settled onto it, aligned with
+    /// them. What a recalibration measures against, rather than deciding
+    /// that a second way
+    on: Vec<bool>,
+}
+
+impl Wind {
+    /// The wind a run of starts sits on, if it is long enough to say
+    ///
+    /// Fitted to whichever of them agree and refitted without the rest, so a
+    /// frame in the wrong place does not tilt the ladder the others are on.
+    fn fit(starts: &[usize], length: usize) -> Option<Self> {
+        if starts.len() < 2 || length == 0 {
+            return None;
+        }
+        let seed = seed(starts, length);
+        let (lowest, highest) = (seed * (1.0 - DRIFT), seed * (1.0 + DRIFT));
+
+        let mut wind = Self {
+            first: starts[0] as f32,
+            pitch: seed,
+            anchors: starts.len(),
+            on: Vec::new(),
+        };
+        let mut on = vec![true; starts.len()];
+        // Twice around is usually enough; a run that will not settle is one
+        // the caller keeps as it was found anyway
+        for _ in 0..8 {
+            let places = wind.places(starts);
+            wind.pitch = slope(&places, &on).unwrap_or(wind.pitch).clamp(lowest, highest);
+            wind.first = offset(&places, &on, wind.pitch).unwrap_or(wind.first);
+
+            let slack = (wind.pitch / EVEN as f32).max(2.0);
+            let settled: Vec<bool> = places
+                .iter()
+                .map(|&(k, start)| (start - (wind.first + wind.pitch * k)).abs() <= slack)
+                .collect();
+            let done = settled == on;
+            on = settled;
+            if done {
+                break;
+            }
+        }
+
+        wind.anchors = on.iter().filter(|&&on| on).count();
+        wind.on = on;
+        Some(wind)
+    }
+
+    /// Which frame of the wind each start is, against the column it is at
+    ///
+    /// Counted from one start to the next rather than from the first, so a
+    /// spacing that spans a frame nothing showed in leaves a place for it.
+    fn places(&self, starts: &[usize]) -> Vec<(f32, f32)> {
+        let mut out = Vec::with_capacity(starts.len());
+        let mut k = 0.0;
+        for pair in starts.windows(2) {
+            out.push((k, pair[0] as f32));
+            k += ((pair[1] - pair[0]) as f32 / self.pitch).round().max(1.0);
+        }
+        out.push((k, *starts.last().expect("checked non-empty") as f32));
+        out
+    }
+
+    /// Whether enough of the strip is on the wind for it to place the rest
+    fn carries(&self, found: usize) -> bool {
+        self.anchors >= ANCHORS.max((found as f32 * SHARE).ceil() as usize)
+    }
+
+    /// Where the frame `k` winds along starts, which is off the strip either
+    /// way at the ends
+    fn at(&self, k: i32) -> f32 {
+        self.first + self.pitch * k as f32
+    }
+
+    /// Every place along the wind that has film in it
+    ///
+    /// This is what puts a frame on unexposed film, and what carries the
+    /// ladder past the last frame anything showed in at either end of the
+    /// pass.
+    fn ladder(&self, film: &[bool], length: usize) -> Vec<usize> {
+        let cols = film.len();
+        let mut on = vec![0usize; cols + 1];
+        for x in 0..cols {
+            on[x + 1] = on[x] + usize::from(film[x]);
+        }
+
+        let reaches = |k: i32| {
+            // A frame at either end of the pass may be half off it. What is
+            // there is still a frame, so long as enough of it is
+            let place = self.at(k);
+            let start = place.max(0.0) as usize;
+            let end = ((place + length as f32).max(0.0) as usize).min(cols);
+            (end > start).then(|| (start, end))
+        };
+
+        let least = (length as f32 * ON_FILM) as usize;
+        let first = (-self.first / self.pitch).floor() as i32 - 1;
+        let last = ((cols as f32 - self.first) / self.pitch).ceil() as i32 + 1;
+        (first..=last)
+            .filter_map(reaches)
+            .filter(|&(start, end)| on[end] - on[start] >= least)
+            .map(|(start, _)| start)
+            .collect()
+    }
+
+    /// The starts as they were found, plus the frames the wind says they
+    /// skipped over
+    ///
+    /// For a run too short or too uneven to lay out from: an unexposed frame
+    /// between two that showed something is still a whole wind away from each.
+    fn fill(&self, starts: &[usize]) -> Vec<usize> {
+        let slack = (self.pitch / EVEN as f32).max(2.0);
+        let mut out = vec![starts[0]];
+        for pair in starts.windows(2) {
+            let apart = (pair[1] - pair[0]) as f32;
+            let winds = (apart / self.pitch).round();
+            if winds >= 2.0 && (apart / winds - self.pitch).abs() <= slack {
+                let step = apart / winds;
+                out.extend((1..winds as usize).map(|n| pair[0] + (step * n as f32).round() as usize));
+            }
+            out.push(pair[1]);
+        }
+        out
+    }
+}
+
+/// The wind to fit from, before any frame has been placed on it
+///
+/// The middle spacing, which one start in the wrong place cannot move, brought
+/// down to what the format leaves room for: on a strip where every other frame
+/// was unexposed, every spacing measures two winds.
+fn seed(starts: &[usize], length: usize) -> f32 {
+    let mut gaps: Vec<usize> = starts.windows(2).map(|pair| pair[1] - pair[0]).collect();
     gaps.sort_unstable();
-    gaps.get(gaps.len().saturating_sub(1) / 2)
-        .copied()
-        .unwrap_or(0)
+    let middle = gaps[(gaps.len() - 1) / 2] as f32;
+    let winds = (middle / (length as f32 * MAX_PITCH)).ceil().max(1.0);
+    middle / winds
 }
 
-/// Every frame the run of starts accounts for, including the ones it skips
-///
-/// An unexposed frame reads as the film between two frames, because that is
-/// what it is. Only an even run says one is missing: a spacing that is a
-/// multiple of the wind has a frame in it. A slipped transport or a pair of
-/// overlapping frames says nothing, and nothing is filled in.
-fn ladder(columns: &[usize], pitch: usize) -> Vec<usize> {
-    let Some(&first) = columns.first() else {
-        return Vec::new();
-    };
-    if pitch == 0 || !even(columns, pitch) {
-        return columns.to_vec();
+/// Least squares through the places that are on the wind
+fn slope(places: &[(f32, f32)], on: &[bool]) -> Option<f32> {
+    let kept = || places.iter().zip(on).filter(|(_, on)| **on).map(|(p, _)| *p);
+    let count = kept().count();
+    if count < 2 {
+        return None;
     }
-
-    let mut out = vec![first];
-    for pair in columns.windows(2) {
-        let apart = (pair[1] - pair[0] + pitch / 2) / pitch;
-        out.extend((1..apart).map(|n| pair[0] + n * pitch));
-        out.push(pair[1]);
+    let mean = |pick: fn(&(f32, f32)) -> f32| kept().map(|p| pick(&p)).sum::<f32>() / count as f32;
+    let (k, start) = (mean(|p| p.0), mean(|p| p.1));
+    let spread: f32 = kept().map(|p| (p.0 - k) * (p.0 - k)).sum();
+    match spread > 0.0 {
+        true => Some(kept().map(|p| (p.0 - k) * (p.1 - start)).sum::<f32>() / spread),
+        false => None,
     }
-    out
 }
 
-/// Whether every spacing is a whole number of `pitch`, give or take a drift of
-/// a few columns
-fn even(columns: &[usize], pitch: usize) -> bool {
-    let slack = (pitch / EVEN).max(1);
-    columns.windows(2).all(|pair| {
-        let apart = pair[1] - pair[0];
-        let whole = ((apart + pitch / 2) / pitch).max(1);
-        apart.abs_diff(whole * pitch) <= slack
-    })
+/// Where the wind starts, as the middle of what each place puts it at: one
+/// place well off it cannot move a median
+fn offset(places: &[(f32, f32)], on: &[bool], pitch: f32) -> Option<f32> {
+    let mut firsts: Vec<f32> = places
+        .iter()
+        .zip(on)
+        .filter(|(_, on)| **on)
+        .map(|((k, start), _)| start - pitch * k)
+        .collect();
+    firsts.sort_by(f32::total_cmp);
+    firsts.get(firsts.len().saturating_sub(1) / 2).copied()
 }
 
 #[cfg(test)]
@@ -714,6 +976,10 @@ mod tests {
     struct Strip {
         feed: usize,
         length: usize,
+        /// What is passed to `detect()` as the nominal length, when it should
+        /// differ from the true width frames are rendered at. `None` uses
+        /// `length`
+        nominal: Option<usize>,
         polarity: Polarity,
         frames: Vec<usize>,
         flat: Option<usize>,
@@ -730,6 +996,7 @@ mod tests {
             Self {
                 feed,
                 length,
+                nominal: None,
                 polarity,
                 frames,
                 flat: None,
@@ -769,7 +1036,7 @@ mod tests {
             let samples = self.render();
             let layout = Layout::single_line(SENSOR as u32, self.feed as u32, vec![1, 2, 3]);
             let image = Image::new(&layout, &samples).expect("the buffer is the layout's size");
-            super::detect(&image, self.length, self.polarity)
+            super::detect(&image, self.nominal.unwrap_or(self.length), self.polarity)
         }
 
         fn tops(&self) -> Vec<usize> {
@@ -795,7 +1062,25 @@ mod tests {
             let found = strip.detect();
             close(&found.frames, &[30, 162, 294, 426], 2);
             assert_eq!(found.pitch, 132, "{polarity:?}");
+            assert_eq!(found.length, 120, "{polarity:?}");
         }
+    }
+
+    /// A real gate is not the nominal format: the second pass finds the
+    /// length the strip's own edges say, not just the one it was told
+    #[test]
+    fn a_wrong_nominal_length_is_corrected_from_the_strip_itself() {
+        let true_length = 128;
+        let mut strip = Strip::new(vec![30, 200, 370, 540, 710], true_length, Polarity::Positive);
+        strip.nominal = Some(120); // ~7% short, within GATE
+
+        let found = strip.detect();
+        close(&found.frames, &[30, 200, 370, 540, 710], 3);
+        assert!(
+            found.length.abs_diff(true_length) <= 4,
+            "wanted a length near {true_length}, got {}",
+            found.length
+        );
     }
 
     /// The failure this rewrite is for: the bare gate is the largest step in
@@ -871,6 +1156,7 @@ mod tests {
         let strip = Strip::new(vec![30, 130, 294], 120, Polarity::Negative);
         let found = strip.detect();
         assert_eq!(found.frames.len(), 3, "{:?}", found.frames);
+        assert_eq!(found.length, 120);
     }
 
     #[test]

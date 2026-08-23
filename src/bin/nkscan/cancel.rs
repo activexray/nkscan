@@ -1,28 +1,29 @@
 //! A Ctrl-c the rest of the program can check for and stop at its own next
-//! safe point, rather than the default that kills wherever it happens to be
+//! safe point, instead of the default that kills wherever it happens to be.
 //!
-//! That matters here specifically: aborting a stage move mid-motion grinds
-//! the mechanism until a power cycle, and Rust's default SIGINT handling
-//! skips `Drop` entirely, so `Session`'s own cleanup never runs either. A
-//! move already in flight has nothing to check this against and always runs
-//! to completion, which is what keeps this safe rather than just quieter.
+//! A stage move in flight has no checkpoint and always finishes; aborting
+//! one mid-motion grinds the mechanism until a power cycle. A repeated
+//! Ctrl-c does not force an exit for the same reason.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use tracing::warn;
+use std::{
+    io::{IsTerminal, Write, stderr},
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 static REQUESTED: AtomicBool = AtomicBool::new(false);
 
-/// Catch Ctrl-c once. A second one forces an immediate exit, for whatever
-/// has no checkpoint of its own to reach - a blocked stdin read, or a
-/// single device call already past any budget worth waiting out
+/// Catch Ctrl-c and note it happened
 pub fn install() {
-    // Nothing to fall back to if this fails beyond the platform default, and
-    // that default (kill wherever it happens to be) is the thing this exists
-    // to avoid - not worth refusing to start the program over
     let _ = ctrlc::set_handler(|| {
-        if REQUESTED.swap(true, Ordering::SeqCst) {
-            warn!("Ctrl-c again: stopping now, whatever the unit was doing");
-            std::process::exit(130);
+        if !REQUESTED.swap(true, Ordering::SeqCst) {
+            let mut err = stderr().lock();
+            // The terminal has already echoed `^C` onto whatever line the bars
+            // were drawing. Wind back over it so the notice replaces it rather
+            // than hanging off the end of a half-drawn bar
+            if err.is_terminal() {
+                let _ = err.write_all(b"\r\x1b[2K");
+            }
+            let _ = writeln!(err, "stopping at the next safe point, this can take a moment");
         }
     });
 }

@@ -1,7 +1,7 @@
 use clap::Parser;
 use cli::Cli;
 use nkscan::device;
-use std::io::{IsTerminal, stdout};
+use std::io::{IsTerminal, stderr};
 use tracing_subscriber::EnvFilter;
 
 mod cancel;
@@ -10,6 +10,7 @@ mod dump;
 mod eject;
 mod io;
 mod mono;
+mod progress;
 mod scan;
 
 // Legacy windows command prompt doesn't interpret ANSI escapes until a process opts in via SetConsoleMode.
@@ -53,7 +54,10 @@ fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| EnvFilter::new(format!("{},nusb=warn", cli.log))),
         )
         .with_target(false)
-        .with_ansi(stdout().is_terminal()) // Only emit color when stdout is a real terminal
+        // The bars and the log share stderr, so that is what decides both the
+        // color and which stream a line has to be sequenced against
+        .with_ansi(stderr().is_terminal())
+        .with_writer(progress::Writer)
         .init();
 
     // Perform the requested CLI action
@@ -63,7 +67,12 @@ fn main() -> anyhow::Result<()> {
             println!("Attached scanners:");
             devs.iter().for_each(|x| println!("{x}"));
         }
-        cli::Action::Scan(args) => scan::run(args)?,
+        cli::Action::Scan(args) => {
+            let outcome = scan::run(args);
+            // A pass that ended early still has its bar drawn
+            progress::clear();
+            outcome?
+        }
         cli::Action::Dump(args) => dump::run(args)?,
         cli::Action::Eject(args) => eject::run(args)?,
     }

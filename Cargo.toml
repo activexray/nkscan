@@ -25,26 +25,18 @@ thiserror = "2"
 bitflags = "2"
 nusb = "0.2"
 tracing = "0.1"
-# dust.rs: SIMD lanes for the density transforms, and the thread pool every
-# whole-plane pass fans out over
 wide = "1"
-rayon = "1.12.0"
+rayon = "1"
 
 # Python library dependencies
-#
-# abi3 so CI builds one wheel per platform rather than one per interpreter
 pyo3 = { version = "0.29", optional = true, features = ["abi3-py313"] }
-# Tracks pyo3's version; the pairing is what makes the zero-copy handoff sound
 numpy = { version = "0.29", optional = true }
-# Generates nkscan.pyi from the bindings, so the two cannot drift
-# infer_signature is what turns a default into its actual repr rather than `...`; the rest of the
-# crate's defaults are type support for crates this does not use
 pyo3-stub-gen = { version = "0.23", optional = true, default-features = false, features = [
   "numpy",
   "infer_signature",
 ] }
 
-# The CLI stack, which a library consumer has no use for
+# cli deps
 anyhow = { version = "1", optional = true }
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
@@ -53,6 +45,7 @@ clap = { version = "4", features = ["derive"], optional = true }
 indicatif = { version = "0.18", optional = true }
 tiff = { version = "0.11", optional = true }
 moxcms = { version = "0.9", optional = true }
+ctrlc = { version = "3", optional = true }
 
 
 [features]
@@ -63,6 +56,7 @@ cli = [
   "dep:indicatif",
   "dep:tiff",
   "dep:moxcms",
+  "dep:ctrlc",
 ]
 python = ["dep:pyo3", "dep:numpy", "dep:pyo3-stub-gen"]
 

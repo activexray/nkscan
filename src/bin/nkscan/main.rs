@@ -4,6 +4,7 @@ use nkscan::device;
 use std::io::{IsTerminal, stdout};
 use tracing_subscriber::EnvFilter;
 
+mod cancel;
 mod cli;
 mod dump;
 mod eject;
@@ -38,6 +39,7 @@ fn enable_ansi_support() {}
 
 fn main() -> anyhow::Result<()> {
     enable_ansi_support();
+    cancel::install();
 
     let cli = Cli::parse();
 

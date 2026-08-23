@@ -852,7 +852,7 @@ impl Wind {
             let place = self.at(k);
             let start = place.max(0.0) as usize;
             let end = ((place + length as f32).max(0.0) as usize).min(cols);
-            (end > start).then(|| (start, end))
+            (end > start).then_some((start, end))
         };
 
         let least = (length as f32 * ON_FILM) as usize;

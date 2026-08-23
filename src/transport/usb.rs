@@ -87,6 +87,14 @@ impl UsbTransport {
         })
     }
 
+    /// Ask the device to reset itself at the USB level, forcing it to
+    /// re-enumerate. Invalidates any `DeviceInfo`/`UsbTransport` already open
+    /// against it - the caller has to look the device up fresh afterward
+    pub fn reset(info: DeviceInfo) -> io::Result<()> {
+        info.open().wait()?.reset().wait()?;
+        Ok(())
+    }
+
     /// Write `bytes` to the Bulk Out endpoint
     fn write_out(&mut self, bytes: &[u8], timeout: Duration) -> Result<(), Error> {
         self.ep_out

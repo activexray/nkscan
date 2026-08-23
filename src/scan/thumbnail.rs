@@ -67,6 +67,11 @@ pub fn frames(
 
     let found = boundaries::detect(&image, (format / pitch) as usize, polarity);
 
+    // The strip's own gate, where enough of it was found to say - a real one
+    // is not always the nominal format
+    let format = window::reachable_blocks(caps, found.length as u32 * pitch);
+    framing::reachable(caps, format)?;
+
     // A frame cut to the format exactly would sometimes clip the picture, since
     // a column is a third of a millimeter. A little film either side takes that
     // slack off the gap instead, and leaves an edge to see the frame against
@@ -113,7 +118,7 @@ pub fn frames_type2(
     perf_info: &PerfInformation,
     length: u32,
     polarity: Polarity,
-) -> Result<BoundaryType2, Error> {
+) -> Result<(BoundaryType2, u32), Error> {
     // Whole readout blocks, and trimmed rather than refused where the format
     // is taller than the axis reaches
     let length = window::reachable_blocks(caps, length);
@@ -129,13 +134,22 @@ pub fn frames_type2(
 
     let found = boundaries::detect(&image, (length / pitch) as usize, polarity);
 
-    // A detected column indexes the perforation table directly, so a table that
-    // does not run the length of the pass is not the one this pass produced
+    // The strip's own gate, where enough of it was found to say - a real one
+    // is not always the nominal format
+    let length = window::reachable_blocks(caps, found.length as u32 * pitch);
+    framing::reachable(caps, length)?;
+
+    // A detected column indexes the perforation table directly. The table
+    // commonly falls short of the pass - the unit stops counting perforations
+    // past the last one on the strip, so bare leader or trailer beyond it goes
+    // uncovered without that meaning anything is wrong - but a frame whose
+    // column falls in that gap has no registration to send the unit for it
+    // and drops below, so this is only context for that, not itself the fault
     if perf_info.perfs.len() != image.cols {
-        warn!(
+        debug!(
             perfs = perf_info.perfs.len(),
             columns = image.cols,
-            "the perforation table does not cover the thumbnail line for line"
+            "the perforation table does not run the length of the thumbnail pass"
         );
     }
 
@@ -147,10 +161,19 @@ pub fn frames_type2(
             let top = origin + col as u32 * pitch;
             let perf = perf_info.at(col);
             debug!(col, top, ?perf, "detected column");
-            match top + length <= end {
+            if top + length > end {
                 // A column with no reading is one the stage cannot be sent to
-                true => Some(FramePosition::new(top, perf?)),
-                false => None,
+                return None;
+            }
+            match perf {
+                Some(perf) => Some(FramePosition::new(top, perf)),
+                None => {
+                    // Past wherever the perforation table stopped: nothing to
+                    // register this frame's stage position against, so unlike
+                    // an unaddressable column this one is worth naming
+                    warn!(col, top, "no perforation reading for this frame, dropped");
+                    None
+                }
             }
         })
         .collect();
@@ -165,7 +188,7 @@ pub fn frames_type2(
         debug!(frame = n + 1, ?frame, "frame position");
     }
 
-    Ok(BoundaryType2 { frames })
+    Ok((BoundaryType2 { frames }, length))
 }
 
 /// Film to leave either side of a frame, in whatever units the format is given

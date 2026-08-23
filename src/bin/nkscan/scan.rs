@@ -4,7 +4,7 @@
 //! take the pass. What that costs is a stage move each way, so it is done once
 //! per frame rather than once per channel.
 
-use crate::{cli, io};
+use crate::{cancel, cli, io};
 use anyhow::{anyhow, bail};
 use indicatif::{ProgressBar, ProgressStyle};
 use nkscan::{
@@ -35,6 +35,19 @@ const SPINNER_TICK: Duration = Duration::from_millis(120);
 
 /// Scan what the flags ask for
 pub fn run(args: cli::Scan) -> anyhow::Result<()> {
+    // Every checkpoint below reports a Ctrl-c the same way the library
+    // already reports a cancelled pass, so this is the one place that turns
+    // it back into a clean stop rather than a failure
+    match run_cancellable(args) {
+        Err(e) if matches!(e.downcast_ref::<Error>(), Some(Error::Cancelled)) => {
+            info!("Cancelled");
+            Ok(())
+        }
+        other => other,
+    }
+}
+
+fn run_cancellable(args: cli::Scan) -> anyhow::Result<()> {
     let cli::Scan {
         device,
         basename,
@@ -62,7 +75,7 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
     .resolve(&devices)?;
 
     // Start up a scan session
-    let mut session = Session::open(device.open()?)?;
+    let mut session = device::connect(device)?;
     info!("Connected to scanner");
 
     // Silver grains stop infrared as they stop light, so the mask a
@@ -135,6 +148,11 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
 
     // A strip at a time until the operator stops feeding them
     loop {
+        // Nothing is moving between strips, so this is always safe to act on
+        if cancel::requested() {
+            return Err(Error::Cancelled.into());
+        }
+
         // Only to warn early if --thumbnail would save nothing; discover_with
         // resolves --format itself, against whichever mechanism this picks
         let framing = Framing::choose(session.capabilities());
@@ -151,7 +169,11 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
         let discovery =
             framing::discover_with(&mut session, format, film.into(), &mut samples, |p| {
                 bar.report(p);
-                ControlFlow::Continue(())
+                if cancel::requested() {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
             })?;
         bar.finish_and_clear();
 
@@ -182,6 +204,12 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
 
         // Scan each frame
         for (n, frame) in selected_frames.into_iter().enumerate() {
+            // Nothing is moving between frames either - the stage only
+            // starts heading for the next one once this loop continues
+            if cancel::requested() {
+                return Err(Error::Cancelled.into());
+            }
+
             // Lazy, and at most one live at a time: metering may not run at
             // all (a locked exposure), and indicatif has no idea what to do
             // with two bars neither owns unless one finishes before the next starts
@@ -220,7 +248,11 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
                             bar.report(p);
                         }
                     }
-                    ControlFlow::Continue(())
+                    if cancel::requested() {
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
+                    }
                 },
             )?;
             if let Some(bar) = meter_bar {
@@ -337,11 +369,21 @@ fn waiting(session: &mut Session, take_in: bool) -> Result<bool, Error> {
     }
 }
 
+/// [`Session::refresh`], tolerating the medium-not-present it can itself hit:
+/// a strip feeder's gate sits empty between strips, and that is the state this
+/// is called from a loop to wait out, not a failure of the refresh
+fn refresh_while_empty(session: &mut Session) -> Result<(), Error> {
+    match session.refresh() {
+        Ok(()) | Err(Error::Media(_)) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Wait until a holder is loaded, then put the unit in a state to scan from
 fn wait_for_film(session: &mut Session, prompt: &str, take_in: bool) -> anyhow::Result<()> {
     // An eject leaves what we know about the holder behind, so ask again before
     // believing anything is in there
-    session.refresh()?;
+    refresh_while_empty(session)?;
 
     if !waiting(session, take_in)? {
         // The spinner is the affordance on a terminal, and hidden anywhere else, so the log says it too
@@ -350,8 +392,12 @@ fn wait_for_film(session: &mut Session, prompt: &str, take_in: bool) -> anyhow::
         spinner.set_message(format!("{prompt}. Ctrl-c to stop"));
         spinner.enable_steady_tick(SPINNER_TICK);
         loop {
+            // Nothing is moving while this waits, so stopping here is always safe
+            if cancel::requested() {
+                return Err(Error::Cancelled.into());
+            }
             std::thread::sleep(HOLDER_POLL);
-            session.refresh()?;
+            refresh_while_empty(session)?;
             // Retrying the load is what picks up a supply that was refilled
             if waiting(session, take_in)? {
                 spinner.finish_and_clear();
@@ -365,7 +411,8 @@ fn wait_for_film(session: &mut Session, prompt: &str, take_in: bool) -> anyhow::
 }
 
 /// Ask the operator for something and wait for them, answering whether anyone
-/// was there to answer
+/// was there to answer. A blocked read has no checkpoint of its own to reach,
+/// so a Ctrl-c here only stops on the second press - see `cancel`
 fn confirm(prompt: &str) -> anyhow::Result<bool> {
     eprintln!("{prompt}. Ctrl-c to stop");
     let mut line = String::new();

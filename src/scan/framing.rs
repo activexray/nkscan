@@ -277,7 +277,7 @@ pub fn discover_with(
             info!(?format, length, "frame length");
 
             let perfs = session.read_perforations()?;
-            let measured = thumbnail::frames_type2(
+            let (measured, length) = thumbnail::frames_type2(
                 session.capabilities(),
                 &pass,
                 samples,

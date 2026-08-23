@@ -12,10 +12,22 @@ use nkscan::{
 };
 use std::{env, path::PathBuf};
 use tiff::{
-    decoder::{Decoder, DecodingResult, Limits},
+    decoder::{Decoder, DecodingResult, Limits, ifd::Value},
     encoder::{Rational, TiffEncoder, colortype::RGB16},
     tags::Tag,
 };
+
+/// `XResolution`/`YResolution` are always RATIONAL per the TIFF6 spec, never
+/// FLOAT, so `get_tag_f32` rejects them outright (`InvalidTypeForTag`) rather
+/// than reading them - which silently drops to `unwrap_or`'s fallback on
+/// every real file instead of surfacing the error
+fn resolution(decoder: &mut Decoder<impl std::io::Read + std::io::Seek>, tag: Tag) -> Option<f32> {
+    match decoder.get_tag(tag).ok()? {
+        Value::Rational(n, d) if d != 0 => Some(n as f32 / d as f32),
+        Value::Float(v) => Some(v),
+        _ => None,
+    }
+}
 
 fn parse_format(s: &str) -> FilmFormat {
     match s.to_ascii_lowercase().as_str() {
@@ -94,7 +106,10 @@ fn main() {
         .unwrap()
         .with_limits(Limits::unlimited());
     let (cols, rows) = decoder.dimensions().unwrap();
-    let dpi = dpi_override.unwrap_or_else(|| decoder.get_tag_f32(Tag::XResolution).unwrap_or(97.0));
+    let dpi = dpi_override.unwrap_or_else(|| {
+        resolution(&mut decoder, Tag::XResolution)
+            .unwrap_or_else(|| panic!("{}: no readable XResolution tag, pass --dpi", input.display()))
+    });
 
     let chunky = match decoder.read_image().unwrap() {
         DecodingResult::U16(v) => v,
@@ -111,11 +126,12 @@ fn main() {
         bits: 16,
     };
 
-    let length = format.height_dots(dpi.round() as u16) as usize;
-    let found = boundaries::detect(&image, length, polarity);
+    let nominal = format.height_dots(dpi.round() as u16) as usize;
+    let found = boundaries::detect(&image, nominal, polarity);
+    let length = found.length;
 
     eprintln!(
-        "{}: {cols}x{rows} @ {dpi:.1} dpi, format={format:?} -> length={length}px, polarity={polarity:?}",
+        "{}: {cols}x{rows} @ {dpi:.1} dpi, format={format:?} -> nominal={nominal}px, corrected={length}px, polarity={polarity:?}",
         input.display()
     );
     eprintln!("pitch={}px, {} frame(s):", found.pitch, found.frames.len());

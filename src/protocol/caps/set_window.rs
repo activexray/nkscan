@@ -58,9 +58,10 @@ bitflags! {
         /// of this page names it; both 2-10 tables call it reserved. Set on a
         /// 9000 anyway
         const HISTOGRAM = 1 << 4;
-        /// AE exposure passes (in hardware)
+        /// AE exposure passes (in hardware). No unit seen sets this: D1h byte 4
+        /// is 03h on an LS-50 and 1Bh on an LS-9000, so both meter host-side
         const AE = 1 << 5;
-        /// White-balance preserving AE
+        /// White-balance preserving AE. Unset everywhere [`AE`](Self::AE) is
         const AE_WB = 1 << 6;
     }
 }

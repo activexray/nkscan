@@ -73,6 +73,10 @@ pub(crate) enum AutoExposure {
 
 impl AutoExposure {
     /// Determine the kind of AE to use
+    ///
+    /// The two unit-side branches are unexercised: neither an LS-50 nor an
+    /// LS-9000 sets [`ScanKind::AE`] or `AE_WB`, so every unit seen so far
+    /// lands on [`Host`](Self::Host)
     pub(crate) fn choose(caps: &Capabilities, lock_white_balance: bool) -> Result<Self, Error> {
         let kinds = caps.set_window.kind;
 

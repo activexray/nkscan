@@ -61,9 +61,15 @@ pub struct Scan {
     #[arg(long, default_value = "scan")]
     pub basename: PathBuf,
 
-    /// Autoexpose per channel. Better dynamic range, but no longer "calibrated".
-    #[arg(long)]
+    /// Autoexpose per channel, taking the film's own cast off. The default for
+    /// colour negative, where that cast is the orange mask.
+    #[arg(long, conflicts_with = "lock_wb")]
     pub unlock_wb: bool,
+
+    /// Autoexpose the channels as one, keeping the film's cast and the factory
+    /// balance. The default for slide, Kodachrome and black and white.
+    #[arg(long)]
+    pub lock_wb: bool,
 
     /// Autoexpose the first frame and reuse that exposure across all frames.
     #[arg(long)]
@@ -112,7 +118,7 @@ pub struct Scan {
 }
 
 /// The film types Nikon profiled, as flag values
-#[derive(Copy, Clone, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, clap::ValueEnum)]
 pub enum FilmType {
     /// Slide film
     Positive,

@@ -12,6 +12,7 @@
 use crate::{
     error::Error,
     protocol::{caps::Capabilities, decode::Image, window::Window},
+    scan::profile::Film,
 };
 
 /// How to meter a frame
@@ -45,6 +46,25 @@ impl Default for Metering {
 }
 
 impl Metering {
+    /// Whether a film type is metered with its channels held together
+    ///
+    /// A colour negative's orange mask sits over everything, and metering the
+    /// channels as one group leaves it there to be quantised through - the blue
+    /// record ends up in a fraction of the range it could have had. Nikon Scan
+    /// meters one per channel: a Coolscan V capture has it scaling the start-up
+    /// exposures by 1.23, 2.84 and 3.84 before a pass, which is the mask coming
+    /// off before the ADC rather than after it.
+    ///
+    /// Everything else keeps the factory balance. A slide, a Kodachrome and a
+    /// black and white negative all carry their cast because that is the
+    /// picture, and pulling the channels apart would take it off
+    pub fn locks_white_balance(film: Film) -> bool {
+        match film {
+            Film::Negative => false,
+            Film::Positive | Film::Kodachrome | Film::MonochromeNegative => true,
+        }
+    }
+
     /// New exposures for `windows`, from a pass taken with the old ones
     ///
     /// The result lines up with `windows`. A channel the pass tells us nothing

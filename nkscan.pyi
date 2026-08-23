@@ -42,6 +42,75 @@ class Capabilities:
     def y_dpi_range(self) -> tuple[builtins.int, builtins.int]: ...
     @property
     def optical_dpi(self) -> builtins.int: ...
+    @property
+    def max_frames(self) -> builtins.int:
+        r"""
+        Frames the loaded holder can hold, 0 where the unit publishes no table
+        """
+    @property
+    def thumbnail_dpi(self) -> tuple[builtins.int, builtins.int]:
+        r"""
+        The thumbnail pass's resolution range, empty where there is no thumbnail
+        """
+    @property
+    def focus_range(self) -> tuple[builtins.int, builtins.int]:
+        r"""
+        Focus positions the unit accepts
+        """
+    @property
+    def max_samples(self) -> builtins.int:
+        r"""
+        Most readings of one line a pass may ask for
+        """
+    @property
+    def framing(self) -> builtins.str:
+        r"""
+        How this unit finds frames: "published", "thumbnail", "perforation" or
+        "address". Only the middle two take a thumbnail pass
+        """
+    @property
+    def thumbnail(self) -> builtins.bool:
+        r"""
+        Whether a thumbnail pass happens at all, and so whether a caller can
+        offer to keep it
+        """
+    @property
+    def multi_line(self) -> builtins.bool:
+        r"""
+        Whether the CCD reads three lines at once. False means a "superfine"
+        control has nothing to switch
+        """
+    @property
+    def eject(self) -> builtins.bool:
+        r"""
+        Whether the unit can give the medium back on its own
+        """
+    @property
+    def autofocus(self) -> builtins.bool:
+        r"""
+        Whether the unit focuses itself
+        """
+    @property
+    def hardware_metering(self) -> builtins.bool:
+        r"""
+        Whether the unit runs an AE pass itself. False on every unit seen, an
+        LS-9000 included, so metering is host-side and the white-balance
+        controls are what decide it
+        """
+    @property
+    def interleavings(self) -> builtins.list[builtins.str]:
+        r"""
+        The reading modes this unit offers, by name
+        """
+    @staticmethod
+    def locks_white_balance(film: builtins.str) -> builtins.bool:
+        r"""
+        Whether this film type is metered with its channels held together
+        
+        The default a `lock_white_balance` control should start from. It follows
+        the film rather than the scanner, so it is the same answer everywhere -
+        it lives here because this is where a caller already looks
+        """
 
 @typing.final
 class Device:

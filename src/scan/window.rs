@@ -20,7 +20,7 @@ use crate::{
 use tracing::*;
 
 /// The most times a line can be read, the count being half of 2-10 byte 40
-const MAX_SAMPLES: u8 = 16;
+pub const MAX_SAMPLES: u8 = 16;
 
 /// Lines the three-line readout tiles in
 ///

@@ -42,6 +42,39 @@ print(result.dpi, red.shape, red.dtype)
 session.close()  # or use Session as a context manager
 ```
 
+## What the scanner can do
+
+`session.capabilities` reports what the attached unit offers, so a GUI can hide controls it does not have rather than failing once a scan is under way.
+
+```python
+caps = session.capabilities
+print(caps.vendor, caps.product, caps.optical_dpi)
+
+if not caps.multi_line:
+    hide("superfine")        # this unit never reads three lines at once
+if not caps.thumbnail:
+    hide("keep thumbnail")   # it frames from a page, with no thumbnail pass
+if not caps.eject:
+    hide("eject")            # the operator takes the holder out by hand
+if not caps.autofocus:
+    hide("autofocus")
+```
+
+`x_dpi_range`, `y_dpi_range`, `focus_range`, `max_samples` and `max_frames` bound the controls that take a number. `framing` says how frames are found ("published", "thumbnail", "perforation" or "address"), and `interleavings` lists the reading modes offered.
+
+## White balance
+
+`scan_frame(lock_white_balance=...)` decides whether the channels are metered together or one at a time. The right default follows the film, not the scanner:
+
+```python
+lock = nkscan.Capabilities.locks_white_balance("negative")  # False
+session.scan_frame(frame, lock_white_balance=lock)
+```
+
+Color negative meters each channel separately, which takes the orange mask off before the ADC and is what Nikon Scan does. Slide, Kodachrome and black and white keep the factory balance.
+
+`scan_frame` defaults to `True` whatever the film, so pass this explicitly when scanning negatives. `caps.hardware_metering` is `False` on every unit seen, an LS-9000 included - metering happens here rather than in the scanner, which is what makes the setting matter at all.
+
 ## Nudging frames by hand
 
 `discover_frames` returns the thumbnail it detected against, keyed the same way `ScanResult.colors` is:

@@ -9,8 +9,11 @@ use crate::{
     device::{self, Device as RustDevice},
     error::Error,
     protocol::{
-        caps::{Capabilities as RustCapabilities, set_window::ColorInterleaving},
-        data::Rect,
+        caps::{
+            Capabilities as RustCapabilities, other::HostCooperation,
+            set_window::{ColorInterleaving, ScanKind},
+        },
+        data::{Op, Rect},
         decode::Samples,
         window::Channel,
     },
@@ -18,9 +21,11 @@ use crate::{
         autoexpose::Exposures,
         boundaries::Polarity,
         frame::{self, Phase},
-        framing,
+        framing::{self, Framing},
+        meter::Metering,
         pass::Progress,
-        window::Recipe,
+        profile::Film,
+        window::{MAX_SAMPLES, Recipe},
     },
     session::Session as RustSession,
 };
@@ -143,6 +148,62 @@ pub struct PyCapabilities {
     x_dpi_range: (u16, u16),
     y_dpi_range: (u16, u16),
     optical_dpi: u16,
+
+    // What follows is for a caller deciding which controls to offer. Every
+    // field is read off the unit's own pages, so a control gated on one is
+    // gated on what this scanner will actually accept
+    /// Frames the loaded holder can hold, 0 where the unit publishes no table
+    max_frames: u8,
+    /// The thumbnail pass's resolution range, empty where there is no thumbnail
+    thumbnail_dpi: (u16, u16),
+    /// Focus positions the unit accepts
+    focus_range: (u16, u16),
+    /// Most readings of one line a pass may ask for
+    max_samples: u8,
+    /// How this unit finds frames: "published", "thumbnail", "perforation" or
+    /// "address". Only the middle two take a thumbnail pass
+    framing: String,
+    /// Whether a thumbnail pass happens at all, and so whether a caller can
+    /// offer to keep it
+    thumbnail: bool,
+    /// Whether the CCD reads three lines at once. False means a "superfine"
+    /// control has nothing to switch
+    multi_line: bool,
+    /// Whether the unit can give the medium back on its own
+    eject: bool,
+    /// Whether the unit focuses itself
+    autofocus: bool,
+    /// Whether the unit runs an AE pass itself. False on every unit seen, an
+    /// LS-9000 included, so metering is host-side and the white-balance
+    /// controls are what decide it
+    hardware_metering: bool,
+    /// The reading modes this unit offers, by name
+    interleavings: Vec<String>,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyCapabilities {
+    /// Whether this film type is metered with its channels held together
+    ///
+    /// The default a `lock_white_balance` control should start from. It follows
+    /// the film rather than the scanner, so it is the same answer everywhere -
+    /// it lives here because this is where a caller already looks
+    #[staticmethod]
+    fn locks_white_balance(film: &str) -> PyResult<bool> {
+        let film = match film.to_ascii_lowercase().as_str() {
+            "positive" | "slide" => Film::Positive,
+            "negative" => Film::Negative,
+            "kodachrome" => Film::Kodachrome,
+            "mono" | "monochrome" | "monochromenegative" => Film::MonochromeNegative,
+            other => {
+                return Err(PyRuntimeError::new_err(format!(
+                    "unknown film type {other:?}"
+                )));
+            }
+        };
+        Ok(Metering::locks_white_balance(film))
+    }
 }
 
 impl From<&RustCapabilities> for PyCapabilities {
@@ -161,6 +222,44 @@ impl From<&RustCapabilities> for PyCapabilities {
                 caps.address.y_axis.dpi_range.last,
             ),
             optical_dpi: caps.address.x_axis.optical_dpi,
+
+            max_frames: caps.address.max_frames,
+            thumbnail_dpi: (
+                caps.address.thumbnail_resolution.start,
+                caps.address.thumbnail_resolution.last,
+            ),
+            focus_range: (
+                caps.address.focus_range.start,
+                caps.address.focus_range.last,
+            ),
+            max_samples: MAX_SAMPLES,
+            framing: match framing::Framing::choose(caps) {
+                Framing::Published => "published",
+                Framing::Thumbnail => "thumbnail",
+                Framing::Perforation => "perforation",
+                Framing::Address => "address",
+            }
+            .to_string(),
+            thumbnail: matches!(
+                framing::Framing::choose(caps),
+                Framing::Thumbnail | Framing::Perforation
+            ),
+            multi_line: caps
+                .features
+                .cooperation
+                .contains(HostCooperation::MULTI_LINE),
+            eject: caps.features.execute.supports(Op::Unload),
+            autofocus: caps.features.execute.supports(Op::AutoFocus),
+            hardware_metering: caps
+                .set_window
+                .kind
+                .intersects(ScanKind::AE | ScanKind::AE_WB),
+            interleavings: caps
+                .set_window
+                .interleaving
+                .iter_names()
+                .map(|(n, _)| n.to_ascii_lowercase())
+                .collect(),
         }
     }
 }

@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
-use nkscan::{device, error::Error, protocol::sense::Intervention, session::Session};
+use nkscan::{device, error::Error, protocol::sense::Intervention};
 
-use crate::cli::Eject;
+use crate::{cli::Eject, connect};
 
 pub fn run(args: Eject) -> Result<()> {
     let devices = device::list();
@@ -19,7 +19,7 @@ pub fn run(args: Eject) -> Result<()> {
 
     println!("{device}");
 
-    let mut session = Session::open(device.open()?)?;
+    let mut session = connect::open(device)?;
 
     println!("Connected to scanner");
 

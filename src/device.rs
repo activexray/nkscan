@@ -100,6 +100,25 @@ impl fmt::Display for Device {
     }
 }
 
+/// Ask a USB scanner to reset itself at the bus level, forcing it to
+/// re-enumerate. A no-op everywhere else, since there is nothing here to
+/// reset the same way
+///
+/// A unit an earlier command left mid-transaction sometimes stops answering
+/// its bulk endpoints at all - the software equivalent of unplugging it,
+/// worth trying once before asking for a real power cycle
+pub fn reset(device: &Device) -> Result<(), Error> {
+    let Attach::Usb { bus, ports } = &device.attach else {
+        return Ok(());
+    };
+    let io = |e: nusb::Error| Error::Transport(std::io::Error::from(e).into());
+    let info = usb_devices()
+        .into_iter()
+        .find(|d| d.bus_id() == bus && d.port_chain() == ports)
+        .ok_or(Error::NotFound)?;
+    info.open().wait().map_err(io)?.reset().wait().map_err(io)
+}
+
 /// List all the devices this library thinks it can drive
 pub fn list() -> Vec<Device> {
     let mut found: Vec<Device> = usb_devices()

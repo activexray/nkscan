@@ -44,6 +44,9 @@ pub enum Attach {
     Sg(PathBuf), // /dev/sgN
     #[cfg(target_os = "windows")]
     Scanner(PathBuf), // \\.\ScannerN
+    /// IORegistry entry ID of a SCSITask-capable peripheral nub
+    #[cfg(target_os = "macos")]
+    ScsiTask(u64),
 }
 
 impl fmt::Display for Attach {
@@ -58,6 +61,8 @@ impl fmt::Display for Attach {
             Attach::Sg(p) => write!(f, "{}", p.display()),
             #[cfg(target_os = "windows")]
             Attach::Scanner(p) => write!(f, "{}", p.display()),
+            #[cfg(target_os = "macos")]
+            Attach::ScsiTask(id) => write!(f, "scsi:{id:#x}"),
         }
     }
 }
@@ -103,6 +108,10 @@ impl Device {
             #[cfg(target_os = "windows")]
             Attach::Scanner(path) => Ok(Box::new(
                 crate::transport::windows::ScsiScanDevice::open(path).map_err(io)?,
+            )),
+            #[cfg(target_os = "macos")]
+            Attach::ScsiTask(id) => Ok(Box::new(
+                crate::transport::darwin::ScsiTaskTransport::open(*id).map_err(io)?,
             )),
         }
     }
@@ -272,7 +281,27 @@ fn scsi_devices() -> Vec<Device> {
         .collect()
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(target_os = "macos")]
+fn scsi_devices() -> Vec<Device> {
+    use crate::transport::darwin::ScsiTaskTransport;
+
+    // Most peripheral nubs are disks a kernel driver owns; those refuse the
+    // user client and drop out at `open`. The rest answer the INQUIRY
+    ScsiTaskTransport::entry_ids()
+        .into_iter()
+        .filter_map(|id| {
+            let mut transport = ScsiTaskTransport::open(id).ok()?;
+            let identity = probe(&mut transport)?;
+            Some(Device {
+                attach: Attach::ScsiTask(id),
+                model: identity.model(),
+                identity: Some(identity),
+            })
+        })
+        .collect()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 fn scsi_devices() -> Vec<Device> {
     Vec::new()
 }

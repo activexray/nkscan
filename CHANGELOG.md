@@ -5,16 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.1]
+## [0.8.0]
+
+### Added
+
+- macOS SCSI transport over IOKit, so FireWire units work there through ASFireWire.
+- `--lock-wb`, beside the existing `--unlock-wb`. Color negative now meters each channel separately by default, matching Nikon Scan; slide, Kodachrome and black and white keep the factory balance.
+- Scanner capabilities are exposed to Python, so a GUI can hide controls the attached unit does not have.
+- `Metering::locks_white_balance`, `Session::read_image_within`, and `scan::window::MAX_SAMPLES` is now public.
+
+### Changed
+
+- **Breaking:** `Session::abort` answers whether the unit has the command, rather than `()`.
+- **Breaking:** `Attach` has a new `ScsiTask` variant on macOS, so an exhaustive match there needs an arm for it.
+- macOS builds use `core-foundation-sys` rather than `core-foundation`.
 
 ### Fixed
 
-- `Session::eject` no longer fails on the medium-not-present that `TEST UNIT READY` reports once UNLOAD has actually emptied the gate - that is the eject confirming, not it failing.
-- `nkscan scan`'s wait for the next strip no longer aborts the whole run on the medium-not-present a strip feeder's empty gate answers between strips.
-- `thumbnail::frames_type2` now names the frame it drops when the perforation table falls short of its column, instead of only a pass-level warning that gave no way to tell which frame, if any, was lost.
-- `boundaries::detect` self-calibrates the frame length from the strip's own edges instead of only trusting the nominal format - real gates vary from that by a few percent, camera to camera.
-- `nkscan scan` catches Ctrl-c itself and stops at its next safe checkpoint instead of the default that kills the process wherever it happens to be, mid-move included.
-- `nkscan scan`/`eject` retry once with a USB reset when connecting times out, since a unit an earlier command left mid-transaction can stop answering its endpoints entirely without a power cycle.
+- Ctrl-c stops a scan in about a second instead of reading out the rest of the frame.
+- Cancelling a scan no longer wedges the unit until a power cycle.
+- A command that times out no longer breaks every command after it.
+- Inserting a film holder no longer ends the run with `timed out after 5s`.
+- Metering no longer stalls for fifteen seconds a frame on some holders.
+- Ctrl-c gives the film back, unless `--no-eject`.
+- Progress bars and log lines no longer overwrite each other, and finished bars no longer pile up.
+- No thumbnail bar on units that frame without a thumbnail pass.
+- The echoed `^C` and the Enter that answers a prompt no longer stay on screen.
+- Ejecting no longer reports a failure when it worked.
+- A strip feeder's empty gate no longer aborts a run between strips.
+- Frame detection names the frame it drops rather than losing it quietly.
+- Frame length self-calibrates from the strip's own edges, so a gate that varies from the nominal format no longer shifts every frame.
 
 ## [0.7.0]
 

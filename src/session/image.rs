@@ -4,7 +4,7 @@
 //! own, and 2-11 has consecutive reads carry on rather than restart. What the
 //! bytes mean is [`Layout`]'s business, and unscrambling them is a decoder's.
 
-use super::{MOVE_TIMEOUT, Session};
+use super::{DRAIN_TIMEOUT, MOVE_TIMEOUT, Session};
 use crate::{
     error::Error,
     protocol::{
@@ -15,6 +15,7 @@ use crate::{
     },
     transport::Data,
 };
+use std::time::Duration;
 use tracing::*;
 
 impl Session {
@@ -24,6 +25,22 @@ impl Session {
     /// by transferring less than asked or by answering `05h-2Ch` once the image
     /// is spent
     pub fn read_image(&mut self, layout: &Layout, buf: &mut [u8]) -> Result<usize, Error> {
+        self.read_image_within(layout, buf, MOVE_TIMEOUT)
+    }
+
+    /// The same, on a budget the caller sets
+    ///
+    /// The first read of a pass waits for the stage to reach position, which is
+    /// what [`MOVE_TIMEOUT`] is sized for. A read partway through one has no
+    /// such waiting to do, and giving it a stage move's worth of budget is how
+    /// a unit that has stopped answering holds the program for three minutes
+    /// instead of saying so
+    pub fn read_image_within(
+        &mut self,
+        layout: &Layout,
+        buf: &mut [u8],
+        timeout: Duration,
+    ) -> Result<usize, Error> {
         let chunk = self.chunk_size(layout)?;
         let code = DataType::Image.row().code;
         let width = layout.width_code();
@@ -44,7 +61,7 @@ impl Session {
                 "executing image READ"
             );
 
-            match self.run(&cmd.cdb(), Data::In(slice), MOVE_TIMEOUT) {
+            match self.run(&cmd.cdb(), Data::In(slice), timeout) {
                 Ok(completion) => {
                     trace!(
                         transferred = completion.transferred,
@@ -242,11 +259,40 @@ impl Chunks<'_> {
         let limit = self.layout.total_bytes().max(self.chunk as u64);
         let mut buf = vec![0u8; self.chunk];
         loop {
-            match self.session.read_image(&self.layout.clone(), &mut buf) {
+            // Never ask for more than the pass still owes. Reading past the end
+            // is what 2-11-5 says ends a scan, but only a re-registered
+            // multi-line pass is holding anything back there, and a unit that
+            // was never going to answer such a read stops answering the handle
+            // entirely rather than saying so - the same reason `fill` does not
+            // reach for it either. Asking for a whole chunk against the 28 KiB
+            // an interrupted pass had left is what hung an LS-50 hard enough to
+            // need a power cycle
+            let want = match self.remaining {
+                0 if self.layout.multiline_registered => self.chunk,
+                0 => break,
+                left => self.chunk.min(left as usize),
+            };
+            // A stage move's budget here is what turns a unit that has stopped
+            // answering into three silent minutes. The pass is already running,
+            // so a chunk is either on its way or it is never coming
+            match self
+                .session
+                .read_image_within(&self.layout.clone(), &mut buf[..want], DRAIN_TIMEOUT)
+            {
                 Ok(0) => break,
                 Ok(got) => {
-                    self.surplus += got as u64;
-                    if got < self.chunk {
+                    // Only what arrives past what the layout promised is
+                    // surplus; the rest is the pass's own remainder
+                    let owed = (got as u64).min(self.remaining);
+                    self.remaining -= owed;
+                    self.surplus += got as u64 - owed;
+                    debug!(
+                        got,
+                        remaining = self.remaining,
+                        surplus = self.surplus,
+                        "read off part of the remainder"
+                    );
+                    if got < want {
                         break;
                     }
                     if self.surplus >= limit {
@@ -259,7 +305,12 @@ impl Chunks<'_> {
                     }
                 }
                 Err(e) => {
-                    debug!(%e, "the unit stopped giving data");
+                    warn!(
+                        %e,
+                        remaining = self.remaining,
+                        "the unit stopped giving data, so the scan is left open - it will not \
+                         take another command until it is power cycled"
+                    );
                     break;
                 }
             }
@@ -281,21 +332,45 @@ impl Chunks<'_> {
 /// A scan the host walks away from stays open, and every command after it is
 /// refused out of sequence
 ///
-/// Reading to the end is what 2-11-5 says ends one, and only the pass that runs
-/// to the layout's own byte count reaches that on its own. A pass the unit cut
-/// short, one a decoder rejected, and one whose consumer hung up all leave the
-/// scan open, and this is the one place every route out passes through.
+/// A pass the unit cut short, one a decoder rejected, and one whose consumer
+/// hung up all leave the scan open, and this is the one place every route out
+/// passes through.
 ///
-/// Reading rather than ABORT deliberately: 2-13 stops the scan block where it
-/// is, and aborting one mid-move has to wait for the mechanism first or the
-/// handle wedges until a power cycle. `drain` gives up on the
-/// first error, so there is nothing here to hang on a unit that has stopped
-/// answering
+/// 2-13's ABORT is what closes it, not reading to the end. Reading was the
+/// earlier choice here, on the grounds that aborting mid-move risks the
+/// mechanism - but a USBPcap capture of NikonScan's own Stop button against a
+/// Coolscan V shows it aborting 9.1 s into a 2 MB/s readout, at the boundary
+/// right after a READ's status, with GOOD back in 1.6 ms, no data read
+/// afterwards and no endpoint cleanup of any kind. The hazard is aborting a
+/// stage move, which is a different operation from a readout.
+///
+/// That matters because the alternative costs whatever is left of the pass: the
+/// unit sets the pace, so a cancelled 40-minute scan used to take the rest of
+/// the 40 minutes to stop.
 impl Drop for Chunks<'_> {
     fn drop(&mut self) {
-        if !self.closed {
-            debug!("the pass ended early, reading the rest off so the scan closes");
-            self.drain();
+        if self.closed {
+            return;
+        }
+        self.spent = true;
+        self.closed = true;
+        info!(remaining = self.remaining, "stopping the scan");
+        match self.session.abort() {
+            Ok(true) => {}
+            // Nothing in either spec's command list is optional here, but
+            // `abort` tolerates a unit that has never heard of it, and reading
+            // to the end is the only other way to close a scan
+            Ok(false) => {
+                debug!("no ABORT on this unit, so reading the remainder off instead");
+                self.closed = false;
+                self.drain();
+            }
+            Err(e) => warn!(
+                %e,
+                remaining = self.remaining,
+                "could not stop the scan, so it is left open - the next command \
+                 will be refused out of sequence"
+            ),
         }
     }
 }

@@ -25,6 +25,14 @@ const PHASE_DATA_OUT: u8 = 0x02;
 const PHASE_DATA_IN: u8 = 0x03;
 const PHASE_BUSY: u8 = 0x04;
 
+/// How long a resync read waits before calling the pipe empty
+const RESYNC_TIMEOUT: Duration = Duration::from_millis(200);
+
+/// How much a resync drops before giving up on getting back in step. A unit
+/// still streaming an image has more than this to say, and dropping all of it
+/// would take longer than the command that is waiting
+const RESYNC_LIMIT: usize = 1 << 20;
+
 /// A USB-connected Nikon scanner
 #[allow(dead_code)]
 pub struct UsbTransport {
@@ -33,6 +41,14 @@ pub struct UsbTransport {
     in_max_packet: usize,
     /// We have to keep a handle to the interface here as the lifetime of the endpoints are attached to it
     interface: Interface,
+    /// Whether the last command left the phase handshake unfinished
+    ///
+    /// The unit answers a command in phases and this drives both ends of that,
+    /// so a command that returns partway through leaves the unit mid-answer
+    /// with the rest of it queued on the IN pipe. Nothing about the next
+    /// command tells the unit to start over, so its phase byte is whatever was
+    /// left over and every command after it is misframed
+    dirty: bool,
 }
 
 /// Map a `nusb` transfer error into this crate's SCSI error
@@ -84,15 +100,38 @@ impl UsbTransport {
             ep_in,
             in_max_packet,
             interface,
+            dirty: false,
         })
     }
 
-    /// Ask the device to reset itself at the USB level, forcing it to
-    /// re-enumerate. Invalidates any `DeviceInfo`/`UsbTransport` already open
-    /// against it - the caller has to look the device up fresh afterward
-    pub fn reset(info: DeviceInfo) -> io::Result<()> {
-        info.open().wait()?.reset().wait()?;
-        Ok(())
+    /// Read off whatever the last command left in the pipe
+    ///
+    /// Being one command out of step is not something a caller can act on: the
+    /// next phase byte is a stale data byte, the one after that is worse, and
+    /// the way out is a power cycle. Draining until the pipe comes back empty
+    /// puts the two ends back in step, which is verified against an LS-50 that
+    /// had been desynced on purpose - eight stale bytes drained and the unit
+    /// answered INQUIRY again without a reset
+    fn resync(&mut self) {
+        let mut dropped = 0usize;
+        while dropped < RESYNC_LIMIT {
+            match self
+                .ep_in
+                .transfer_blocking(Buffer::new(self.in_max_packet), RESYNC_TIMEOUT)
+                .into_result()
+            {
+                Ok(b) if !b.is_empty() => dropped += b.len(),
+                // Empty or refused: the unit has nothing more to say
+                _ => break,
+            }
+        }
+        if dropped > 0 {
+            warn!(
+                bytes = dropped,
+                "the last command left its answer in the pipe, dropped it to get back in step"
+            );
+        }
+        self.dirty = false;
     }
 
     /// Write `bytes` to the Bulk Out endpoint
@@ -142,6 +181,23 @@ impl Transport for UsbTransport {
     }
 
     fn execute(&mut self, cdb: &[u8], data: Data, timeout: Duration) -> Result<Completion, Error> {
+        // A command that failed partway through left the unit mid-answer, so
+        // clear that before starting another rather than reading its leftovers
+        // as this one's phases
+        if self.dirty {
+            self.resync();
+        }
+        // Cleared again only by a run that reaches the end of the handshake
+        self.dirty = true;
+        let done = self.exchange(cdb, data, timeout);
+        self.dirty = done.is_err();
+        done
+    }
+}
+
+impl UsbTransport {
+    /// One whole command, from the CDB to the status bytes
+    fn exchange(&mut self, cdb: &[u8], data: Data, timeout: Duration) -> Result<Completion, Error> {
         // Following the phase spec from 1-1-2 in LS5K spec
 
         // First we write the cdb

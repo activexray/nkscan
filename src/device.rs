@@ -5,31 +5,17 @@ use crate::transport::linux::SgTransport;
 use crate::{
     error::Error,
     protocol::{caps::identity::Identity, cdbs::Inquiry, model::Model},
-    session::Session,
-    transport::{self, Data, Status, Transport, usb::UsbTransport},
+    transport::{Data, Status, Transport, usb::UsbTransport},
 };
 use nusb::MaybeFuture;
 /// Only the two platforms with a SCSI node to open name one
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::path::PathBuf;
-use std::{
-    fmt,
-    str::FromStr,
-    thread::sleep,
-    time::{Duration, Instant},
-};
-use tracing::{debug, warn};
+use std::{fmt, str::FromStr, time::Duration};
+use tracing::debug;
 
 /// Asking a device who it is should never take long
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// How often to check whether a reset device has reappeared
-const REENUMERATE_POLL: Duration = Duration::from_millis(200);
-
-/// How long a reset device gets to reappear before this gives up. A bus
-/// reset does not reappear on any fixed schedule, so this polls for it
-/// rather than guessing a single sleep
-const REENUMERATE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Where a scanner is
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,61 +106,6 @@ impl Device {
 impl fmt::Display for Device {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:<20} {}", self.name(), self.attach)
-    }
-}
-
-/// Ask a USB scanner to reset itself at the bus level, forcing it to
-/// re-enumerate. A no-op everywhere else, since there is nothing here to
-/// reset the same way
-///
-/// A unit an earlier command left mid-transaction sometimes stops answering
-/// its bulk endpoints at all - the software equivalent of unplugging it,
-/// worth trying once before asking for a real power cycle
-pub fn reset(device: &Device) -> Result<(), Error> {
-    let io = |e: std::io::Error| Error::Transport(e.into());
-    let Attach::Usb { bus, ports } = &device.attach else {
-        return Ok(());
-    };
-    let info = usb_devices()
-        .into_iter()
-        .find(|d| d.bus_id() == bus && d.port_chain() == ports)
-        .ok_or(Error::NotFound)?;
-    UsbTransport::reset(info).map_err(io)
-}
-
-/// Open a session against `device`, retried once with a [`reset`] if the
-/// very first command times out
-///
-/// A unit an earlier command left mid-transaction sometimes stops answering
-/// its bulk endpoints at all, which reads as that first command timing out
-/// before a session even exists. A reset is not guaranteed to clear a unit
-/// that is genuinely wedged, but it is worth one try before asking the
-/// operator for a power cycle
-pub fn connect(device: &Device) -> Result<Session, Error> {
-    match Session::open(device.open()?) {
-        Err(Error::Transport(transport::Error::Timeout(_))) => {
-            warn!("the scanner did not answer - resetting the USB connection and trying once more");
-
-            // A device mid-reset can lose the connection reset() is itself
-            // using out from under it - that races the same disconnect this
-            // is about to poll through, not a reason to give up early
-            if let Err(e) = reset(device) {
-                debug!(%e, "reset itself did not confirm, still waiting for the device to come back");
-            }
-
-            let deadline = Instant::now() + REENUMERATE_TIMEOUT;
-            let reappeared = loop {
-                if let Some(found) = list().into_iter().find(|d| d.attach == device.attach) {
-                    break found;
-                }
-                if Instant::now() >= deadline {
-                    return Err(Error::NotFound);
-                }
-                sleep(REENUMERATE_POLL);
-            };
-            Session::open(reappeared.open()?)
-        }
-        other => other,
     }
 }
 

@@ -103,6 +103,12 @@ impl Session {
             ?window.size,
             "setting window"
         );
+        // The descriptor is the one place a pass's geometry actually lives, so
+        // it is what a capture of another driver has to be compared against
+        if enabled!(Level::TRACE) {
+            let hex: Vec<String> = payload.iter().map(|b| format!("{b:02X}")).collect();
+            trace!(id = window.id, bytes = hex.join(" "), "set window payload");
+        }
         // setting windows is not a cooperative action
         self.transport
             .execute(&cmd.cdb(), Data::Out(&payload), MOVE_TIMEOUT)?;

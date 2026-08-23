@@ -67,6 +67,14 @@ const MAX_COOPERATION: usize = 16;
 /// Long enough for a full-length stage move
 pub(crate) const MOVE_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// What one chunk of a pass already in flight gets
+///
+/// Reading the remainder off a cancelled pass has none of a first read's
+/// waiting to do - the stage is already where it needs to be and the data is
+/// either coming or it is not. Sized off the slowest pass observed, a thumbnail
+/// at around 50 KiB/s, which puts a 128 KiB chunk under three seconds
+pub(crate) const DRAIN_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Long enough for a cold unit to warm its lamp and initialize
 ///
 /// Nothing advertised bounds this: `Address` bytes 80,81 are the lamp warm-up
@@ -159,7 +167,11 @@ impl Session {
             self.caps.frames = Some(frames);
             return Ok(loaded);
         }
-        match self.test_unit_ready(PROBE_TIMEOUT) {
+        // A holder going in is a mechanism move, and this is what a caller polls
+        // while somebody feeds one - so the budget has to cover the draw-in, not
+        // just an answer from an idle unit. `run` returns the moment the unit
+        // stops reporting itself busy, so this is a ceiling rather than a wait
+        match self.test_unit_ready(MOVE_TIMEOUT) {
             Ok(()) => Ok(true),
             Err(Error::Media(Intervention::NoMedium)) => Ok(false),
             Err(e) => Err(e),
@@ -235,24 +247,30 @@ impl Session {
                 if matches!(*fault, Fault::Rejected(Refusal::OutOfSequence, _)) =>
             {
                 debug!("a scan was still valid from earlier, stopping it");
-                self.abort()
+                self.abort().map(drop)
             }
             Err(e) => Err(e),
         }
     }
 
-    /// Stop any scan in progress
+    /// Stop any scan in progress, answering whether the unit has the command
     ///
     /// 2-13: the scan block stops where it is, and a scan has to be issued again
     /// to read anything. GOOD comes back even when nothing was running, so this
-    /// is also how to get to a known state
-    pub fn abort(&mut self) -> Result<(), Error> {
+    /// is also how to get to a known state.
+    ///
+    /// Safe to issue partway through a readout, at a command boundary. A
+    /// Coolscan V capture of NikonScan's own Stop button does exactly that -
+    /// last READ's status read, then `C0h`, GOOD 1.6 ms later - so the wait
+    /// below is a ceiling rather than something a readout abort spends
+    pub fn abort(&mut self) -> Result<bool, Error> {
         if !self.tolerate(&Abort.cdb(), PROBE_TIMEOUT, Refusal::UnknownOpcode)? {
             debug!("this unit has no ABORT");
-            return Ok(());
+            return Ok(false);
         }
         // An operation activation command, so it answers before it acts
-        self.test_unit_ready(MOVE_TIMEOUT)
+        self.test_unit_ready(MOVE_TIMEOUT)?;
+        Ok(true)
     }
 
     /// Give back whatever is loaded, answering whether the unit did anything
@@ -368,6 +386,10 @@ impl Session {
         }
 
         let list = mode::set_divisor(divisor);
+        if enabled!(Level::TRACE) {
+            let hex: Vec<String> = list.iter().map(|b| format!("{b:02X}")).collect();
+            trace!(divisor, bytes = hex.join(" "), "mode select");
+        }
         let cmd = ModeSelect::new(list.len() as u8);
         self.run(&cmd.cdb(), Data::Out(&list), PROBE_TIMEOUT)?;
         self.divisor = divisor;

@@ -249,7 +249,11 @@ pub fn detect(image: &Image, length: usize, polarity: Polarity) -> Detected {
         found = frames.len(),
         "measured the strip"
     );
-    Detected { frames, pitch, length }
+    Detected {
+        frames,
+        pitch,
+        length,
+    }
 }
 
 // ----- what the film itself reads at
@@ -626,12 +630,23 @@ impl Sums {
 ///
 /// Searched within `tolerance` either side rather than assumed. `None` where
 /// nothing in the window scores as an edge at all
-fn locate_end(sums: &Sums, start: usize, length: usize, tolerance: usize, reach: usize) -> Option<usize> {
+fn locate_end(
+    sums: &Sums,
+    start: usize,
+    length: usize,
+    tolerance: usize,
+    reach: usize,
+) -> Option<usize> {
     let nominal = start + length;
     let lo = nominal.saturating_sub(tolerance).max(start + 1);
     let hi = (nominal + tolerance).min(sums.cols);
     (lo..=hi)
-        .map(|end| (end, sums.edge((end.saturating_sub(reach), end), (end, end + reach))))
+        .map(|end| {
+            (
+                end,
+                sums.edge((end.saturating_sub(reach), end), (end, end + reach)),
+            )
+        })
         .filter(|&(_, score)| score > 0.0)
         .max_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(end, _)| end)
@@ -649,7 +664,9 @@ fn recalibrate(sums: &Sums, wind: &Wind, starts: &[usize], length: usize) -> Opt
         .iter()
         .zip(&wind.on)
         .filter(|&(_, &on)| on)
-        .filter_map(|(&start, _)| locate_end(sums, start, length, tolerance, reach).map(|end| end - start))
+        .filter_map(|(&start, _)| {
+            locate_end(sums, start, length, tolerance, reach).map(|end| end - start)
+        })
         .collect();
     if measured.len() < ANCHORS {
         return None;
@@ -788,7 +805,9 @@ impl Wind {
         // the caller keeps as it was found anyway
         for _ in 0..8 {
             let places = wind.places(starts);
-            wind.pitch = slope(&places, &on).unwrap_or(wind.pitch).clamp(lowest, highest);
+            wind.pitch = slope(&places, &on)
+                .unwrap_or(wind.pitch)
+                .clamp(lowest, highest);
             wind.first = offset(&places, &on, wind.pitch).unwrap_or(wind.first);
 
             let slack = (wind.pitch / EVEN as f32).max(2.0);
@@ -878,7 +897,9 @@ impl Wind {
             let winds = (apart / self.pitch).round();
             if winds >= 2.0 && (apart / winds - self.pitch).abs() <= slack {
                 let step = apart / winds;
-                out.extend((1..winds as usize).map(|n| pair[0] + (step * n as f32).round() as usize));
+                out.extend(
+                    (1..winds as usize).map(|n| pair[0] + (step * n as f32).round() as usize),
+                );
             }
             out.push(pair[1]);
         }
@@ -901,7 +922,13 @@ fn seed(starts: &[usize], length: usize) -> f32 {
 
 /// Least squares through the places that are on the wind
 fn slope(places: &[(f32, f32)], on: &[bool]) -> Option<f32> {
-    let kept = || places.iter().zip(on).filter(|(_, on)| **on).map(|(p, _)| *p);
+    let kept = || {
+        places
+            .iter()
+            .zip(on)
+            .filter(|(_, on)| **on)
+            .map(|(p, _)| *p)
+    };
     let count = kept().count();
     if count < 2 {
         return None;
@@ -1071,7 +1098,11 @@ mod tests {
     #[test]
     fn a_wrong_nominal_length_is_corrected_from_the_strip_itself() {
         let true_length = 128;
-        let mut strip = Strip::new(vec![30, 200, 370, 540, 710], true_length, Polarity::Positive);
+        let mut strip = Strip::new(
+            vec![30, 200, 370, 540, 710],
+            true_length,
+            Polarity::Positive,
+        );
         strip.nominal = Some(120); // ~7% short, within GATE
 
         let found = strip.detect();

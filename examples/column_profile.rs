@@ -21,7 +21,9 @@ use tiff::decoder::{Decoder, DecodingResult, Limits};
 
 /// The TIFF itself is chunky RGB; scoring wants planes apart
 fn deinterleave3(chunky: &[u16]) -> Vec<Vec<u16>> {
-    let mut planes: Vec<Vec<u16>> = (0..3).map(|_| Vec::with_capacity(chunky.len() / 3)).collect();
+    let mut planes: Vec<Vec<u16>> = (0..3)
+        .map(|_| Vec::with_capacity(chunky.len() / 3))
+        .collect();
     for pixel in chunky.chunks_exact(3) {
         for (plane, &v) in planes.iter_mut().zip(pixel) {
             plane.push(v);
@@ -64,7 +66,11 @@ fn main() {
         for plane in &planes {
             let at = |y: usize| f32::from(plane[y * cols + x]);
             let level = band.clone().map(at).sum::<f32>() / band.len() as f32;
-            let step = band.clone().skip(1).map(|y| (at(y) - at(y - 1)).abs()).sum::<f32>()
+            let step = band
+                .clone()
+                .skip(1)
+                .map(|y| (at(y) - at(y - 1)).abs())
+                .sum::<f32>()
                 / (band.len() - 1) as f32;
             t += step / (level + 655.0);
             d += (65535.0 / level.max(1.0)).log10();
@@ -90,10 +96,16 @@ fn main() {
     // (texture) or mean (density) and mapped onto this file's own range
     println!("---- ascii (texture / density, this file's own range) ----");
     let ramp: &[u8] = b" .:-=+*#%@";
-    let scale = |v: f32, lo: f32, hi: f32| ramp[(((v - lo) / (hi - lo)).clamp(0.0, 1.0) * (ramp.len() - 1) as f32) as usize] as char;
+    let scale = |v: f32, lo: f32, hi: f32| {
+        ramp[(((v - lo) / (hi - lo)).clamp(0.0, 1.0) * (ramp.len() - 1) as f32) as usize] as char
+    };
     let tmax = texture.iter().cloned().fold(0.0f32, f32::max).max(1e-6);
     let dmin = density.iter().cloned().fold(f32::MAX, f32::min);
-    let dmax = density.iter().cloned().fold(f32::MIN, f32::max).max(dmin + 1e-6);
+    let dmax = density
+        .iter()
+        .cloned()
+        .fold(f32::MIN, f32::max)
+        .max(dmin + 1e-6);
     for start in (0..cols).step_by(bucket) {
         let end = (start + bucket).min(cols);
         let t = texture[start..end].iter().cloned().fold(0.0f32, f32::max);

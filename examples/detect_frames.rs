@@ -107,8 +107,12 @@ fn main() {
         .with_limits(Limits::unlimited());
     let (cols, rows) = decoder.dimensions().unwrap();
     let dpi = dpi_override.unwrap_or_else(|| {
-        resolution(&mut decoder, Tag::XResolution)
-            .unwrap_or_else(|| panic!("{}: no readable XResolution tag, pass --dpi", input.display()))
+        resolution(&mut decoder, Tag::XResolution).unwrap_or_else(|| {
+            panic!(
+                "{}: no readable XResolution tag, pass --dpi",
+                input.display()
+            )
+        })
     });
 
     let chunky = match decoder.read_image().unwrap() {

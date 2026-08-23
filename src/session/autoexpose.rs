@@ -3,6 +3,7 @@
 use crate::{
     error::Error,
     protocol::{
+        caps::other::DataTypes,
         data::Rect,
         decode::{Image, Samples},
         window::Window,
@@ -152,8 +153,19 @@ impl Session {
 
                 let layout = layout.expect("the loop runs at least once");
                 let measured = metering.measure(&Image::new(&layout, &samples)?, &windows);
+                // `setup` is a diagnostic - nothing below reads it - and it is
+                // the one command in a pass the unit can be slow about: a whole
+                // PROBE_TIMEOUT per channel on some holders, which reads as the
+                // scan having hung. Nikon Scan never asks for it at all, so it
+                // stays behind the log level that would print it
+                let compare = enabled!(Level::TRACE)
+                    && self
+                        .capabilities()
+                        .features
+                        .data_types
+                        .contains(DataTypes::SETUP_READ);
                 for (n, (window, level)) in windows.iter().zip(&measured).enumerate() {
-                    let unit = self.setup(window.id).ok();
+                    let unit = compare.then(|| self.setup(window.id).ok()).flatten();
                     let image = unit.as_ref().and_then(|s| s.images.first());
                     debug!(
                         channel = n,

@@ -4,7 +4,7 @@
 //! take the pass. What that costs is a stage move each way, so it is done once
 //! per frame rather than once per channel.
 
-use crate::{cancel, cli, connect, io};
+use crate::{cancel, cli, io};
 use anyhow::{anyhow, bail};
 use indicatif::{ProgressBar, ProgressStyle};
 use nkscan::{
@@ -75,7 +75,7 @@ fn run_cancellable(args: cli::Scan) -> anyhow::Result<()> {
     .resolve(&devices)?;
 
     // Start up a scan session
-    let mut session = connect::open(device)?;
+    let mut session = device::connect(device)?;
     info!("Connected to scanner");
 
     // Silver grains stop infrared as they stop light, so the mask a

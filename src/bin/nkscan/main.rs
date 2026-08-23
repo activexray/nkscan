@@ -6,7 +6,6 @@ use tracing_subscriber::EnvFilter;
 
 mod cancel;
 mod cli;
-mod connect;
 mod dump;
 mod eject;
 mod io;

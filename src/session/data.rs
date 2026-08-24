@@ -241,12 +241,16 @@ impl Session {
         };
 
         if !type2 {
-            return Ok(FrameTable::Boundary(data::Boundary { frames: frames.to_vec() }));
+            return Ok(FrameTable::Boundary(data::Boundary {
+                frames: frames.to_vec(),
+            }));
         }
         let mut positions = self.derive_positions(frames)?;
         // Sorted by top, as discovery built the original
         positions.sort_by_key(|f| f.top);
-        Ok(FrameTable::BoundaryType2(BoundaryType2 { frames: positions }))
+        Ok(FrameTable::BoundaryType2(BoundaryType2 {
+            frames: positions,
+        }))
     }
 
     /// Send an edited set of frame boundaries as one table, before any scanning
@@ -264,7 +268,7 @@ impl Session {
     /// Make sure the unit's boundary table carries a registration for `rect`'s
     /// top line, before anything moves toward it
     ///
-    /// Callers that know a whole edited set up front should prefer rebuilding and 
+    /// Callers that know a whole edited set up front should prefer rebuilding and
     /// sending the table once themselves ([`Self::rebuild_table`]); this is the
     /// fallback for callers who arrive one frame at a time.
     pub fn ensure_frame_registration(&mut self, rect: &data::Rect) -> Result<(), Error> {

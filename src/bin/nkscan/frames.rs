@@ -26,22 +26,28 @@ pub struct RectDto {
 
 impl From<Rect> for RectDto {
     fn from(r: Rect) -> Self {
-        Self { top: r.top, left: r.left, bottom: r.bottom, right: r.right }
+        Self {
+            top: r.top,
+            left: r.left,
+            bottom: r.bottom,
+            right: r.right,
+        }
     }
 }
 
 impl From<RectDto> for Rect {
     fn from(r: RectDto) -> Self {
-        Rect { top: r.top, left: r.left, bottom: r.bottom, right: r.right }
+        Rect {
+            top: r.top,
+            left: r.left,
+            bottom: r.bottom,
+            right: r.right,
+        }
     }
 }
 
 /// Pack a discovery result's frames for writing
-pub fn from_discovery(
-    product: Option<String>,
-    mechanism: &str,
-    frames: &[Rect],
-) -> Saved {
+pub fn from_discovery(product: Option<String>, mechanism: &str, frames: &[Rect]) -> Saved {
     Saved {
         product,
         mechanism: mechanism.to_string(),
@@ -58,15 +64,13 @@ impl Saved {
 
 pub fn save(path: &Path, saved: &Saved) -> Result<()> {
     let json = serde_json::to_string_pretty(saved).context("serializing the frame boundaries")?;
-    std::fs::write(path, json + "\n")
-        .with_context(|| format!("writing {}", path.display()))?;
+    std::fs::write(path, json + "\n").with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 
 pub fn load(path: &Path) -> Result<Saved> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let saved: Saved =
-        serde_json::from_str(&text).context("parsing the frame boundaries file")?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let saved: Saved = serde_json::from_str(&text).context("parsing the frame boundaries file")?;
     Ok(saved)
 }

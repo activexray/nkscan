@@ -455,18 +455,17 @@ impl PySession {
     /// returned, before scanning. Every rectangle becomes a frame entry, with
     /// perforation registration derived per top on roll film.
     #[pyo3(signature = (frames))]
-    fn set_frames(
-        &self,
-        py: Python<'_>,
-        frames: Vec<(u32, u32, u32, u32)>,
-    ) -> PyResult<()> {
+    fn set_frames(&self, py: Python<'_>, frames: Vec<(u32, u32, u32, u32)>) -> PyResult<()> {
         let rects: Vec<Rect> = frames
             .into_iter()
-            .map(|(top, left, bottom, right)| Rect { top, left, bottom, right })
+            .map(|(top, left, bottom, right)| Rect {
+                top,
+                left,
+                bottom,
+                right,
+            })
             .collect();
-        py.detach(move || {
-            self.with(|session| session.update_frames(&rects).map(|_| ()))
-        })
+        py.detach(move || self.with(|session| session.update_frames(&rects).map(|_| ())))
     }
 
     /// Focus, meter, take the pass over `frame`, and optionally clean it

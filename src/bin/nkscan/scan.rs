@@ -4,8 +4,7 @@
 //! take the pass. What that costs is a stage move each way, so it is done once
 //! per frame rather than once per channel.
 
-use crate::{cancel, cli, common,
-            common::Report, frames, io};
+use crate::{cancel, cli, common, common::Report, frames, io};
 use anyhow::{anyhow, bail};
 use indicatif::ProgressBar;
 use nkscan::{
@@ -231,7 +230,11 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
                 "boundaries from {}",
                 path.display()
             );
-            framing::Discovery { table, frames: saved.frames(), thumbnail: None }
+            framing::Discovery {
+                table,
+                frames: saved.frames(),
+                thumbnail: None,
+            }
         } else {
             // Only two of the four mechanisms take a pass to find the frames; the
             // others read them off a page and would leave a bar claiming a pass was
@@ -311,7 +314,8 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
                             // a length keeps that line off the screen, and names
                             // the bar for the pass it is rather than renaming it
                             if meter_bar.is_none() && p.total > 0 {
-                                meter_bar = Some(common::pass_bar(format!("meter {pass}"), p.total));
+                                meter_bar =
+                                    Some(common::pass_bar(format!("meter {pass}"), p.total));
                                 shown = pass;
                             }
                             if let Some(bar) = &meter_bar {
@@ -328,7 +332,8 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
                                 crate::progress::done(bar);
                             }
                             if scan_bar.is_none() && p.total > 0 {
-                                scan_bar = Some(common::pass_bar(format!("frame {}", n + 1), p.total));
+                                scan_bar =
+                                    Some(common::pass_bar(format!("frame {}", n + 1), p.total));
                             }
                             if let Some(bar) = &scan_bar {
                                 bar.report(p);

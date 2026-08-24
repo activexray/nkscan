@@ -6,11 +6,7 @@
 use crate::{cancel, progress};
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
-use nkscan::{
-    error::Error,
-    scan::pass::Progress,
-    session::Session,
-};
+use nkscan::{error::Error, scan::pass::Progress, session::Session};
 
 /// Moving a pass's progress onto a bar
 pub trait Report {
@@ -25,7 +21,7 @@ impl Report for ProgressBar {
         self.set_position(progress.bytes);
     }
 }
-use std::{borrow::Cow, io::Write, io::IsTerminal, time::Duration};
+use std::{borrow::Cow, io::IsTerminal, io::Write, time::Duration};
 use tracing::*;
 
 /// How often to ask whether a holder has gone in

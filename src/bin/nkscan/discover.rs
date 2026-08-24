@@ -9,13 +9,7 @@
 
 use crate::{cancel, cli, common, frames, io};
 use anyhow::Result;
-use nkscan::{
-    device,
-    error::Error,
-    protocol::decode::Samples,
-    scan::framing,
-    session::Session,
-};
+use nkscan::{device, error::Error, protocol::decode::Samples, scan::framing, session::Session};
 use std::{ops::ControlFlow, path::PathBuf};
 use tracing::*;
 
@@ -53,11 +47,7 @@ fn discover_cancellable(session: &mut Session, args: &cli::Discover) -> Result<(
 
     let product = session.capabilities().identity.product.clone();
 
-    common::wait_for_film(
-        session,
-        "load a film strip",
-        true,
-    )?;
+    common::wait_for_film(session, "load a film strip", true)?;
 
     // One buffer for the thumbnail pass, as the scan command keeps per strip
     let mut samples = Samples::default();
@@ -83,21 +73,14 @@ fn discover_cancellable(session: &mut Session, args: &cli::Discover) -> Result<(
         info!("wrote {}", path.display());
     }
 
-    let path = PathBuf::from(format!(
-        "{}_{first}_frames.json",
-        basename.display()
-    ));
+    let path = PathBuf::from(format!("{}_{first}_frames.json", basename.display()));
     let saved = frames::from_discovery(
         Some(product.to_string()),
         &format!("{mechanism:?}"),
         &discovery.frames,
     );
     frames::save(&path, &saved)?;
-    info!(
-        frames = discovery.frames.len(),
-        "{}",
-        path.display()
-    );
+    info!(frames = discovery.frames.len(), "{}", path.display());
 
     if *eject {
         let ejected = session.eject()?;
@@ -109,4 +92,3 @@ fn discover_cancellable(session: &mut Session, args: &cli::Discover) -> Result<(
     }
     Ok(())
 }
-

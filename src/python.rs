@@ -462,7 +462,12 @@ impl PySession {
     #[pyo3(signature = (early))]
     fn prime_bh(&self, py: Python<'_>, early: (u32, u32, u32, u32)) -> PyResult<()> {
         let (top, left, bottom, right) = early;
-        let frame = Rect { top, left, bottom, right };
+        let frame = Rect {
+            top,
+            left,
+            bottom,
+            right,
+        };
         py.detach(move || {
             self.with(|session| {
                 use crate::scan::focus::Focus;

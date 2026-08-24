@@ -74,7 +74,7 @@ fn main() -> anyhow::Result<()> {
             outcome?
         }
         cli::Action::Dump(args) => dump::run(args)?,
-        cli::Action::Eject(args) => eject::run(args)?
+        cli::Action::Eject(args) => eject::run(args)?,
     }
 
     // Donezo

@@ -195,10 +195,6 @@ For the CLI user, you get one ~5MB binary and *that's it*, no messing around.
 I'm not super interested in a GUI right now, but that's the library part of this code base.
 Please go make one (hopefully also in Rust)!
 
-## TODO
-
-- Python bindings
-
 ## License
 
 Dual licensed under either of

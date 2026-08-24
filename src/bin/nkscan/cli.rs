@@ -33,9 +33,6 @@ pub enum Action {
     Scan(Scan),
     /// Dump a scanner's INQUIRY pages. Reads only; nothing moves.
     Dump(Dump),
-    /// Read scanner RAM through READ BUFFER. Needs the modded firmware's
-    /// buffer-range patch. Reads only; nothing moves.
-    Ram(Ram),
     /// Eject the loaded film or holder
     Eject(Eject),
 }
@@ -50,40 +47,6 @@ pub struct Eject {
 /// Which scanner to ask about itself
 #[derive(clap::Args)]
 pub struct Dump {
-    /// The scanner to read. Optional, will default to the first found.
-    pub device: Option<String>,
-}
-
-/// Parse a decimal or 0x-prefixed hex number
-fn parse_u32(s: &str) -> Result<u32, String> {
-    let s = s.trim();
-    let (digits, radix) = match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        Some(rest) => (rest, 16),
-        None => (s, 10),
-    };
-    u32::from_str_radix(digits, radix).map_err(|e| format!("{s:?}: {e}"))
-}
-
-/// Read scanner RAM through READ BUFFER
-#[derive(clap::Args)]
-pub struct Ram {
-    /// Absolute byte address to start at, e.g. --address 0x406B30
-    #[arg(long, value_parser = parse_u32, default_value_t = 0x406B30)]
-    pub address: u32,
-
-    /// How many bytes to read
-    #[arg(long, value_parser = parse_u32, default_value_t = 0x2A0)]
-    pub len: u32,
-
-    /// Base the unit's buffer table adds to offsets. The coolscan-mods
-    /// firmware maps buffer 0 to base 0, so the default sends --address as-is;
-    /// on stock firmware use --base 0x400000 and address RAM relative to it
-    #[arg(long, value_parser = parse_u32, default_value_t = 0)]
-    pub base: u32,
-
-    /// Output file. Without one, prints a hexdump
-    pub out: Option<PathBuf>,
-
     /// The scanner to read. Optional, will default to the first found.
     pub device: Option<String>,
 }

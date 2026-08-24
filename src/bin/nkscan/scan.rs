@@ -13,13 +13,13 @@ use nkscan::{
     protocol::{caps::set_window::ColorInterleaving, decode::Samples},
     scan::{
         autoexpose::Exposures,
+        focus::Focus,
         frame::{self, Phase},
         framing::{self, Framing},
         meter::Metering,
         pass::Progress,
         profile,
         window::Recipe,
-        focus::Focus,
     },
     session::Session,
 };

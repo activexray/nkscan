@@ -8,7 +8,10 @@ use crate::cli;
 use anyhow::{anyhow, bail};
 use nkscan::{
     device,
-    protocol::{cdbs::ReadBuffer, sense::{interpret, Outcome}},
+    protocol::{
+        cdbs::ReadBuffer,
+        sense::{Outcome, interpret},
+    },
     transport::Data,
 };
 use std::time::Duration;
@@ -35,7 +38,11 @@ pub fn run(args: cli::Ram) -> anyhow::Result<()> {
     let mut transport = device.open()?;
 
     if args.address < args.base {
-        bail!("--address {:#x} is below --base {:#x}", args.address, args.base);
+        bail!(
+            "--address {:#x} is below --base {:#x}",
+            args.address,
+            args.base
+        );
     }
     let offset = args.address - args.base;
 
@@ -43,7 +50,9 @@ pub fn run(args: cli::Ram) -> anyhow::Result<()> {
     let mut remaining = args.len;
     let mut addr = offset;
     while remaining > 0 {
-        let chunk = remaining.min(MAX_CHUNK).min(transport.max_transfer() as u32);
+        let chunk = remaining
+            .min(MAX_CHUNK)
+            .min(transport.max_transfer() as u32);
         let cmd = ReadBuffer {
             id: 0,
             offset: addr,
@@ -55,8 +64,11 @@ pub fn run(args: cli::Ram) -> anyhow::Result<()> {
             Outcome::Complete | Outcome::CompleteWith(_) => {}
             other => {
                 let at = args.address + (out.len() as u32);
-                bail!("READ BUFFER at {:#x} refused: {}", at,
-                      ErrorDisplay(&other, &completion))
+                bail!(
+                    "READ BUFFER at {:#x} refused: {}",
+                    at,
+                    ErrorDisplay(&other, &completion)
+                )
             }
         }
         let got = completion.transferred;
@@ -85,7 +97,10 @@ pub fn run(args: cli::Ram) -> anyhow::Result<()> {
     Ok(())
 }
 
-struct ErrorDisplay<'a>(&'a nkscan::protocol::sense::Outcome, &'a nkscan::transport::Completion);
+struct ErrorDisplay<'a>(
+    &'a nkscan::protocol::sense::Outcome,
+    &'a nkscan::transport::Completion,
+);
 impl std::fmt::Display for ErrorDisplay<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.1.sense {

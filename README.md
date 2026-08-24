@@ -29,7 +29,7 @@ Otherwise, clone the repo and `cargo build --release --features cli`.
 If you have nix installed, you can build with `nix build`.
 We have the package defined in the flake, so you can add this to your personal config, if you wish.
 
-### Example
+## Example
 
 Say I'm batch scanning 6x6 color negatives on my Coolscan 9000 (the only Nikon scanner attached to my computer).
 I usually do 2x multisampling at the full native resolution with an IR pass.
@@ -42,7 +42,7 @@ nkscan scan --lock-ae --samples 2 --ir --format 66
 
 ![demo gif](docs/demo.gif)
 
-### Options
+## Options
 
 <details>
 <summary><code>nkscan scan --help</code></summary>

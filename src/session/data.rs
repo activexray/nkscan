@@ -231,17 +231,22 @@ impl Session {
 
     /// The boundary table `frames` corresponds to, for the loaded medium
     pub fn rebuild_table(&mut self, frames: &[data::Rect]) -> Result<FrameTable, Error> {
-        match self.frames.as_ref() {
-            Some(FrameTable::Boundary(_)) | None => {
-                Ok(FrameTable::Boundary(data::Boundary { frames: frames.to_vec() }))
-            }
-            Some(FrameTable::BoundaryType2(_)) => {
-                let mut positions = self.derive_positions(frames)?;
-                // Sorted by top, as discovery built the original
-                positions.sort_by_key(|f| f.top);
-                Ok(FrameTable::BoundaryType2(BoundaryType2 { frames: positions }))
-            }
+        // A discovered table decides by being one; no table yet - the
+        // `--frames-file` case, where this session skipped discovery - decides
+        // by what the unit's family speaks, which is also what the flag that
+        // carried through the probe says
+        let type2 = match self.frames.as_ref() {
+            Some(table) => matches!(table, FrameTable::BoundaryType2(_)),
+            None => self.uses_frame_type_2(),
+        };
+
+        if !type2 {
+            return Ok(FrameTable::Boundary(data::Boundary { frames: frames.to_vec() }));
         }
+        let mut positions = self.derive_positions(frames)?;
+        // Sorted by top, as discovery built the original
+        positions.sort_by_key(|f| f.top);
+        Ok(FrameTable::BoundaryType2(BoundaryType2 { frames: positions }))
     }
 
     /// Send an edited set of frame boundaries as one table, before any scanning

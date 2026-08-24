@@ -449,6 +449,26 @@ impl PySession {
         Ok(PyDiscovery { frames, thumbnail })
     }
 
+    /// Send an edited set of frame boundaries to the unit as one table
+    ///
+    /// Call this after modifying what [`Session.discover_frames`][Self.discover_frames]
+    /// returned, before scanning. Every rectangle becomes a frame entry, with
+    /// perforation registration derived per top on roll film.
+    #[pyo3(signature = (frames))]
+    fn set_frames(
+        &self,
+        py: Python<'_>,
+        frames: Vec<(u32, u32, u32, u32)>,
+    ) -> PyResult<()> {
+        let rects: Vec<Rect> = frames
+            .into_iter()
+            .map(|(top, left, bottom, right)| Rect { top, left, bottom, right })
+            .collect();
+        py.detach(move || {
+            self.with(|session| session.update_frames(&rects).map(|_| ()))
+        })
+    }
+
     /// Focus, meter, take the pass over `frame`, and optionally clean it
     ///
     /// `frame` is `(top, left, bottom, right)`, one of `discover_frames`'s. `exposures`,

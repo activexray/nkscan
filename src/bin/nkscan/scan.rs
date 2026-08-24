@@ -4,9 +4,10 @@
 //! take the pass. What that costs is a stage move each way, so it is done once
 //! per frame rather than once per channel.
 
-use crate::{cancel, cli, io};
+use crate::{cancel, cli, common,
+            common::Report, frames, io};
 use anyhow::{anyhow, bail};
-use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+use indicatif::ProgressBar;
 use nkscan::{
     device,
     error::Error,
@@ -16,29 +17,17 @@ use nkscan::{
         frame::{self, Phase},
         framing::{self, Framing},
         meter::Metering,
-        pass::Progress,
         profile,
         window::Recipe,
     },
     session::Session,
 };
-use std::{
-    borrow::Cow,
-    io::{IsTerminal, Write},
-    ops::ControlFlow,
-    time::Duration,
-};
+use std::{ops::ControlFlow, time::Duration};
 use tracing::*;
-
-/// How often to ask whether a holder has gone in
-const HOLDER_POLL: Duration = Duration::from_millis(500);
 
 /// Long enough to tell a unit that is still answering from one that is gone,
 /// and no longer: this only gates whether the eject below is worth attempting
 const STILL_THERE: Duration = Duration::from_secs(5);
-
-/// How often the spinner moves while that is going on
-const SPINNER_TICK: Duration = Duration::from_millis(120);
 
 /// Scan what the flags ask for
 pub fn run(args: cli::Scan) -> anyhow::Result<()> {
@@ -122,6 +111,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         ir,
         clean,
         no_eject,
+        frames_file,
         thumbnail: save_thumbnail,
         format,
         film,
@@ -186,7 +176,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
             .is_some_and(|id| id > 0);
 
     // Nothing can be framed before something is loaded
-    wait_for_film(
+    common::wait_for_film(
         session,
         &format!(
             "load a film {}",
@@ -217,28 +207,49 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         // discovery because the thumbnail is numbered with it
         let first = io::next_free(&basename);
 
-        // Only two of the four mechanisms take a pass to find the frames; the
-        // others read them off a page and would leave a bar claiming a pass was
-        // running. Made on the first report with a length for the same reason
-        // the metering bars are
-        let takes_pass = matches!(framing, Framing::Thumbnail | Framing::Perforation);
-        let mut bar: Option<ProgressBar> = None;
-        let discovery = framing::discover_with(session, format, film.into(), &mut samples, |p| {
-            if takes_pass && bar.is_none() && p.total > 0 {
-                bar = Some(pass_bar("thumbnail", p.total));
+        // Boundaries from a previous `discover` run, edited or not: send the
+        // table back so this fresh session knows the frame lengths again, then
+        // scan exactly what the file says. The film is already in the gate, so
+        // this strip is the one the boundaries describe
+        let discovery = if let Some(path) = &frames_file {
+            let saved = frames::load(path)?;
+            if let Some(product) = &saved.product
+                && product != &session.capabilities().identity.product
+            {
+                warn!(
+                    saved = product,
+                    scanner = session.capabilities().identity.product,
+                    "boundaries were made on a different scanner model"
+                );
             }
-            if let Some(bar) = &bar {
-                bar.report(p);
-            }
-            if cancel::requested() {
-                ControlFlow::Break(())
-            } else {
-                ControlFlow::Continue(())
-            }
-        })?;
-        if let Some(bar) = bar {
-            crate::progress::done(bar);
-        }
+            // Derived from the edited rectangles and sent whole, so every
+            //frame in the file is registered before the first stage move
+            // rather than amended one scan at a time, like Nikon Scan does
+            let table = session.update_frames(&saved.frames())?;
+            info!(
+                frames = saved.frames.len(),
+                "boundaries from {}",
+                path.display()
+            );
+            framing::Discovery { table, frames: saved.frames(), thumbnail: None }
+        } else {
+            // Only two of the four mechanisms take a pass to find the frames; the
+            // others read them off a page and would leave a bar claiming a pass was
+            // running. Made on the first report with a length for the same reason
+            // the metering bars are
+            let mut bar = common::PassBar::new("thumbnail");
+            let discovery =
+                framing::discover_with(session, format, film.into(), &mut samples, |p| {
+                    bar.update(p);
+                    if cancel::requested() {
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
+                    }
+                })?;
+            bar.done();
+            discovery
+        };
 
         if save_thumbnail && let Some(pass) = &discovery.thumbnail {
             let path = io::write_thumbnail(&basename, first, &samples, pass)?;
@@ -300,7 +311,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
                             // a length keeps that line off the screen, and names
                             // the bar for the pass it is rather than renaming it
                             if meter_bar.is_none() && p.total > 0 {
-                                meter_bar = Some(pass_bar(format!("meter {pass}"), p.total));
+                                meter_bar = Some(common::pass_bar(format!("meter {pass}"), p.total));
                                 shown = pass;
                             }
                             if let Some(bar) = &meter_bar {
@@ -317,7 +328,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
                                 crate::progress::done(bar);
                             }
                             if scan_bar.is_none() && p.total > 0 {
-                                scan_bar = Some(pass_bar(format!("frame {}", n + 1), p.total));
+                                scan_bar = Some(common::pass_bar(format!("frame {}", n + 1), p.total));
                             }
                             if let Some(bar) = &scan_bar {
                                 bar.report(p);
@@ -377,6 +388,17 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
             );
         }
 
+        // The boundaries describe this one strip, so a file-driven run stops
+        // here rather than waiting for the next holder
+        if frames_file.is_some() {
+            if !no_eject {
+                let ejected = session.eject()?;
+                if ejected {
+                    info!("ejected");
+                }
+            }
+            break;
+        }
         if no_eject {
             break;
         }
@@ -395,7 +417,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         // and is also the only one that can say when it has run out
         if framing::self_feeding(session.capabilities()) {
             session.refresh()?;
-            if !ready(session, true)? {
+            if !common::ready(session, true)? {
                 info!("nothing left to load");
                 break;
             }
@@ -407,10 +429,10 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         // A unit with no UNLOAD cannot give the medium back, and what the
         // operator does with it is theirs to say: a strip holder is advanced
         // where a mount is swapped, and neither has to leave the gate
-        if !ejected && !confirm("Replace or advance the film, then press Enter")? {
+        if !ejected && !common::confirm("Replace or advance the film, then press Enter")? {
             break;
         }
-        wait_for_film(session, "load the next strip", false)?;
+        common::wait_for_film(session, "load the next strip", false)?;
     }
     Ok(())
 }
@@ -447,143 +469,4 @@ fn hold_white_balance(film: cli::FilmType, unlock: bool, lock: bool) -> bool {
         );
     }
     asked
-}
-
-/// Whether there is film to scan
-///
-/// A feeder or a cartridge keeps its film behind the gate, so nothing reads as
-/// loaded until the unit is told to take some in. `take_in` is whether it may:
-/// false once a medium has been scanned and ejected, where loading again would
-/// only bring the same film back
-fn ready(session: &mut Session, take_in: bool) -> Result<bool, Error> {
-    if session.media_loaded()? {
-        return Ok(true);
-    }
-    if !take_in || !session.load()? {
-        return Ok(false);
-    }
-    // The address page now describes the medium that came in
-    session.refresh()?;
-    session.media_loaded()
-}
-
-/// The same, counting anything the operator can put right as "not yet": an open
-/// door is what the prompt is for
-fn waiting(session: &mut Session, take_in: bool) -> Result<bool, Error> {
-    match ready(session, take_in) {
-        Err(Error::Media(condition)) => {
-            debug!(%condition, "waiting on the operator");
-            Ok(false)
-        }
-        other => other,
-    }
-}
-
-/// [`Session::refresh`], tolerating the medium-not-present it can itself hit:
-/// a strip feeder's gate sits empty between strips, and that is the state this
-/// is called from a loop to wait out, not a failure of the refresh
-fn refresh_while_empty(session: &mut Session) -> Result<(), Error> {
-    match session.refresh() {
-        Ok(()) | Err(Error::Media(_)) => Ok(()),
-        Err(e) => Err(e),
-    }
-}
-
-/// Wait until a holder is loaded, then put the unit in a state to scan from
-fn wait_for_film(session: &mut Session, prompt: &str, take_in: bool) -> anyhow::Result<()> {
-    // An eject leaves what we know about the holder behind, so ask again before
-    // believing anything is in there
-    refresh_while_empty(session)?;
-
-    if !waiting(session, take_in)? {
-        // The spinner is the affordance on a terminal, and hidden anywhere else, so the log says it too
-        info!("{prompt}");
-        let spinner = ProgressBar::with_draw_target(None, ProgressDrawTarget::hidden());
-        spinner.set_style(ProgressStyle::default_spinner());
-        spinner.set_message(format!("{prompt}. Ctrl-c to stop"));
-        let spinner = crate::progress::add(spinner);
-        spinner.enable_steady_tick(SPINNER_TICK);
-        loop {
-            // Nothing is moving while this waits, so stopping here is always safe
-            if cancel::requested() {
-                return Err(Error::Cancelled.into());
-            }
-            std::thread::sleep(HOLDER_POLL);
-            refresh_while_empty(session)?;
-            // Retrying the load is what picks up a supply that was refilled
-            if waiting(session, take_in)? {
-                crate::progress::done(spinner);
-                break;
-            }
-        }
-    }
-    info!("film loaded");
-    session.stage()?;
-    Ok(())
-}
-
-/// Ask the operator for something and wait for them, answering whether anyone
-/// was there to answer. Polls for Ctrl-c on a background reader thread, same
-/// as every other wait
-fn confirm(prompt: &str) -> anyhow::Result<bool> {
-    eprintln!("{prompt}. Ctrl-c to stop");
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut line = String::new();
-        let _ = tx.send(std::io::stdin().read_line(&mut line).map(|n| n > 0));
-    });
-    loop {
-        if cancel::requested() {
-            return Err(Error::Cancelled.into());
-        }
-        match rx.recv_timeout(HOLDER_POLL) {
-            Ok(answered) => {
-                // The Enter that answered this has been echoed as a line of its
-                // own, so step back over it rather than leaving a blank line
-                let mut err = std::io::stderr().lock();
-                if err.is_terminal() {
-                    let _ = err.write_all(b"\x1b[1A\x1b[2K");
-                }
-                return Ok(answered?);
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(false),
-        }
-    }
-}
-
-/// A bar for one pass
-///
-/// The length is not known until the first chunk arrives, so it starts empty
-/// and learns. Hidden by indicatif when stderr is not a terminal, and drawn no
-/// more than 20 times a second, which is what keeps the callback off the
-/// scanner's back
-fn pass_bar(label: impl Into<Cow<'static, str>>, total: u64) -> ProgressBar {
-    // A bar built the usual way draws straight to stderr, so styling and naming
-    // it here would leave that first line behind the moment `add` moves it onto
-    // the shared draw target. Built hidden, it draws nothing until it is added
-    let bar = ProgressBar::with_draw_target(Some(total), ProgressDrawTarget::hidden());
-    bar.set_style(
-        ProgressStyle::with_template(
-            "{msg:<9} [{bar:30}] {bytes}/{total_bytes}  {bytes_per_sec}  eta {eta}",
-        )
-        .expect("a template of ours")
-        .progress_chars("=> "),
-    );
-    bar.set_message(label.into());
-    crate::progress::add(bar)
-}
-
-/// Moving a pass's progress onto a bar
-trait Report {
-    fn report(&self, progress: Progress);
-}
-
-impl Report for ProgressBar {
-    fn report(&self, progress: Progress) {
-        // The layout's own total, which the cooperative modes can make wrong, so
-        // it is set every time rather than once
-        self.set_length(progress.total);
-        self.set_position(progress.bytes);
-    }
 }

@@ -697,6 +697,8 @@ dependencies = [
  "pyo3",
  "pyo3-stub-gen",
  "rayon",
+ "serde",
+ "serde_json",
  "thiserror",
  "tiff",
  "tracing",

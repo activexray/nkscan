@@ -11,7 +11,6 @@ mod eject;
 mod io;
 mod mono;
 mod progress;
-mod ram;
 mod scan;
 
 // Legacy windows command prompt doesn't interpret ANSI escapes until a process opts in via SetConsoleMode.

@@ -350,7 +350,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
                         ControlFlow::Continue(())
                     }
                 },
-            );
+            )?;
             if let Some(bar) = meter_bar {
                 crate::progress::done(bar);
             }

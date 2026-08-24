@@ -262,13 +262,10 @@ class Session:
         
         On BH-perforated stock (cine film), the first frame positioning after
         the framing pass can fail its verification when the target sits deeper
-        than about frame 6, and the unit rewinds the film in response. One
-        successful positioning clears the fault for the session. This
-        repositions to `early` - hand it the first detected frame,
-        `discovery.frames[0]` - through the unit's own machinery: transport
-        only, no CCD readout, a couple of seconds.
+        than about frame 6, and the unit rewinds the film in response. Workaround is
+        to rewind to a frame <=6 before transporting to a higher number.
         
-        Call this once, after discovery and before the first `scan_frame`,
+        Call this once with a low frame, after discovery and before the first `scan_frame`,
         whenever the first frame you actually mean to scan is deeper than that.
         Films without BH perforations never trip the fault, so skip it there.
         """

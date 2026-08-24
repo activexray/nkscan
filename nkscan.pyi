@@ -77,7 +77,7 @@ class Capabilities:
     @property
     def multi_line(self) -> builtins.bool:
         r"""
-        Whether the CCD reads three lines at once. False means a "superfine"
+        Whether the CCD can read its lines at once. False means a "superfine"
         control has nothing to switch
         """
     @property

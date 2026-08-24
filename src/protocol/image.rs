@@ -9,6 +9,7 @@ use crate::{
         caps::{
             Capabilities,
             address::Transfer,
+            other::HostCooperation,
             set_window::{ColorInterleaving, ScanKind},
         },
         data::{Truncation, width_code},
@@ -48,6 +49,8 @@ pub struct Layout {
     /// Lines on the CCD, which is how many arrive at once under
     /// [`MULTILINE_SIMULTANEOUS`](ColorInterleaving::MULTILINE_SIMULTANEOUS)
     pub ccd_lines: u8,
+    /// CCD rows in one wire line, which is more than 1 only where the unit packs them without raising `MULTI_LINE` to describe it
+    pub packed_rows: u8,
     /// How far apart the CCD's lines land, in output lines. 2-11-5-3
     pub registration_gap: u32,
     /// The transfer length every READ has to be a whole number of. 1 means the
@@ -80,6 +83,7 @@ impl Layout {
             interleaving: ColorInterleaving::LINE_WITHOUT_DISTANCE,
             readings_per_line: 1,
             ccd_lines: 1,
+            packed_rows: 1,
             registration_gap: 0,
             granule: 1,
             truncated_bytes_line: (0, 0),
@@ -128,6 +132,23 @@ fn pitches(caps: &Capabilities, window: &Window) -> Result<(u32, u32), Error> {
     Ok((snap(optical / asked), snap(optical_y / asked_y)))
 }
 
+/// CCD rows the unit puts in one line on the wire
+///
+/// A unit that raises `MULTI_LINE` wants the host to re-register the rows and
+/// tells it how wide the result is, so it is read a row at a time. One that
+/// never raises it packs the rows into a single line and says nothing about it
+fn packed_rows(caps: &Capabilities, interleaving: ColorInterleaving) -> u8 {
+    let packed = interleaving.contains(ColorInterleaving::MULTILINE_SIMULTANEOUS)
+        && !caps
+            .features
+            .cooperation
+            .contains(HostCooperation::MULTI_LINE);
+    match packed {
+        true => caps.address.lines.max(1),
+        false => 1,
+    }
+}
+
 /// The transfer length every READ has to be a whole number of, `Address` byte 4
 ///
 /// Bit 1 makes it a line across every color, bit 2 one line. Neither set means
@@ -140,23 +161,8 @@ fn pitches(caps: &Capabilities, window: &Window) -> Result<(u32, u32), Error> {
 fn read_granule(caps: &Capabilities, layout: &Layout, truncated: Option<&Truncation>) -> usize {
     let transfer = caps.address.transfer;
 
-    // The LS-5000 emits its two CCD rows as one physical acquisition in
-    // MULTILINE_SIMULTANEOUS mode. A READ must therefore not end between
-    // those two rows.
-    //
-    // Keep the existing behavior for three-line scanners such as the LS-9000,
-    // whose multiline transport/cooperation behavior is different and already
-    // works through the existing path.
-    let simultaneous_rows = if layout
-        .interleaving
-        .contains(ColorInterleaving::MULTILINE_SIMULTANEOUS)
-    {
-        usize::from(layout.ccd_lines).max(1)
-    } else {
-        1
-    };
-
-    let whole_line = (layout.bytes_per_line() as usize * simultaneous_rows).max(1);
+    // Packed rows are one acquisition, so a READ must not end between them
+    let whole_line = (layout.bytes_per_line() as usize * usize::from(layout.packed_rows)).max(1);
 
     if transfer.contains(Transfer::READ_LINE_COLS) {
         return whole_line;
@@ -246,6 +252,7 @@ impl Layout {
             // Byte 40's high nibble is one less than the number of reads
             readings_per_line: first.multiple_reading.saturating_add(1),
             ccd_lines: caps.address.lines,
+            packed_rows: packed_rows(caps, first.color_interleaving),
             // The gap is along the feed, so it divides by the feed's pitch. The
             // two pitches are equal except in a preview, which halves only Y
             registration_gap: u32::from(caps.address.line_gap) / line_pitch,
@@ -387,6 +394,28 @@ mod tests {
 
     /// The one scan an LS-9000 has actually run: a 1200 x 1200 window at 666
     /// dpi, one channel, 16 bit, which read back 80000 bytes off the hardware
+    /// Rows read at once come packed into one line unless the unit asks the
+    /// host to re-register them, which is what separates a 5000 from a 9000
+    #[test]
+    fn only_an_unregistered_multiline_read_packs_its_rows() {
+        let five = caps(0x02, 0, 2);
+        assert_eq!(
+            packed_rows(&five, ColorInterleaving::MULTILINE_SIMULTANEOUS),
+            2
+        );
+        assert_eq!(
+            packed_rows(&five, ColorInterleaving::LINE_WITHOUT_DISTANCE),
+            1
+        );
+
+        let mut nine = caps(0x02, 0, 3);
+        nine.features.cooperation |= HostCooperation::MULTI_LINE;
+        assert_eq!(
+            packed_rows(&nine, ColorInterleaving::MULTILINE_SIMULTANEOUS),
+            1
+        );
+    }
+
     #[test]
     fn the_first_real_scan_still_measures_80000_bytes() {
         let l = Layout::new(
@@ -641,6 +670,7 @@ mod readouts {
             interleaving: ColorInterleaving::MULTILINE_SIMULTANEOUS,
             readings_per_line: readings,
             ccd_lines: 3,
+            packed_rows: 1,
             registration_gap: 1,
             granule: 1,
             truncated_bytes_line: (0, 0),

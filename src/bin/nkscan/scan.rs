@@ -143,16 +143,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         );
     }
     let caps = session.capabilities();
-    // Multi-line scanning capability is advertised by the SET WINDOW
-    // color-interleaving field. HostCooperation::MULTI_LINE instead means
-    // that the host is required to perform additional multi-line registration.
-    // The LS-5000 supports two-line simultaneous scanning but does not require
-    // that registration cooperation.
-    let multiline_supported = caps.address.lines > 1
-        && caps
-            .set_window
-            .interleaving
-            .contains(ColorInterleaving::MULTILINE_SIMULTANEOUS);
+    let multiline_supported = caps.reads_lines_at_once();
 
     let color_interleave = if !superfine && multiline_supported {
         ColorInterleaving::MULTILINE_SIMULTANEOUS

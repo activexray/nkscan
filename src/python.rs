@@ -11,7 +11,6 @@ use crate::{
     protocol::{
         caps::{
             Capabilities as RustCapabilities,
-            other::HostCooperation,
             set_window::{ColorInterleaving, ScanKind},
         },
         data::{Op, Rect},
@@ -167,7 +166,7 @@ pub struct PyCapabilities {
     /// Whether a thumbnail pass happens at all, and so whether a caller can
     /// offer to keep it
     thumbnail: bool,
-    /// Whether the CCD reads three lines at once. False means a "superfine"
+    /// Whether the CCD can read its lines at once. False means a "superfine"
     /// control has nothing to switch
     multi_line: bool,
     /// Whether the unit can give the medium back on its own
@@ -245,10 +244,7 @@ impl From<&RustCapabilities> for PyCapabilities {
                 framing::Framing::choose(caps),
                 Framing::Thumbnail | Framing::Perforation
             ),
-            multi_line: caps
-                .features
-                .cooperation
-                .contains(HostCooperation::MULTI_LINE),
+            multi_line: caps.reads_lines_at_once(),
             eject: caps.features.execute.supports(Op::Unload),
             autofocus: caps.features.execute.supports(Op::AutoFocus),
             hardware_metering: caps

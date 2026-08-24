@@ -38,6 +38,21 @@ pub struct Capabilities {
     pub frames: Option<frames::Frames>,
 }
 
+impl Capabilities {
+    /// Whether the unit can read its CCD lines at once
+    ///
+    /// The SET WINDOW page is what offers the mode. `MULTI_LINE` asks a
+    /// different question, whether the host has to re-register the rows
+    /// afterwards, and a unit can do the first without ever asking for it
+    pub fn reads_lines_at_once(&self) -> bool {
+        self.address.lines > 1
+            && self
+                .set_window
+                .interleaving
+                .contains(set_window::ColorInterleaving::MULTILINE_SIMULTANEOUS)
+    }
+}
+
 /// One page from "Vital Product Data"
 #[derive(Debug)]
 pub struct Page {

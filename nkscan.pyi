@@ -261,11 +261,8 @@ class Session:
         Send an edited set of frame boundaries to the unit as one table
         
         Call this after modifying what [`Session.discover_frames`][Self.discover_frames]
-        returned, before scanning - every rectangle becomes a frame entry, with
-        perforation registration derived per top on roll film. One round trip
-        however many frames changed. Scanning without this also works: the first
-        `scan_frame` over an unregistered top registers itself, just one table
-        send per edit rather than one overall.
+        returned, before scanning. Every rectangle becomes a frame entry, with
+        perforation registration derived per top on roll film.
         """
     def scan_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], dpi: typing.Optional[builtins.int] = None, samples: builtins.int = 1, superfine: builtins.bool = False, infrared: builtins.bool = False, clean: builtins.bool = False, lock_white_balance: builtins.bool = True, exposures: typing.Optional[typing.Mapping[builtins.str, builtins.int]] = None, progress: typing.Optional[typing.Any] = None) -> ScanResult:
         r"""

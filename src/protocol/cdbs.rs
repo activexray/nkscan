@@ -422,3 +422,43 @@ impl SetWindow {
         [0x24, 0, 0, 0, 0, 0, hi, mid, lo, VENDOR]
     }
 }
+
+/// READ BUFFER, 2-11 vendor form (handler FW:0x028884)
+///
+/// CDB: `3C mode bufid off(3) len(3) ctrl`. The unit answers with raw bytes
+/// from `base + offset`, where base comes from the buffer-ID lookup table at
+/// FW:0x4A114. Stock firmware maps ID 0 to 0x400000/0x20000 (the first 128 KB
+/// of RAM); the coolscan-mods build rewrites that entry to base 0, size
+/// 0xFFFFFF, which turns offset into an absolute byte address across the
+/// whole first 16 MB of the H8's space
+///
+/// The handler truncates its transfer length to 16 bits, so keep chunks at or
+/// under 0xFFFF
+#[derive(Debug)]
+pub struct ReadBuffer {
+    /// Buffer-ID row of the FW:0x4A114 table. The modded entry lives at 0
+    pub id: u8,
+    /// Byte offset from the entry's base address
+    pub offset: u32,
+    /// How many bytes to ask for; the unit truncates to u16
+    pub length: u32,
+}
+
+impl ReadBuffer {
+    pub fn cdb(&self) -> [u8; 10] {
+        [
+            0x3C,
+            // Mode 2 (data only): the combined-data modes prepend a header we
+            // would only have to strip, and nothing in the corpus needs it
+            2,
+            self.id,
+            (self.offset >> 16) as u8,
+            (self.offset >> 8) as u8,
+            self.offset as u8,
+            (self.length >> 16) as u8,
+            (self.length >> 8) as u8,
+            self.length as u8,
+            0,
+        ]
+    }
+}

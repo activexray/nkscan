@@ -11,6 +11,7 @@ mod eject;
 mod io;
 mod mono;
 mod progress;
+mod ram;
 mod scan;
 
 // Legacy windows command prompt doesn't interpret ANSI escapes until a process opts in via SetConsoleMode.
@@ -75,6 +76,7 @@ fn main() -> anyhow::Result<()> {
         }
         cli::Action::Dump(args) => dump::run(args)?,
         cli::Action::Eject(args) => eject::run(args)?,
+        cli::Action::Ram(args) => ram::run(args)?,
     }
 
     // Donezo

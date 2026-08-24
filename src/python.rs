@@ -449,6 +449,28 @@ impl PySession {
         Ok(PyDiscovery { frames, thumbnail })
     }
 
+    /// Work around the Bell&Howell first-positioning fault
+    ///
+    /// On BH-perforated stock (cine film), the first frame positioning after
+    /// the framing pass can fail its verification when the target sits deeper
+    /// than about frame 6, and the unit rewinds the film in response. Workaround is
+    /// to rewind to a frame <=6 before transporting to a higher number.
+    ///
+    /// Call this once with a low frame, after discovery and before the first `scan_frame`,
+    /// whenever the first frame you actually mean to scan is deeper than that.
+    /// Films without BH perforations never trip the fault, so skip it there.
+    #[pyo3(signature = (early))]
+    fn prime_bh(&self, py: Python<'_>, early: (u32, u32, u32, u32)) -> PyResult<()> {
+        let (top, left, bottom, right) = early;
+        let frame = Rect { top, left, bottom, right };
+        py.detach(move || {
+            self.with(|session| {
+                use crate::scan::focus::Focus;
+                session.focus_frame(frame, Focus::default()).map(|_| ())
+            })
+        })
+    }
+
     /// Focus, meter, take the pass over `frame`, and optionally clean it
     ///
     /// `frame` is `(top, left, bottom, right)`, one of `discover_frames`'s. `exposures`,

@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0]
+
+### Added
+
+- Multi-line reading on the LS-5000, which halves scan time. It offers the mode in its SET WINDOW page but never raises `MULTI_LINE`, so the old check could not reach it. `--superfine` still selects single-line, which has no row-to-row banding and no equivalent in Nikon Scan.
+- `Capabilities::reads_lines_at_once`, the multi-line test the CLI and the Python bindings now share.
+
+### Changed
+
+- **Breaking:** `Layout` has a new `packed_rows` field.
+- `Capabilities.multi_line` in Python answers the SET WINDOW page rather than the cooperation bit, so it no longer reports false on a unit that can read its lines at once.
+
 ## [0.8.0]
 
 ### Added

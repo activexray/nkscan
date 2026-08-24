@@ -6,7 +6,9 @@
 use super::Session;
 use crate::{
     error::Error,
-    protocol::{decode::Samples, image::Layout, window::Window},
+    protocol::{
+        caps::set_window::ColorInterleaving, decode::Samples, image::Layout, window::Window,
+    },
     scan::pass::{self, Pass, Progress},
     session::window::Started,
 };
@@ -47,10 +49,27 @@ impl TruncationState {
 }
 
 fn strip_truncation(buf: &mut Vec<u8>, state: &mut TruncationState, layout: &Layout) {
-    let line_bytes = layout.bytes_per_line() as usize;
+    // The LS-5000 emits both CCD rows as one wire acquisition in
+    // MULTILINE_SIMULTANEOUS mode. Nikon's truncation byte counts are
+    // per CCD row, so they span both rows on the wire.
+    //
+    // Keep the existing behavior for three-row scanners until their
+    // truncation semantics have been verified independently.
+    let simultaneous_rows = if layout
+        .interleaving
+        .contains(ColorInterleaving::MULTILINE_SIMULTANEOUS)
+        && layout.ccd_lines == 2
+    {
+        2
+    } else {
+        1
+    };
+
+    let line_bytes = layout.bytes_per_line() as usize * simultaneous_rows;
+
     let (first_bytes, last_bytes) = layout.truncated_bytes_line;
-    let first_bytes = first_bytes as usize;
-    let last_bytes = last_bytes as usize;
+    let first_bytes = first_bytes as usize * simultaneous_rows;
+    let last_bytes = last_bytes as usize * simultaneous_rows;
 
     let total_lines = layout.lines as usize;
     let first_line = layout.truncated_lines_frame.0 as usize;

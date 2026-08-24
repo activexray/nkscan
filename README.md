@@ -219,3 +219,4 @@ as above, without any additional terms or conditions.
 - [sane-coolscan3](http://sane-project.org/man/sane-coolscan3.5.html)
 - [openICE](https://github.com/a6o/openICE)
 - [digital fauxice](https://github.com/rohanpandula/digital-fauxice)
+- [ScanStudio](https://github.com/rohanpandula/ScanStudio)

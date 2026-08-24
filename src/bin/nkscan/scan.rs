@@ -254,7 +254,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         if bh_perf {
             let first = frames.iter().min().copied().unwrap_or(1);
             if first > 6 && !discovery.frames.is_empty() {
-                info!("BH perfs: priming with an early-frame reposition");
+                info!("BH perf workaround: priming with an early-frame reposition");
                 let early = discovery.frames[0];
                 session
                     .focus_frame(early, Focus::default())

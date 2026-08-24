@@ -90,7 +90,6 @@ fn discover_cancellable(session: &mut Session, args: &cli::Discover) -> Result<(
     let saved = frames::from_discovery(
         Some(product.to_string()),
         &format!("{mechanism:?}"),
-        &discovery.table,
         &discovery.frames,
     );
     frames::save(&path, &saved)?;

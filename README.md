@@ -7,13 +7,27 @@
 
 A cross-platform and performant driver for Nikon (Coolscan) film scanners.
 
-## Usage
+## Installation
 
-For the command-line tool, download a binary release or build from source and run!
-Releases carry a binary for Linux (x86_64), Windows (x86_64) and macOS (Apple Silicon (aarch64) only).
+There is no installer, just grab a binary for your system from the [releases](https://github.com/activexray/nkscan/releases/latest).
 
-The mac binaries are not signed, so Gatekeeper will trigger and will prevent it from running.
+The MacOS binaries are not signed, so Gatekeeper will trigger and will prevent it from running.
 Clear that with `xattr -d com.apple.quarantine nkscan-aarch64-apple-darwin`, or build from source instead.
+
+### Building from Source
+
+If you have a rust toolchain installed, you can install straight from crates.io via
+
+```bash
+cargo install nkscan --features cli --locked
+```
+
+which will put `nkscan` on your path.
+
+Otherwise, clone the repo and `cargo build --release --features cli`.
+
+If you have nix installed, you can build with `nix build`.
+We have the package defined in the flake, so you can add this to your personal config, if you wish.
 
 ### Example
 

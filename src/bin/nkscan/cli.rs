@@ -141,6 +141,12 @@ pub struct Scan {
     #[arg(long)]
     pub no_eject: bool,
 
+    /// Film has Bell&Howell perforations (cine stock). Works around a
+    /// firmware positioning fault on the first frame selection after the
+    /// thumbnail pass by priming with an early-frame reposition first
+    #[arg(long)]
+    pub bh_perf: bool,
+
     /// Keep the framing thumbnail as <basename>_<n>_thumbnail.tiff, on units that support this
     #[arg(long)]
     pub thumbnail: bool,

@@ -4,6 +4,14 @@ on:
     push:
         tags:
             - "v*"
+    # For backfilling a platform onto a tag that already released, e.g. after adding a
+    # target here. crates.io is skipped and PyPI/GitHub release uploads are additive, so
+    # this only fills in what `tag` is missing.
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: Existing release tag to backfill (e.g. v0.9.0)
+                required: true
 
 # The default for every job. `publish` and `publish-pypi` below each override this with their
 # own `id-token: write` for trusted publishing, since a job's `permissions:` replaces this
@@ -94,6 +102,7 @@ jobs:
             - name: Upload to release
               uses: softprops/action-gh-release@v2
               with:
+                  tag_name: ${{ inputs.tag || github.ref_name }}
                   files: nkscan-${{ matrix.target }}${{ matrix.ext }}
 
     # The binaries take their name from the tag and their version from Cargo.toml, so a
@@ -108,12 +117,14 @@ jobs:
               uses: actions/checkout@v4
 
             - name: Compare
+              env:
+                  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
               run: |
                   crate=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-                  tag=${GITHUB_REF_NAME#v}
+                  tag=${RELEASE_TAG#v}
                   echo "Cargo.toml says $crate, tag says $tag"
                   if [ "$crate" != "$tag" ]; then
-                    echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $crate"
+                    echo "::error::tag $RELEASE_TAG does not match Cargo.toml version $crate"
                     exit 1
                   fi
 
@@ -122,6 +133,9 @@ jobs:
     publish:
         name: Publish to crates.io
         needs: [build, version]
+        # crates.io has no per-platform artifacts to backfill, and a version once published
+        # can't be published again, so a manual dispatch skips this rather than fail it
+        if: github.event_name == 'push'
         runs-on: ubuntu-latest
         environment: crates-io
         permissions:
@@ -223,6 +237,9 @@ jobs:
               uses: pypa/gh-action-pypi-publish@release/v1
               with:
                   packages-dir: dist
+                  # A backfill reuploads every wheel, not just the new platform's; skip
+                  # rather than fail on the filenames already on PyPI from the original run
+                  skip-existing: true
 
     attach-wheels:
         name: Attach wheels to the release
@@ -239,4 +256,5 @@ jobs:
             - name: Upload to release
               uses: softprops/action-gh-release@v2
               with:
+                  tag_name: ${{ inputs.tag || github.ref_name }}
                   files: dist/*

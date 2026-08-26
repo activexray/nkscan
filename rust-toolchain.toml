@@ -4,12 +4,14 @@ components = ["rustfmt", "rust-analyzer", "clippy", "rust-src"]
 # Every platform `device::list` has a transport for, plus the musl one releases ship. The
 # flake reads this file, so a target here is one `cargo clippy --target` can reach from any of
 # them: nothing else compiles `transport/windows.rs` or the macOS side of `transport/usb.rs`.
-# CI cross-checks the lot, and release.yml builds three of them, so dropping one from here
-# fails both rather than going quiet
+# CI cross-checks the lot, and release.yml builds four of them, so dropping one from here
+# fails both rather than going quiet. x86_64-apple-darwin is cross-compiled from the
+# aarch64-apple-darwin runner, since GitHub's free macOS runners are all Apple Silicon now.
 targets = [
   "x86_64-unknown-linux-gnu",
   "aarch64-unknown-linux-gnu",
   "x86_64-pc-windows-msvc",
   "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
   "x86_64-unknown-linux-musl",
 ]

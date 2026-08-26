@@ -36,6 +36,9 @@ jobs:
                       ext: .exe
                     - runner: macos-14
                       target: aarch64-apple-darwin
+                    # Cross-compiled from the arm64 runner above: no free Intel runner exists
+                    - runner: macos-14
+                      target: x86_64-apple-darwin
         steps:
             - name: Checkout repository
               uses: actions/checkout@v4
@@ -160,6 +163,8 @@ jobs:
                       target: x86_64-pc-windows-msvc
                     - runner: macos-14
                       target: aarch64-apple-darwin
+                    - runner: macos-14
+                      target: x86_64-apple-darwin
         steps:
             - name: Checkout repository
               uses: actions/checkout@v4

@@ -51,6 +51,19 @@ impl Capabilities {
                 .interleaving
                 .contains(set_window::ColorInterleaving::MULTILINE_SIMULTANEOUS)
     }
+
+    /// Whether the unit can read its CCD lines at once at `dpi`
+    ///
+    /// The CCD rows are [`registration_gap`](address::Address::registration_gap)
+    /// output lines apart. If the scanning pitch is larger than the line gap,
+    /// that distance is zero. The rows then give the same output line, and the
+    /// decoder cannot separate them.
+    ///
+    /// A unit with a gap of one line reads its rows at once only at the optical
+    /// resolution.
+    pub fn reads_lines_at_once_at(&self, dpi: u16) -> bool {
+        self.reads_lines_at_once() && self.address.registration_gap(dpi) > 0
+    }
 }
 
 /// One page from "Vital Product Data"

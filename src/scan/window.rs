@@ -181,6 +181,24 @@ impl Recipe {
             });
         }
 
+        // The distance between the CCD rows is the line gap divided by the
+        // scanning pitch. If the pitch is larger than the gap, the rows give
+        // one output line and the decoder cannot separate them. 2-11-5-3
+        if caps.reads_lines_at_once()
+            && caps.address.registration_gap(self.dpi) == 0
+            && self
+                .interleaving
+                .contains(ColorInterleaving::MULTILINE_SIMULTANEOUS)
+        {
+            return Err(Error::Unsupported {
+                op: "color interleaving",
+                reason: format!(
+                    "at {} dpi all the CCD rows of this unit give one output line, so the pass must read one row at a time",
+                    self.dpi
+                ),
+            });
+        }
+
         let offered = caps.set_window.interleaving;
         match self.interleaving.bits().count_ones() == 1 && offered.contains(self.interleaving) {
             true => Ok(()),
@@ -198,7 +216,7 @@ impl Recipe {
     fn reading(interleaving: ColorInterleaving) -> &'static str {
         match interleaving {
             ColorInterleaving::LINE_WITHOUT_DISTANCE => "one row at a time",
-            ColorInterleaving::MULTILINE_SIMULTANEOUS => "three rows at once",
+            ColorInterleaving::MULTILINE_SIMULTANEOUS => "all its rows at once",
             _ => "that way",
         }
     }
@@ -492,6 +510,34 @@ pub(crate) mod tests {
         caps.set_window.interleaving = ColorInterleaving::LINE_WITHOUT_DISTANCE;
         assert!(recipe().supported(&caps).is_err());
         assert!(recipe().windows(&caps, frame()).is_err());
+    }
+
+    /// The CCD rows must be a whole output line apart. A unit with a gap of one
+    /// line reads its rows together only at the optical resolution.
+    #[test]
+    fn a_pitch_larger_than_the_line_gap_is_refused() {
+        let mut caps = caps();
+        caps.address.line_gap = 1;
+        caps.address.lines = 2;
+
+        assert!(recipe().supported(&caps).is_ok());
+
+        let half = Recipe {
+            dpi: 2000,
+            ..recipe()
+        };
+        assert!(half.supported(&caps).is_err());
+        assert!(half.windows(&caps, frame()).is_err());
+
+        // One row at a time has no gap to divide
+        assert!(
+            Recipe {
+                interleaving: ColorInterleaving::LINE_WITHOUT_DISTANCE,
+                ..half
+            }
+            .supported(&caps)
+            .is_ok()
+        );
     }
 
     /// 6x9 film is 84 mm and an LS-9000's Y axis stops at 13176 units, 83.65 mm.

@@ -143,9 +143,11 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         );
     }
     let caps = session.capabilities();
+    let dpi = dpi.unwrap_or(caps.address.x_axis.optical_dpi);
     let multiline_supported = caps.reads_lines_at_once();
+    let multiline_at_dpi = caps.reads_lines_at_once_at(dpi);
 
-    let color_interleave = if !superfine && multiline_supported {
+    let color_interleave = if !superfine && multiline_at_dpi {
         ColorInterleaving::MULTILINE_SIMULTANEOUS
     } else {
         ColorInterleaving::LINE_WITHOUT_DISTANCE
@@ -153,6 +155,11 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
 
     if superfine && !multiline_supported {
         warn!("this scanner has no multi-line scanning mode, so --superfine changes nothing");
+    }
+    if !superfine && multiline_supported && !multiline_at_dpi {
+        info!(
+            "at {dpi} dpi all the CCD rows give one output line, so the scan reads one row at a time and takes more time"
+        );
     }
 
     debug!(
@@ -164,7 +171,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
     // What every frame gets scanned with
     // Checked before anything moves
     let recipe = Recipe {
-        dpi: dpi.unwrap_or(session.capabilities().address.x_axis.optical_dpi),
+        dpi,
         samples,
         interleaving: color_interleave,
         // Cleaning reads the mask whether or not the operator wants it kept

@@ -374,8 +374,14 @@ impl<'a> Decoder<'a> {
             1 => 1,
             _ => layout.registration_gap as usize,
         };
+        if gap == 0 {
+            return Err(bad(format!(
+                "a scanning pitch of {} puts all the CCD rows on one output line, so the decoder cannot separate a multi-line read",
+                layout.line_pitch
+            )));
+        }
         let strip = gap * ccd_lines;
-        if gap == 0 || !cols.is_multiple_of(strip) {
+        if !cols.is_multiple_of(strip) {
             return Err(bad(format!(
                 "{cols} columns is not a whole number of {strip}-column blocks"
             )));
@@ -830,6 +836,14 @@ mod transposed {
                 }
             }
         }
+    }
+
+    /// A gap of zero gives the decoder no rows to separate
+    #[test]
+    fn a_gap_of_zero_is_refused() {
+        let mut l = layout(4, 2, 4, vec![1, 2, 3], 1);
+        l.registration_gap = 0;
+        assert!(Decoder::new(&l).is_err());
     }
 
     /// Columns have to divide into whole interleave blocks

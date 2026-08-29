@@ -182,6 +182,17 @@ bitflags! {
 
 impl Address {
     pub const PAGE_CODE: u8 = 0xC1;
+
+    /// The distance between the CCD rows at `dpi`, in output lines
+    ///
+    /// The distance is byte 85 divided by the scanning pitch. 2-11-5-3
+    ///
+    /// If the pitch is larger than the gap, the distance is zero. The CCD rows
+    /// then give the same output line.
+    pub fn registration_gap(&self, dpi: u16) -> u32 {
+        let optical = u32::from(self.y_axis.optical_dpi).max(u32::from(self.x_axis.optical_dpi));
+        u32::from(self.line_gap) / self.pitch_rule.snap(optical / u32::from(dpi).max(1))
+    }
 }
 
 impl TryFrom<&Page> for Address {
@@ -310,6 +321,8 @@ mod tests {
         be16(&mut p, 5, 58);
         p[16] = 0x42;
         p[17] = 0x12;
+        be16(&mut p, 18, 4000);
+        be16(&mut p, 40, 4000);
         be16(&mut p, 22, 666);
         be32(&mut p, 24, 9999);
         be32(&mut p, 36, 10000);
@@ -362,6 +375,21 @@ mod tests {
         // Only strip adapters can travel past one window in Y
         assert_eq!(nine.y_outside, None);
         assert!(five.y_outside.is_some());
+    }
+
+    /// The gap is a count of optical lines, and the scanning pitch divides it.
+    /// The LS-5000 has a gap of one line. Only a pitch of 1 keeps it. 2-11-5-3
+    #[test]
+    fn the_line_gap_divides_by_the_scanning_pitch() {
+        let nine = parse(&ls9000());
+        assert_eq!(nine.registration_gap(4000), 12);
+        assert_eq!(nine.registration_gap(2000), 6);
+        assert_eq!(nine.registration_gap(1000), 3);
+
+        let five = parse(&ls5000());
+        assert_eq!(five.registration_gap(4000), 1);
+        assert_eq!(five.registration_gap(2000), 0);
+        assert_eq!(five.registration_gap(1000), 0);
     }
 
     /// 2-2-2-3 byte 86: "When 0 is set ... '3 lines' is set"

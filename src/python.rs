@@ -497,13 +497,15 @@ impl PySession {
 
         py.detach(move || {
             self.with(|session| {
-                let interleaving = if superfine {
+                let caps = session.capabilities();
+                let dpi = dpi.unwrap_or(caps.address.x_axis.optical_dpi);
+                let interleaving = if superfine || !caps.reads_lines_at_once_at(dpi) {
                     ColorInterleaving::LINE_WITHOUT_DISTANCE
                 } else {
                     ColorInterleaving::MULTILINE_SIMULTANEOUS
                 };
                 let recipe = Recipe {
-                    dpi: dpi.unwrap_or(session.capabilities().address.x_axis.optical_dpi),
+                    dpi,
                     samples,
                     interleaving,
                     infrared: infrared || clean,

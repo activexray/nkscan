@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `Address::registration_gap` and `Capabilities::reads_lines_at_once_at`. Both answer the multi-line question at one resolution.
+
+### Changed
+
+- The Python bindings pick the interleaving the way the CLI does.
+
+### Fixed
+
+- A scan under 4000 dpi on the LS-5000 stopped with `decode is not supported`. Its CCD rows are one optical line apart, so any pitch above 1 puts them on one output line. Such a scan now reads one row at a time.
+
 ## [0.9.0]
 
 ### Added

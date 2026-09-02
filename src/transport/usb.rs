@@ -25,8 +25,14 @@ const PHASE_DATA_OUT: u8 = 0x02;
 const PHASE_DATA_IN: u8 = 0x03;
 const PHASE_BUSY: u8 = 0x04;
 
-/// How long we wait before sending a busy unit its command again
+/// The first wait before sending a busy unit its command again, and the longest
+/// that wait becomes
+///
+/// A unit that answers one BUSY was asked early. One that keeps answering BUSY
+/// is warming up, which takes it tens of seconds from cold, so the wait grows
+/// rather than asking it hundreds of times a second
 const BUSY_WAIT: Duration = Duration::from_millis(5);
+const BUSY_WAIT_MAX: Duration = Duration::from_millis(250);
 
 /// How long one phase check waits
 ///
@@ -224,6 +230,7 @@ impl Transport for UsbTransport {
             trace!(cdb = hex.join(" "), ?data, "command");
         }
         let deadline = Instant::now() + timeout;
+        let mut wait = BUSY_WAIT;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -236,13 +243,16 @@ impl Transport for UsbTransport {
                     self.dirty = false;
                     return Ok(completion);
                 }
-                // A check that ran out of time can still be answered, so drop
-                // the answer before the command goes out again
-                Attempt::Resend { drain: true } => {
-                    debug!("the unit stopped answering, we send the command again");
-                    self.resync();
+                Attempt::Resend { drain } => {
+                    // A check that ran out of time can still be answered, so
+                    // drop the answer before the command goes out again
+                    if drain {
+                        debug!("the unit stopped answering, we send the command again");
+                        self.resync();
+                    }
+                    sleep(wait.min(left));
+                    wait = (wait * 2).min(BUSY_WAIT_MAX);
                 }
-                Attempt::Resend { drain: false } => {}
             }
         }
     }
@@ -298,7 +308,6 @@ impl UsbTransport {
                 // longer next time and send this one again
                 self.settle = (self.settle + SETTLE_STEP).min(SETTLE_MAX);
                 debug!(settle = ?self.settle, "the check was early, we settle for longer");
-                sleep(BUSY_WAIT);
                 return Ok(Attempt::Resend { drain: false });
             }
             Some(phase) => phase,

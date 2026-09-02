@@ -141,7 +141,7 @@ If you test with a ⚠️-marked scanner/adapter combo and it works, please send
 | Scanner \ Holder                    | SA-21  | IA-20/21  | MA-20/21   | SA-30  | SF-210/200  |
 |-------------------------------------|:------:|:---------:|:----------:|:------:|:-----------:|
 | Super Coolscan 5000 (LS-5000 ED)    |   ⚠️   |  ⚠️      |    ✅     |  ⚠️    |   ⚠️       |
-| Super Coolscan 4000 (LS-5000 ED)    |   ⚠️   |  ⚠️      |    ⚠️     |  ⚠️    |   ⚠️       |
+| Super Coolscan 4000 (LS-5000 ED)    |   ✅   |  ⚠️      |    ⚠️     |  ✅    |   ⚠️       |
 | Coolscan V (LS-50 ED)               |   ✅   |  ✅      |    ✅     |  ✅    |   ✅       |
 | Coolscan IV (LS-40 ED)              |   ⚠️   |  ⚠️      |    ⚠️     |  ⚠️    |   ⚠️       |
 

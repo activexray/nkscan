@@ -81,7 +81,7 @@ pub(crate) const DRAIN_TIMEOUT: Duration = Duration::from_secs(20);
 ///
 /// Nothing advertised bounds this: `Address` bytes 80,81 are the lamp warm-up
 /// maximum, and both specs give them as 0
-const READY_TIMEOUT: Duration = Duration::from_secs(180);
+pub(crate) const READY_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// A device raising unit attentions forever would spin on refresh, so cap those.
 /// Polling needs no cap: it sleeps, and the deadline already bounds it

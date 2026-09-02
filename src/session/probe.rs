@@ -1,6 +1,6 @@
 //! Asking a unit what it is, before there is a session to ask through
 
-use super::PROBE_TIMEOUT;
+use super::{PROBE_TIMEOUT, READY_TIMEOUT};
 use crate::{
     error::Error,
     protocol::{
@@ -18,12 +18,22 @@ use crate::{
     },
     transport::{Data, Transport},
 };
+use std::time::Duration;
 use tracing::*;
 
 /// Run one INQUIRY and hand back however many bytes actually arrived
 pub fn inquiry(t: &mut dyn Transport, cmd: Inquiry) -> Result<Vec<u8>, Error> {
+    inquiry_within(t, cmd, PROBE_TIMEOUT)
+}
+
+/// As [`inquiry`], for a caller that knows the unit may take longer to answer
+pub fn inquiry_within(
+    t: &mut dyn Transport,
+    cmd: Inquiry,
+    timeout: Duration,
+) -> Result<Vec<u8>, Error> {
     let mut buf = vec![0u8; cmd.allocation_length()];
-    let completion = t.execute(&cmd.cdb(), Data::In(&mut buf), PROBE_TIMEOUT)?;
+    let completion = t.execute(&cmd.cdb(), Data::In(&mut buf), timeout)?;
     match interpret(&completion) {
         Outcome::Complete | Outcome::CompleteWith(_) => {}
         other => return Err(Error::from_outcome(other, &completion)),
@@ -76,7 +86,10 @@ pub fn page_codes(t: &mut dyn Transport) -> Result<Vec<u8>, Error> {
 /// Safe to call with a unit attention outstanding: 2-2 note 5 says INQUIRY is
 /// performed regardless, and does not clear it
 pub fn capabilities(t: &mut dyn Transport) -> Result<Capabilities, Error> {
-    let identity = Identity::parse(&inquiry(t, Inquiry::standard())?)?;
+    // The first command of a session meets the unit however it is, and a cold
+    // one stays busy for tens of seconds. The pages below it are read from a
+    // unit that has already answered
+    let identity = Identity::parse(&inquiry_within(t, Inquiry::standard(), READY_TIMEOUT)?)?;
     // Opening the wrong node is easy, and everything below assumes a scanner
     if !identity.is_scanner() {
         return Err(Error::NotFound);

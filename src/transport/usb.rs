@@ -25,18 +25,23 @@ const PHASE_DATA_OUT: u8 = 0x02;
 const PHASE_DATA_IN: u8 = 0x03;
 const PHASE_BUSY: u8 = 0x04;
 
-// A busy unit either answers 04h or does not answer at all, and a capture of
-// Nikon Scan on an LS-40 shows both for one INQUIRY. It sends the command
-// again either way, which is what we do
-/// The first wait before we send a busy unit its command again
+/// The first wait before we check a busy unit's phase again
 const BUSY_WAIT: Duration = Duration::from_millis(5);
 /// The longest that wait becomes
 const BUSY_WAIT_MAX: Duration = Duration::from_millis(250);
 
-/// How long one phase check waits before we call the unit busy
+/// How long the first phase check of a command waits
 ///
-/// Nikon Scan cancels the read at 7 s and issues the command again
+/// Nikon Scan cancels that read at 7 s and sends the command again
 const PHASE_WAIT: Duration = Duration::from_secs(7);
+
+/// How long a check after a BUSY waits before we give up on the command
+///
+/// A unit that took the command answers the next check once it is ready, and
+/// sending the command again would be a second command: the LS-40 refuses a
+/// repeated READ with 05h-2Ch. One that is deeply busy answers no check at all,
+/// and only a fresh command gets it going
+const RECHECK_WAIT: Duration = Duration::from_millis(300);
 
 /// How long a resync read waits before calling the pipe empty
 const RESYNC_TIMEOUT: Duration = Duration::from_millis(200);
@@ -215,7 +220,6 @@ impl Transport for UsbTransport {
             trace!(cdb = hex.join(" "), ?data, "command");
         }
         let deadline = Instant::now() + timeout;
-        let mut wait = BUSY_WAIT;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -228,15 +232,11 @@ impl Transport for UsbTransport {
                     self.dirty = false;
                     return Ok(completion);
                 }
-                Attempt::Busy { silent } => {
-                    debug!(?wait, silent, "the unit is busy, we send the command again");
-                    // A phase check that ran out of time can still be answered,
-                    // so drop the answer before the command goes out again
-                    if silent {
-                        self.resync();
-                    }
-                    sleep(wait.min(left));
-                    wait = (wait * 2).min(BUSY_WAIT_MAX);
+                Attempt::Resend => {
+                    debug!("the unit stopped answering, we send the command again");
+                    // A check that ran out of time can still be answered, so
+                    // drop the answer before the command goes out again
+                    self.resync();
                 }
             }
         }
@@ -247,29 +247,27 @@ impl Transport for UsbTransport {
 enum Attempt {
     /// The unit answered the command
     Done(Completion),
-    /// The unit is still busy with the command before this one. `silent` says
-    /// it left the phase check unanswered or untaken rather than answering 04h
-    Busy { silent: bool },
+    /// The unit would not take the command or stopped answering the phase
+    /// check, so none of it ran and it can go out again
+    Resend,
 }
 
 impl UsbTransport {
-    /// The command and the phase check, and the phase code the unit answered
-    ///
-    /// `None` where the unit did not take one of the two or did not answer
-    /// inside `wait`. A busy unit does all three, so a timeout here says it is
-    /// busy rather than that anything is broken
-    fn phase_check(&mut self, cdb: &[u8], wait: Duration) -> Result<Option<u8>, Error> {
-        for bytes in [cdb, &[PHASE_CHECK_CODE][..]] {
-            match self.write_out(bytes, wait) {
-                Ok(()) => {}
-                Err(Error::Timeout(_)) => return Ok(None),
-                Err(e) => return Err(e),
-            }
+    /// Ask what the unit wants next, `None` where it did not take the question
+    /// or did not answer it inside `wait`
+    fn phase_check(&mut self, wait: Duration) -> Result<Option<u8>, Error> {
+        match self.write_out(&[PHASE_CHECK_CODE], wait) {
+            Ok(()) => {}
+            Err(Error::Timeout(_)) => return Ok(None),
+            Err(e) => return Err(e),
         }
         let mut phase = [0u8; 1];
         match self.read_in(&mut phase, wait) {
             Ok(0) => Err(io::Error::new(io::ErrorKind::InvalidData, "empty phase response").into()),
-            Ok(_) => Ok(Some(phase[0])),
+            Ok(_) => {
+                trace!(phase = format!("{:02X}h", phase[0]), "phase");
+                Ok(Some(phase[0]))
+            }
             Err(Error::Timeout(_)) => Ok(None),
             Err(e) => Err(e),
         }
@@ -278,13 +276,35 @@ impl UsbTransport {
     /// One whole command, from the CDB to the status bytes
     fn exchange(&mut self, cdb: &[u8], data: Data, timeout: Duration) -> Result<Attempt, Error> {
         // Following the phase spec from 1-1-2 in LS5K spec
-        let Some(phase) = self.phase_check(cdb, timeout.min(PHASE_WAIT))? else {
-            return Ok(Attempt::Busy { silent: true });
-        };
-        trace!(phase = format!("{phase:02X}h"), "phase");
-        if phase == PHASE_BUSY {
-            return Ok(Attempt::Busy { silent: false });
+
+        // A unit that will not take the command has not run it
+        match self.write_out(cdb, timeout.min(PHASE_WAIT)) {
+            Ok(()) => {}
+            Err(Error::Timeout(_)) => return Ok(Attempt::Resend),
+            Err(e) => return Err(e),
         }
+
+        // It holds the command from here, so a busy answer is asked again
+        // rather than answered by sending the command a second time
+        let deadline = Instant::now() + timeout;
+        let mut wait = BUSY_WAIT;
+        let mut bound = PHASE_WAIT;
+        let phase = loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(Error::Timeout(timeout));
+            }
+            match self.phase_check(left.min(bound))? {
+                Some(PHASE_BUSY) => {
+                    debug!(?wait, "the unit is busy, we ask it again");
+                    sleep(wait.min(left));
+                    wait = (wait * 2).min(BUSY_WAIT_MAX);
+                    bound = RECHECK_WAIT;
+                }
+                Some(phase) => break phase,
+                None => return Ok(Attempt::Resend),
+            }
+        };
 
         // Now we act of the phase byte we got back (could be not what we asked for on errors)
         let transferred = match (phase, data) {

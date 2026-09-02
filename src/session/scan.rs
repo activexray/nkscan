@@ -164,8 +164,16 @@ impl Session {
 
         let total = layout.total_bytes();
 
+        // The scan is valid from here, and nothing above the read closes one,
+        // so a stream we cannot decode has to stop it on the way out
         let curves = self.curves();
-        let mut decoder = pass::decoder(&layout, curves.as_deref())?;
+        let mut decoder = match pass::decoder(&layout, curves.as_deref()) {
+            Ok(decoder) => decoder,
+            Err(e) => {
+                self.abandon_scan();
+                return Err(e);
+            }
+        };
         samples.resize_for(&decoder);
 
         let timing = Timing::default();

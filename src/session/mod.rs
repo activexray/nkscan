@@ -133,8 +133,10 @@ impl Session {
             }
             Err(e) => return Err(e),
         }
-        session.reserved = session.reserve()?;
+        // Before RESERVE UNIT, not after: a scan the last program left open
+        // refuses that too, and a refusal there is one nothing recovers from
         session.stop_stale_scan()?;
+        session.reserved = session.reserve()?;
         session.set_units(divisor)?;
 
         // The rest of the preamble drives the mechanism, so it waits until
@@ -271,6 +273,20 @@ impl Session {
         // An operation activation command, so it answers before it acts
         self.test_unit_ready(MOVE_TIMEOUT)?;
         Ok(true)
+    }
+
+    /// Stop a scan nothing is going to read
+    ///
+    /// The caller is already carrying an error, so a failure to stop it is
+    /// logged rather than returned
+    pub(crate) fn abandon_scan(&mut self) {
+        if let Err(e) = self.abort() {
+            warn!(
+                %e,
+                "could not stop the scan, so it is left open - the next command \
+                 will be refused out of sequence"
+            );
+        }
     }
 
     /// Give back whatever is loaded, answering whether the unit did anything

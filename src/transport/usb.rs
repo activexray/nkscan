@@ -110,7 +110,10 @@ impl UsbTransport {
             ep_in,
             in_max_packet,
             interface,
-            dirty: false,
+            // The flag does not outlive the process that set it, and a
+            // program that died mid-command left its answer on the pipe, so a
+            // fresh handle assumes the worst and drains before its first command
+            dirty: true,
         })
     }
 

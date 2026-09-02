@@ -145,6 +145,22 @@ impl Session {
     }
 }
 
+/// How much to ask for with `left` bytes of the pass still owed
+///
+/// A READ for anything but a whole number of granules is rounded up by the
+/// unit and the surplus arrives regardless, out of step with the phase
+/// protocol, so the rounding happens here where the buffer is sized for it.
+/// `chunk` is already a whole number of them; `left` is not, since a packed
+/// multi-line pass reads a whole group of CCD rows at a time and the line
+/// count need not divide by the rows in a group
+fn whole_granules(left: usize, granule: usize, chunk: usize) -> usize {
+    let want = chunk.min(left);
+    match granule {
+        0 => want,
+        g => want.div_ceil(g).saturating_mul(g).min(chunk),
+    }
+}
+
 /// How far a transfer fell short, when that is what the unit reported
 fn short(fault: &Fault) -> Option<u32> {
     let (Fault::Reported(_, Some(sense)) | Fault::Rejected(_, Some(sense))) = fault else {
@@ -207,7 +223,7 @@ impl Chunks<'_> {
             return None;
         }
 
-        let want = self.chunk.min(self.remaining as usize);
+        let want = whole_granules(self.remaining as usize, self.layout.granule, self.chunk);
         buf.resize(want, 0);
         let layout = &self.layout;
 
@@ -270,7 +286,7 @@ impl Chunks<'_> {
             let want = match self.remaining {
                 0 if self.layout.multiline_registered => self.chunk,
                 0 => break,
-                left => self.chunk.min(left as usize),
+                left => whole_granules(left as usize, self.layout.granule, self.chunk),
             };
             // A stage move's budget here is what turns a unit that has stopped
             // answering into three silent minutes. The pass is already running,
@@ -373,5 +389,39 @@ impl Drop for Chunks<'_> {
                  will be refused out of sequence"
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::whole_granules;
+
+    /// A packed three-row pass over a line count that does not divide by three
+    /// leaves a part-group at the end, and asking for it as it stands is what
+    /// puts the phase protocol out of step
+    #[test]
+    fn the_last_chunk_is_a_whole_number_of_granules() {
+        let granule = 70_200;
+        let chunk = granule * 2;
+        assert_eq!(whole_granules(chunk, granule, chunk), chunk);
+        assert_eq!(whole_granules(granule + 1, granule, chunk), chunk);
+        assert_eq!(whole_granules(23_400, granule, chunk), granule);
+        assert_eq!(whole_granules(1, granule, chunk), granule);
+    }
+
+    /// Rounding up never asks for more than one chunk
+    #[test]
+    fn rounding_stays_inside_a_chunk() {
+        let granule = 1024;
+        let chunk = granule * 4;
+        assert_eq!(whole_granules(chunk - 1, granule, chunk), chunk);
+        assert_eq!(whole_granules(u64::MAX as usize, granule, chunk), chunk);
+    }
+
+    /// A unit that constrains nothing reads exactly what is left
+    #[test]
+    fn an_unconstrained_unit_reads_what_is_left() {
+        assert_eq!(whole_granules(7, 1, 4096), 7);
+        assert_eq!(whole_granules(7, 0, 4096), 7);
     }
 }

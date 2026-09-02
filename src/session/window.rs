@@ -147,7 +147,15 @@ impl Session {
             _ => None,
         });
 
-        let mut layout = Layout::new(&self.caps, windows, self.divisor, truncation)?;
+        // The scan is valid from here, so a layout the unit's own numbers do
+        // not describe has to stop it rather than return through it
+        let mut layout = match Layout::new(&self.caps, windows, self.divisor, truncation) {
+            Ok(layout) => layout,
+            Err(e) => {
+                self.abandon_scan();
+                return Err(e);
+            }
+        };
         layout.multiline_registered = CooperativeAction::any_multiline_registration(&cooperations);
 
         Ok(Started {

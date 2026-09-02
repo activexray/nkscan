@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Command retries for the USB backend, fixing a bug raised by the second phase check in an LS-40.
+- The last image READ of a pass asks for a whole number of granules, so the unit no longer rounds it up and sends a surplus the phase protocol cannot place.
+- A pass refused for its layout or its stream shape stops the scan, rather than leaving one open that refuses every later command with `05h-2Ch`.
+- `Session::open` stops a stale scan before RESERVE UNIT, which such a scan refuses.
+- The USB transport drains the pipe before its first command, so a handle opened after a program died mid-command starts in step.
 - A scan under 4000 dpi on the LS-5000 stopped with `decode is not supported`. Its CCD rows are one optical line apart, so any pitch above 1 puts them on one output line. Such a scan now reads one row at a time.
 
 ## [0.9.0]

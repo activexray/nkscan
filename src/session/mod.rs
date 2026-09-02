@@ -50,7 +50,9 @@ pub struct Session {
     reserved: bool,
 }
 
-pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+/// What a command that asks the unit something, rather than moves anything,
+/// gets. A busy LS-40 leaves a phase check unanswered for seconds at a time
+pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long to wait before asking a busy unit again
 const POLL_INTERVAL: Duration = Duration::from_millis(100);

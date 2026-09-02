@@ -25,15 +25,18 @@ const PHASE_DATA_OUT: u8 = 0x02;
 const PHASE_DATA_IN: u8 = 0x03;
 const PHASE_BUSY: u8 = 0x04;
 
-// The unit answers one phase check for each command. Nikon's own USB driver
-// (NKDUSCAN.dll) checks the phase one time, and reports an error for a phase
-// code it does not expect. It never sends a second D0h. The LS-40 stops
-// answering the pipe after a second D0h, and only a power cycle recovers it.
-// So a unit that answers BUSY gets the command again instead
+// A busy unit either answers 04h or does not answer at all, and a capture of
+// Nikon Scan on an LS-40 shows both for one INQUIRY. It sends the command
+// again either way, which is what we do
 /// The first wait before we send a busy unit its command again
 const BUSY_WAIT: Duration = Duration::from_millis(5);
 /// The longest that wait becomes
 const BUSY_WAIT_MAX: Duration = Duration::from_millis(250);
+
+/// How long one phase check waits before we call the unit busy
+///
+/// Nikon Scan cancels the read at 7 s and issues the command again
+const PHASE_WAIT: Duration = Duration::from_secs(7);
 
 /// How long a resync read waits before calling the pipe empty
 const RESYNC_TIMEOUT: Duration = Duration::from_millis(200);
@@ -225,8 +228,13 @@ impl Transport for UsbTransport {
                     self.dirty = false;
                     return Ok(completion);
                 }
-                Attempt::Busy => {
-                    debug!(?wait, "the unit is busy, we send the command again");
+                Attempt::Busy { silent } => {
+                    debug!(?wait, silent, "the unit is busy, we send the command again");
+                    // A phase check that ran out of time can still be answered,
+                    // so drop the answer before the command goes out again
+                    if silent {
+                        self.resync();
+                    }
                     sleep(wait.min(left));
                     wait = (wait * 2).min(BUSY_WAIT_MAX);
                 }
@@ -239,8 +247,9 @@ impl Transport for UsbTransport {
 enum Attempt {
     /// The unit answered the command
     Done(Completion),
-    /// The unit is still busy with the command before this one
-    Busy,
+    /// The unit is still busy with the command before this one. `silent` says
+    /// it left the phase check unanswered rather than answering 04h
+    Busy { silent: bool },
 }
 
 impl UsbTransport {
@@ -253,13 +262,22 @@ impl UsbTransport {
 
         // Then we check the phase, one time only
         let mut phase = [0u8; 1];
-        self.write_out(&[PHASE_CHECK_CODE], timeout)?;
-        if self.read_in(&mut phase, timeout)? == 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "empty phase response").into());
+        let wait = timeout.min(PHASE_WAIT);
+        self.write_out(&[PHASE_CHECK_CODE], wait)?;
+        match self.read_in(&mut phase, wait) {
+            Ok(0) => {
+                return Err(
+                    io::Error::new(io::ErrorKind::InvalidData, "empty phase response").into(),
+                );
+            }
+            Ok(_) => {}
+            // The unit answers the phase check when it is ready to
+            Err(Error::Timeout(_)) => return Ok(Attempt::Busy { silent: true }),
+            Err(e) => return Err(e),
         }
         trace!(phase = format!("{:02X}h", phase[0]), "phase");
         if phase[0] == PHASE_BUSY {
-            return Ok(Attempt::Busy);
+            return Ok(Attempt::Busy { silent: false });
         }
 
         // Now we act of the phase byte we got back (could be not what we asked for on errors)

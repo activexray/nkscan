@@ -451,13 +451,7 @@ impl Session {
         let mut cooperations = Vec::new();
         let mut asked: Vec<(Coop, CooperativeAction)> = Vec::new();
         for _ in 0..=MAX_COOPERATION {
-            // `Data::In` holds a `&mut [u8]` and so is not `Copy`. Reborrowing
-            // it here is what lets the same command go out more than once
-            let payload = match &mut data {
-                Data::None => Data::None,
-                Data::In(buf) => Data::In(buf),
-                Data::Out(buf) => Data::Out(buf),
-            };
+            let payload = data.reborrow();
             let (completion, coop) = self.run_cooperative(cdb, payload, deadline, timeout)?;
             let Some(coop) = coop else {
                 return Ok((completion, cooperations));
@@ -515,13 +509,7 @@ impl Session {
         let mut reported: Option<Activity> = None;
 
         loop {
-            // `Data::In` holds a `&mut [u8]` and so is not `Copy`. Reborrowing
-            // it here is what lets the same command go out more than once
-            let payload = match &mut data {
-                Data::None => Data::None,
-                Data::In(buf) => Data::In(buf),
-                Data::Out(buf) => Data::Out(buf),
-            };
+            let payload = data.reborrow();
 
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {

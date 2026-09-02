@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Command retries for the USB backend, fixing a bug raised by the second phase check in an LS-40.
+- A phase check the unit never answers counts as busy, which is what an LS-40 does for seconds at a time.
+- The line gap comes from the page, not from whatever the transport padded after it.
 - The last image READ of a pass asks for a whole number of granules, so the unit no longer rounds it up and sends a surplus the phase protocol cannot place.
 - A pass refused for its layout or its stream shape stops the scan, rather than leaving one open that refuses every later command with `05h-2Ch`.
 - `Session::open` stops a stale scan before RESERVE UNIT, which such a scan refuses.

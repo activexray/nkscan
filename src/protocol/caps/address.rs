@@ -250,7 +250,10 @@ impl TryFrom<&Page> for Address {
         let lamp_warmup_time = page.be16(axes + 62)?;
         let bit_depth = page.u8(axes + 64)?;
         let ccd_pixels = page.be16(axes + 65)?;
-        let line_gap = page.u8(axes + 67)?; // byte 85
+        // Byte 85. Read what the page carries, not what the transport padded
+        // the allocation with: a 20h pad is a gap of 32. A unit that sends no
+        // value has no gap to register
+        let line_gap = page.carried_u8(axes + 67).unwrap_or(0);
 
         let coordinate_base = CoordinateBase::from_bits_truncate(base as u8);
         let pitch_rule = match base & 0b11 {
@@ -429,6 +432,54 @@ mod tests {
         // where the 32 line CCD came from
         ls8000.resize(91, 0x20);
         assert_eq!(parse(&ls8000).lines, 3);
+    }
+
+    /// A page can stop before the line gap as well, and that byte gets the same
+    /// treatment: what the unit did not send is not a gap of 20h.
+    ///
+    /// These are a real LS-40's bytes, which stop at byte 84. The gap decides
+    /// the block a window extent is rounded up to, so a padded one moved the
+    /// scan window: 32 pixels by the three lines byte 86 defaults to is a
+    /// 96 unit block
+    #[test]
+    fn a_page_that_ends_before_the_line_gap_has_no_gap() {
+        let mut ls40: Vec<u8> = vec![
+            0x06, 0xC1, 0x00, 0x51, 0x03, 0x00, 0x3A, 0x00, 0x0F, 0x00, 0x00, 0x00, 0x40, 0x01,
+            0x01, 0x00, 0x01, 0x22, 0x0B, 0x54, 0x0B, 0x54, 0x00, 0x5A, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0B, 0x36, 0x0B, 0x54,
+            0x0B, 0x54, 0x00, 0x5A, 0x00, 0x00, 0x10, 0x6A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x10, 0x6B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x43, 0x00, 0x00, 0x0C, 0x0B,
+            0x36,
+        ];
+        assert_eq!(ls40.len(), 4 + usize::from(ls40[3]));
+
+        let parsed = parse(&ls40);
+        assert_eq!(parsed.line_gap, 0);
+        // The last fields it does carry
+        assert_eq!(parsed.bit_depth, 12);
+        assert_eq!(parsed.ccd_pixels, 2870);
+        // Byte 86 is missing too, so the spec's own default stands
+        assert_eq!(parsed.lines, 3);
+        // With no gap there is nothing to register, at any resolution
+        assert_eq!(parsed.registration_gap(2900), 0);
+
+        // What the unit sent stands whatever the transport padded after it
+        ls40.resize(255, 0x20);
+        let padded = parse(&ls40);
+        assert_eq!(padded.line_gap, 0);
+        assert_eq!(padded.lines, 3);
+    }
+
+    /// The gap and the line count are what the 5000's two-line CCD needs, and
+    /// it carries both, so reading only what a page carries leaves it alone
+    #[test]
+    fn a_page_that_carries_the_gap_keeps_it() {
+        let five = parse(&ls5000());
+        assert_eq!((five.line_gap, five.lines), (1, 2));
+
+        let nine = parse(&ls9000());
+        assert_eq!((nine.line_gap, nine.lines), (12, 3));
     }
 
     /// Byte 4 is extendable, so a unit that carries on into byte 5 moves every

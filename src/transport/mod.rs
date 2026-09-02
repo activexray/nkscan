@@ -43,6 +43,17 @@ pub enum Data<'a> {
     Out(&'a [u8]),
 }
 
+impl<'a> Data<'a> {
+    /// Borrow the data phase again, so we can send a command more than once
+    pub(crate) fn reborrow(&mut self) -> Data<'_> {
+        match self {
+            Data::None => Data::None,
+            Data::In(buf) => Data::In(buf),
+            Data::Out(buf) => Data::Out(buf),
+        }
+    }
+}
+
 impl fmt::Debug for Data<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

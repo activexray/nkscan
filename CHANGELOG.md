@@ -14,9 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The Python bindings pick the interleaving the way the CLI does.
+- **Breaking:** `Device` has a new `silence` field, so `list` tells a unit in use from one that gave no answer.
 
 ### Fixed
 
+- Command retries for the USB backend, fixing a bug raised by the second phase check in an LS-40.
 - A scan under 4000 dpi on the LS-5000 stopped with `decode is not supported`. Its CCD rows are one optical line apart, so any pitch above 1 puts them on one output line. Such a scan now reads one row at a time.
 
 ## [0.9.0]

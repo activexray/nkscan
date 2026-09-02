@@ -25,6 +25,16 @@ const PHASE_DATA_OUT: u8 = 0x02;
 const PHASE_DATA_IN: u8 = 0x03;
 const PHASE_BUSY: u8 = 0x04;
 
+// The unit answers one phase check for each command. Nikon's own USB driver
+// (NKDUSCAN.dll) checks the phase one time, and reports an error for a phase
+// code it does not expect. It never sends a second D0h. The LS-40 stops
+// answering the pipe after a second D0h, and only a power cycle recovers it.
+// So a unit that answers BUSY gets the command again instead
+/// The first wait before we send a busy unit its command again
+const BUSY_WAIT: Duration = Duration::from_millis(5);
+/// The longest that wait becomes
+const BUSY_WAIT_MAX: Duration = Duration::from_millis(250);
+
 /// How long a resync read waits before calling the pipe empty
 const RESYNC_TIMEOUT: Duration = Duration::from_millis(200);
 
@@ -180,47 +190,66 @@ impl Transport for UsbTransport {
         128 * 1024
     }
 
-    fn execute(&mut self, cdb: &[u8], data: Data, timeout: Duration) -> Result<Completion, Error> {
+    fn execute(
+        &mut self,
+        cdb: &[u8],
+        mut data: Data,
+        timeout: Duration,
+    ) -> Result<Completion, Error> {
         // A command that failed partway through left the unit mid-answer, so
         // clear that before starting another rather than reading its leftovers
         // as this one's phases
         if self.dirty {
             self.resync();
         }
-        // Cleared again only by a run that reaches the end of the handshake
-        self.dirty = true;
-        let done = self.exchange(cdb, data, timeout);
-        self.dirty = done.is_err();
-        done
-    }
-}
-
-impl UsbTransport {
-    /// One whole command, from the CDB to the status bytes
-    fn exchange(&mut self, cdb: &[u8], data: Data, timeout: Duration) -> Result<Completion, Error> {
-        // Following the phase spec from 1-1-2 in LS5K spec
-
-        // First we write the cdb
-        self.write_out(cdb, timeout)?;
-
-        // Then we loop the phase check while the device reports busy
-        let mut phase = [0u8; 1];
         let deadline = Instant::now() + timeout;
+        let mut wait = BUSY_WAIT;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 return Err(Error::Timeout(timeout));
             }
-            self.write_out(&[PHASE_CHECK_CODE], left)?;
-            if self.read_in(&mut phase, left)? == 0 {
-                return Err(
-                    io::Error::new(io::ErrorKind::InvalidData, "empty phase response").into(),
-                );
+            // Cleared again only by a run that reaches the end of the handshake
+            self.dirty = true;
+            match self.exchange(cdb, data.reborrow(), left)? {
+                Attempt::Done(completion) => {
+                    self.dirty = false;
+                    return Ok(completion);
+                }
+                Attempt::Busy => {
+                    debug!(?wait, "the unit is busy, we send the command again");
+                    sleep(wait.min(left));
+                    wait = (wait * 2).min(BUSY_WAIT_MAX);
+                }
             }
-            if phase[0] != PHASE_BUSY {
-                break;
-            }
-            sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+/// What one try at a command gave us
+enum Attempt {
+    /// The unit answered the command
+    Done(Completion),
+    /// The unit is still busy with the command before this one
+    Busy,
+}
+
+impl UsbTransport {
+    /// One whole command, from the CDB to the status bytes
+    fn exchange(&mut self, cdb: &[u8], data: Data, timeout: Duration) -> Result<Attempt, Error> {
+        // Following the phase spec from 1-1-2 in LS5K spec
+
+        // First we write the cdb
+        self.write_out(cdb, timeout)?;
+
+        // Then we check the phase, one time only
+        let mut phase = [0u8; 1];
+        self.write_out(&[PHASE_CHECK_CODE], timeout)?;
+        if self.read_in(&mut phase, timeout)? == 0 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "empty phase response").into());
+        }
+        if phase[0] == PHASE_BUSY {
+            return Ok(Attempt::Busy);
         }
 
         // Now we act of the phase byte we got back (could be not what we asked for on errors)
@@ -288,10 +317,10 @@ impl UsbTransport {
             })
         };
 
-        Ok(Completion {
+        Ok(Attempt::Done(Completion {
             status,
             sense,
             transferred,
-        })
+        }))
     }
 }

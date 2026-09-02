@@ -53,27 +53,43 @@ impl fmt::Display for Attach {
     }
 }
 
+/// Why a unit did not say who it is
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Silence {
+    /// It would not open. Claiming is exclusive, so another process has it
+    InUse,
+    /// It opened, but it did not answer standard INQUIRY
+    NoAnswer,
+}
+
 /// A scanner this library can drive
 #[derive(Debug, Clone)]
 pub struct Device {
     pub attach: Attach,
-    /// From standard INQUIRY, absent for a unit we could not open
+    /// From standard INQUIRY, absent for a unit that did not answer it
     pub identity: Option<Identity>,
     /// Which scanner this is, from the product ID where it is on USB and from
     /// the INQUIRY answer otherwise. A USB unit another process is holding
     /// still has one
     pub model: Option<Model>,
+    /// Why there is no identity, unset for a unit that gave one
+    pub silence: Option<Silence>,
 }
 
 impl Device {
     /// What to show a person
     pub fn name(&self) -> String {
-        match (&self.identity, self.model) {
-            (Some(id), _) => format!("{} {}", id.vendor, id.product),
-            // Claiming is exclusive, so a unit in use answers nothing. The bus
-            // still says which model it is
-            (None, Some(model)) => format!("{} (in use)", model.name()),
-            (None, None) => "(in use)".into(),
+        if let Some(id) = &self.identity {
+            return format!("{} {}", id.vendor, id.product);
+        }
+        // The bus still says which model it is
+        let why = match self.silence {
+            Some(Silence::NoAnswer) => "no answer",
+            _ => "in use",
+        };
+        match self.model {
+            Some(model) => format!("{} ({why})", model.name()),
+            None => format!("({why})"),
         }
     }
 
@@ -113,17 +129,30 @@ impl fmt::Display for Device {
 pub fn list() -> Vec<Device> {
     let mut found: Vec<Device> = usb_devices()
         .into_iter()
-        .map(|info| Device {
-            attach: Attach::Usb {
+        .map(|info| {
+            let attach = Attach::Usb {
                 bus: info.bus_id().to_string(),
                 ports: info.port_chain().to_vec(),
-            },
-            model: Model::from_usb(info.vendor_id(), info.product_id()),
-            // Claiming is exclusive, so a unit another process holds probes as
-            // `None` rather than dropping out of the list
-            identity: UsbTransport::open(info)
-                .ok()
-                .and_then(|mut t| probe(&mut t)),
+            };
+            let model = Model::from_usb(info.vendor_id(), info.product_id());
+            // A unit another process holds, and a unit that does not answer,
+            // both stay in the list under the name the bus gives them
+            let (identity, silence) = match UsbTransport::open(info) {
+                Ok(mut transport) => match probe(&mut transport) {
+                    Some(identity) => (Some(identity), None),
+                    None => (None, Some(Silence::NoAnswer)),
+                },
+                Err(e) => {
+                    debug!(%e, "could not open a unit to ask who it is");
+                    (None, Some(Silence::InUse))
+                }
+            };
+            Device {
+                attach,
+                model,
+                identity,
+                silence,
+            }
         })
         .collect();
     found.extend(scsi_devices());
@@ -184,6 +213,7 @@ fn scsi_devices() -> Vec<Device> {
                 attach: Attach::Sg(path),
                 model: identity.model(),
                 identity: Some(identity),
+                silence: None,
             })
         })
         .collect()
@@ -207,6 +237,7 @@ fn scsi_devices() -> Vec<Device> {
                 attach: Attach::Scanner(path),
                 model: identity.model(),
                 identity: Some(identity),
+                silence: None,
             })
         })
         .collect()
@@ -227,6 +258,7 @@ fn scsi_devices() -> Vec<Device> {
                 attach: Attach::ScsiTask(id),
                 model: identity.model(),
                 identity: Some(identity),
+                silence: None,
             })
         })
         .collect()
@@ -311,6 +343,7 @@ mod tests {
                 revision: "1.00".into(),
             }),
             model: Model::from_product(product),
+            silence: None,
         }
     }
 

@@ -1,0 +1,70 @@
+name: Binaries
+
+# The build matrix both release.yml and preview.yml call, so a target is added
+# in one place and a preview binary is the same artifact a release ships
+on:
+    workflow_call:
+        inputs:
+            tag:
+                description: Release tag to upload the binaries to
+                required: true
+                type: string
+            build:
+                description: Build identifier the binary reports beside its version
+                required: false
+                type: string
+                default: ""
+
+jobs:
+    # Static where a platform allows it. musl links the whole libc in, so the Linux binary has
+    # no glibc floor and no loader to find; +crt-static folds in the MSVC runtime, so Windows
+    # needs no VC++ redistributable. macOS cannot: Apple does not support statically linking
+    # libSystem, and does not have to, since it lives at an absolute path every Mac has.
+    build:
+        name: ${{ matrix.target }}
+        runs-on: ${{ matrix.runner }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - runner: ubuntu-latest
+                      target: x86_64-unknown-linux-musl
+                    - runner: windows-latest
+                      target: x86_64-pc-windows-msvc
+                      rustflags: -C target-feature=+crt-static
+                      ext: .exe
+                    - runner: macos-14
+                      target: aarch64-apple-darwin
+                    # Cross-compiled from the arm64 runner above: no free Intel runner exists
+                    - runner: macos-14
+                      target: x86_64-apple-darwin
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            # rust-toolchain.toml names the channel and the targets, and rustup honours both
+            # when cargo first runs, so there is no version here to drift from that file
+            - name: Install the toolchain rust-toolchain.toml names
+              run: cargo --version
+
+            - name: Cache Rust artifacts
+              uses: Swatinem/rust-cache@v2
+              with:
+                  key: ${{ matrix.target }}
+
+            - name: Build
+              shell: bash
+              env:
+                  RUSTFLAGS: ${{ matrix.rustflags }}
+                  # Unset for a release, where the version alone names the build
+                  NKSCAN_BUILD: ${{ inputs.build }}
+              run: |
+                  cargo build --release -p nkscan --features=cli --target ${{ matrix.target }}
+                  cp target/${{ matrix.target }}/release/nkscan${{ matrix.ext }} \
+                     nkscan-${{ matrix.target }}${{ matrix.ext }}
+
+            - name: Upload to release
+              uses: softprops/action-gh-release@v2
+              with:
+                  tag_name: ${{ inputs.tag }}
+                  files: nkscan-${{ matrix.target }}${{ matrix.ext }}

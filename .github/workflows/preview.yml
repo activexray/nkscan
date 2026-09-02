@@ -1,0 +1,64 @@
+name: Preview
+
+# Binaries for the head of main, so a bug reporter can test a fix before it is
+# released. The `preview` tag moves to each new commit and its prerelease keeps
+# the same download URLs, so a link handed out once stays current.
+on:
+    push:
+        branches: [main]
+        paths-ignore:
+            - "**.md"
+            - "LICENSE-*"
+    workflow_dispatch:
+
+# One preview at a time. A cancelled run would leave the release holding
+# binaries from two commits, so a new push waits rather than interrupts
+concurrency:
+    group: preview
+    cancel-in-progress: false
+
+permissions:
+    contents: write
+
+jobs:
+    # The tag has to move before anything uploads, or the release still names
+    # the commit before this one
+    tag:
+        name: Move the preview tag
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Point the tag at this commit
+              run: |
+                  git tag --force preview
+                  git push --force origin preview
+
+    build:
+        name: Build
+        needs: tag
+        permissions:
+            contents: write
+        uses: ./.github/workflows/binaries.yml
+        with:
+            tag: preview
+            build: preview ${{ github.sha }}
+
+    # Runs after the binaries so the notes describe what is attached
+    notes:
+        name: Describe the preview
+        needs: build
+        runs-on: ubuntu-latest
+        steps:
+            - name: Write the release notes
+              uses: softprops/action-gh-release@v2
+              with:
+                  tag_name: preview
+                  name: Preview
+                  prerelease: true
+                  make_latest: false
+                  body: |
+                      Built from `${{ github.sha }}` on ${{ github.event.head_commit.timestamp || github.run_id }}.
+
+                      Untested code from the head of main. Report what breaks.

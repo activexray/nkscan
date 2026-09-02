@@ -7,14 +7,21 @@ use profile::Film;
 use std::{path::PathBuf, str::FromStr, sync::LazyLock};
 use tracing_subscriber::filter::LevelFilter;
 
+/// The crate version, and the commit for a build that came off no release. CI
+/// sets NKSCAN_BUILD for a preview build, and leaves it unset for a release
+static VERSION: LazyLock<String> = LazyLock::new(|| match option_env!("NKSCAN_BUILD") {
+    Some(build) if !build.is_empty() => format!("{} ({build})", env!("CARGO_PKG_VERSION")),
+    _ => env!("CARGO_PKG_VERSION").to_string(),
+});
+
 /// The version, plus the notices for what is compiled in alongside our own code
 ///
 /// `-V` stays the bare version; this is what `--version` gives
 static LONG_VERSION: LazyLock<String> =
-    LazyLock::new(|| format!("{}\n\n{}", env!("CARGO_PKG_VERSION"), profile::NOTICE));
+    LazyLock::new(|| format!("{}\n\n{}", *VERSION, profile::NOTICE));
 
 #[derive(Parser)]
-#[command(version, about, long_version = LONG_VERSION.as_str())]
+#[command(version = VERSION.as_str(), about, long_version = LONG_VERSION.as_str())]
 /// Scan film on a Nikon Coolscan
 pub struct Cli {
     #[command(subcommand)]

@@ -53,15 +53,6 @@ impl fmt::Display for Attach {
     }
 }
 
-/// Why a unit did not say who it is
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Silence {
-    /// It would not open. Claiming is exclusive, so another process has it
-    InUse,
-    /// It opened, but it did not answer standard INQUIRY
-    NoAnswer,
-}
-
 /// A scanner this library can drive
 #[derive(Debug, Clone)]
 pub struct Device {
@@ -72,8 +63,9 @@ pub struct Device {
     /// the INQUIRY answer otherwise. A USB unit another process is holding
     /// still has one
     pub model: Option<Model>,
-    /// Why there is no identity, unset for a unit that gave one
-    pub silence: Option<Silence>,
+    /// Whether we got a handle on it. Claiming is exclusive, so a unit
+    /// another process holds refuses one
+    pub opened: bool,
 }
 
 impl Device {
@@ -83,9 +75,9 @@ impl Device {
             return format!("{} {}", id.vendor, id.product);
         }
         // The bus still says which model it is
-        let why = match self.silence {
-            Some(Silence::NoAnswer) => "no answer",
-            _ => "in use",
+        let why = match self.opened {
+            true => "no answer",
+            false => "in use",
         };
         match self.model {
             Some(model) => format!("{} ({why})", model.name()),
@@ -137,21 +129,18 @@ pub fn list() -> Vec<Device> {
             let model = Model::from_usb(info.vendor_id(), info.product_id());
             // A unit another process holds, and a unit that does not answer,
             // both stay in the list under the name the bus gives them
-            let (identity, silence) = match UsbTransport::open(info) {
-                Ok(mut transport) => match probe(&mut transport) {
-                    Some(identity) => (Some(identity), None),
-                    None => (None, Some(Silence::NoAnswer)),
-                },
+            let (identity, opened) = match UsbTransport::open(info) {
+                Ok(mut transport) => (probe(&mut transport), true),
                 Err(e) => {
                     debug!(%e, "could not open a unit to ask who it is");
-                    (None, Some(Silence::InUse))
+                    (None, false)
                 }
             };
             Device {
                 attach,
                 model,
                 identity,
-                silence,
+                opened,
             }
         })
         .collect();
@@ -213,7 +202,7 @@ fn scsi_devices() -> Vec<Device> {
                 attach: Attach::Sg(path),
                 model: identity.model(),
                 identity: Some(identity),
-                silence: None,
+                opened: true,
             })
         })
         .collect()
@@ -237,7 +226,7 @@ fn scsi_devices() -> Vec<Device> {
                 attach: Attach::Scanner(path),
                 model: identity.model(),
                 identity: Some(identity),
-                silence: None,
+                opened: true,
             })
         })
         .collect()
@@ -258,7 +247,7 @@ fn scsi_devices() -> Vec<Device> {
                 attach: Attach::ScsiTask(id),
                 model: identity.model(),
                 identity: Some(identity),
-                silence: None,
+                opened: true,
             })
         })
         .collect()
@@ -343,7 +332,7 @@ mod tests {
                 revision: "1.00".into(),
             }),
             model: Model::from_product(product),
-            silence: None,
+            opened: true,
         }
     }
 

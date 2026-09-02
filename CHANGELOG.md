@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The Python bindings pick the interleaving the way the CLI does.
-- **Breaking:** `Device` has a new `silence` field, so `list` tells a unit in use from one that gave no answer.
+- **Breaking:** `Device` has a new `opened` field, so `list` tells a unit in use from one that gave no answer.
 
 ### Fixed
 

@@ -39,15 +39,13 @@ const BUSY_WAIT_MAX: Duration = Duration::from_millis(250);
 /// Nikon Scan cancels that read at 7 s and sends the command again
 const PHASE_WAIT: Duration = Duration::from_secs(7);
 
-/// How much longer we settle for after each BUSY, and the most we settle for
+/// How long a check after a BUSY waits
 ///
-/// A unit answers one phase check for each command. Ask before it has read the
-/// command and the answer is BUSY, which spends the command: the LS-40 leaves
-/// every later check for it unanswered, as it does for Nikon Scan. Waiting
-/// before the first check is what stops that happening, and only a unit that
-/// has answered BUSY pays for it
-const SETTLE_STEP: Duration = Duration::from_millis(2);
-const SETTLE_MAX: Duration = Duration::from_millis(20);
+/// The unit has the command by then and is working on it, so this is how long
+/// its answer is worth waiting for before we treat it as gone. An LS-40
+/// answers BUSY to the first check of every command and the real phase to the
+/// next, tens of milliseconds later
+const RECHECK_WAIT: Duration = Duration::from_secs(1);
 
 /// How long a resync read waits before calling the pipe empty
 const RESYNC_TIMEOUT: Duration = Duration::from_millis(200);
@@ -73,8 +71,6 @@ pub struct UsbTransport {
     /// command tells the unit to start over, so its phase byte is whatever was
     /// left over and every command after it is misframed
     dirty: bool,
-    /// How long this unit needs between the command and the phase check
-    settle: Duration,
 }
 
 /// Map a `nusb` transfer error into this crate's SCSI error
@@ -130,8 +126,6 @@ impl UsbTransport {
             // program that died mid-command left its answer on the pipe, so a
             // fresh handle assumes the worst and drains before its first command
             dirty: true,
-            // Nothing to settle for until the unit says otherwise
-            settle: Duration::ZERO,
         })
     }
 
@@ -230,7 +224,6 @@ impl Transport for UsbTransport {
             trace!(cdb = hex.join(" "), ?data, "command");
         }
         let deadline = Instant::now() + timeout;
-        let mut wait = BUSY_WAIT;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -250,8 +243,7 @@ impl Transport for UsbTransport {
                         debug!("the unit stopped answering, we send the command again");
                         self.resync();
                     }
-                    sleep(wait.min(left));
-                    wait = (wait * 2).min(BUSY_WAIT_MAX);
+                    sleep(BUSY_WAIT.min(left));
                 }
             }
         }
@@ -299,19 +291,27 @@ impl UsbTransport {
             Err(e) => return Err(e),
         }
 
-        // Give it the time it has asked for to read that command
-        sleep(self.settle);
-
-        let phase = match self.phase_check(timeout.min(PHASE_WAIT))? {
-            Some(PHASE_BUSY) => {
-                // The check was too early, so the command is spent. Settle for
-                // longer next time and send this one again
-                self.settle = (self.settle + SETTLE_STEP).min(SETTLE_MAX);
-                debug!(settle = ?self.settle, "the check was early, we settle for longer");
-                return Ok(Attempt::Resend { drain: false });
+        // It holds the command from here. BUSY says it is working on that one,
+        // so we ask it again: a second command would be a second command, and
+        // the LS-40 refuses a repeated READ with 05h-2Ch
+        let deadline = Instant::now() + timeout;
+        let mut wait = BUSY_WAIT;
+        let mut bound = PHASE_WAIT;
+        let phase = loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(Error::Timeout(timeout));
             }
-            Some(phase) => phase,
-            None => return Ok(Attempt::Resend { drain: true }),
+            match self.phase_check(left.min(bound))? {
+                Some(PHASE_BUSY) => {
+                    sleep(wait.min(left));
+                    wait = (wait * 2).min(BUSY_WAIT_MAX);
+                    bound = RECHECK_WAIT;
+                }
+                Some(phase) => break phase,
+                // Nothing at all, so there is nothing to wait for
+                None => return Ok(Attempt::Resend { drain: true }),
+            }
         };
 
         // Now we act of the phase byte we got back (could be not what we asked for on errors)

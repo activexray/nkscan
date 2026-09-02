@@ -248,40 +248,46 @@ enum Attempt {
     /// The unit answered the command
     Done(Completion),
     /// The unit is still busy with the command before this one. `silent` says
-    /// it left the phase check unanswered rather than answering 04h
+    /// it left the phase check unanswered or untaken rather than answering 04h
     Busy { silent: bool },
 }
 
 impl UsbTransport {
+    /// The command and the phase check, and the phase code the unit answered
+    ///
+    /// `None` where the unit did not take one of the two or did not answer
+    /// inside `wait`. A busy unit does all three, so a timeout here says it is
+    /// busy rather than that anything is broken
+    fn phase_check(&mut self, cdb: &[u8], wait: Duration) -> Result<Option<u8>, Error> {
+        for bytes in [cdb, &[PHASE_CHECK_CODE][..]] {
+            match self.write_out(bytes, wait) {
+                Ok(()) => {}
+                Err(Error::Timeout(_)) => return Ok(None),
+                Err(e) => return Err(e),
+            }
+        }
+        let mut phase = [0u8; 1];
+        match self.read_in(&mut phase, wait) {
+            Ok(0) => Err(io::Error::new(io::ErrorKind::InvalidData, "empty phase response").into()),
+            Ok(_) => Ok(Some(phase[0])),
+            Err(Error::Timeout(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// One whole command, from the CDB to the status bytes
     fn exchange(&mut self, cdb: &[u8], data: Data, timeout: Duration) -> Result<Attempt, Error> {
         // Following the phase spec from 1-1-2 in LS5K spec
-
-        // First we write the cdb
-        self.write_out(cdb, timeout)?;
-
-        // Then we check the phase, one time only
-        let mut phase = [0u8; 1];
-        let wait = timeout.min(PHASE_WAIT);
-        self.write_out(&[PHASE_CHECK_CODE], wait)?;
-        match self.read_in(&mut phase, wait) {
-            Ok(0) => {
-                return Err(
-                    io::Error::new(io::ErrorKind::InvalidData, "empty phase response").into(),
-                );
-            }
-            Ok(_) => {}
-            // The unit answers the phase check when it is ready to
-            Err(Error::Timeout(_)) => return Ok(Attempt::Busy { silent: true }),
-            Err(e) => return Err(e),
-        }
-        trace!(phase = format!("{:02X}h", phase[0]), "phase");
-        if phase[0] == PHASE_BUSY {
+        let Some(phase) = self.phase_check(cdb, timeout.min(PHASE_WAIT))? else {
+            return Ok(Attempt::Busy { silent: true });
+        };
+        trace!(phase = format!("{phase:02X}h"), "phase");
+        if phase == PHASE_BUSY {
             return Ok(Attempt::Busy { silent: false });
         }
 
         // Now we act of the phase byte we got back (could be not what we asked for on errors)
-        let transferred = match (phase[0], data) {
+        let transferred = match (phase, data) {
             (PHASE_STATUS, Data::None) => 0,
             (PHASE_STATUS, x) => {
                 debug!("We requested a non-none data phase {:?} but got none", x);

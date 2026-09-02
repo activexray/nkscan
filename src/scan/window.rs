@@ -181,14 +181,24 @@ impl Recipe {
             });
         }
 
+        let offered = caps.set_window.interleaving;
+        if self.interleaving.bits().count_ones() != 1 || !offered.contains(self.interleaving) {
+            return Err(Error::Unsupported {
+                op: "color interleaving",
+                reason: format!(
+                    "this unit does not read the CCD {}, only {offered:?}",
+                    Self::reading(self.interleaving)
+                ),
+            });
+        }
+
         // The distance between the CCD rows is the line gap divided by the
         // scanning pitch. If the pitch is larger than the gap, the rows give
         // one output line and the decoder cannot separate them. 2-11-5-3
-        if caps.reads_lines_at_once()
+        if self
+            .interleaving
+            .contains(ColorInterleaving::MULTILINE_SIMULTANEOUS)
             && caps.address.registration_gap(self.dpi) == 0
-            && self
-                .interleaving
-                .contains(ColorInterleaving::MULTILINE_SIMULTANEOUS)
         {
             return Err(Error::Unsupported {
                 op: "color interleaving",
@@ -199,17 +209,7 @@ impl Recipe {
             });
         }
 
-        let offered = caps.set_window.interleaving;
-        match self.interleaving.bits().count_ones() == 1 && offered.contains(self.interleaving) {
-            true => Ok(()),
-            false => Err(Error::Unsupported {
-                op: "color interleaving",
-                reason: format!(
-                    "this unit does not read the CCD {}, only {offered:?}",
-                    Self::reading(self.interleaving)
-                ),
-            }),
-        }
+        Ok(())
     }
 
     /// What a reading mode is called, for saying a unit does not have it

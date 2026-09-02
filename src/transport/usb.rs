@@ -25,23 +25,23 @@ const PHASE_DATA_OUT: u8 = 0x02;
 const PHASE_DATA_IN: u8 = 0x03;
 const PHASE_BUSY: u8 = 0x04;
 
-/// The first wait before we check a busy unit's phase again
+/// How long we wait before sending a busy unit its command again
 const BUSY_WAIT: Duration = Duration::from_millis(5);
-/// The longest that wait becomes
-const BUSY_WAIT_MAX: Duration = Duration::from_millis(250);
 
-/// How long the first phase check of a command waits
+/// How long one phase check waits
 ///
 /// Nikon Scan cancels that read at 7 s and sends the command again
 const PHASE_WAIT: Duration = Duration::from_secs(7);
 
-/// How long a check after a BUSY waits before we give up on the command
+/// How much longer we settle for after each BUSY, and the most we settle for
 ///
-/// A unit that took the command answers the next check once it is ready, and
-/// sending the command again would be a second command: the LS-40 refuses a
-/// repeated READ with 05h-2Ch. One that is deeply busy answers no check at all,
-/// and only a fresh command gets it going
-const RECHECK_WAIT: Duration = Duration::from_millis(300);
+/// A unit answers one phase check for each command. Ask before it has read the
+/// command and the answer is BUSY, which spends the command: the LS-40 leaves
+/// every later check for it unanswered, as it does for Nikon Scan. Waiting
+/// before the first check is what stops that happening, and only a unit that
+/// has answered BUSY pays for it
+const SETTLE_STEP: Duration = Duration::from_millis(2);
+const SETTLE_MAX: Duration = Duration::from_millis(20);
 
 /// How long a resync read waits before calling the pipe empty
 const RESYNC_TIMEOUT: Duration = Duration::from_millis(200);
@@ -67,6 +67,8 @@ pub struct UsbTransport {
     /// command tells the unit to start over, so its phase byte is whatever was
     /// left over and every command after it is misframed
     dirty: bool,
+    /// How long this unit needs between the command and the phase check
+    settle: Duration,
 }
 
 /// Map a `nusb` transfer error into this crate's SCSI error
@@ -122,6 +124,8 @@ impl UsbTransport {
             // program that died mid-command left its answer on the pipe, so a
             // fresh handle assumes the worst and drains before its first command
             dirty: true,
+            // Nothing to settle for until the unit says otherwise
+            settle: Duration::ZERO,
         })
     }
 
@@ -232,12 +236,13 @@ impl Transport for UsbTransport {
                     self.dirty = false;
                     return Ok(completion);
                 }
-                Attempt::Resend => {
+                // A check that ran out of time can still be answered, so drop
+                // the answer before the command goes out again
+                Attempt::Resend { drain: true } => {
                     debug!("the unit stopped answering, we send the command again");
-                    // A check that ran out of time can still be answered, so
-                    // drop the answer before the command goes out again
                     self.resync();
                 }
+                Attempt::Resend { drain: false } => {}
             }
         }
     }
@@ -247,9 +252,9 @@ impl Transport for UsbTransport {
 enum Attempt {
     /// The unit answered the command
     Done(Completion),
-    /// The unit would not take the command or stopped answering the phase
-    /// check, so none of it ran and it can go out again
-    Resend,
+    /// The command is spent and can go out again. `drain` says the unit went
+    /// quiet rather than answering, so it may still answer late
+    Resend { drain: bool },
 }
 
 impl UsbTransport {
@@ -280,30 +285,24 @@ impl UsbTransport {
         // A unit that will not take the command has not run it
         match self.write_out(cdb, timeout.min(PHASE_WAIT)) {
             Ok(()) => {}
-            Err(Error::Timeout(_)) => return Ok(Attempt::Resend),
+            Err(Error::Timeout(_)) => return Ok(Attempt::Resend { drain: true }),
             Err(e) => return Err(e),
         }
 
-        // It holds the command from here, so a busy answer is asked again
-        // rather than answered by sending the command a second time
-        let deadline = Instant::now() + timeout;
-        let mut wait = BUSY_WAIT;
-        let mut bound = PHASE_WAIT;
-        let phase = loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Err(Error::Timeout(timeout));
+        // Give it the time it has asked for to read that command
+        sleep(self.settle);
+
+        let phase = match self.phase_check(timeout.min(PHASE_WAIT))? {
+            Some(PHASE_BUSY) => {
+                // The check was too early, so the command is spent. Settle for
+                // longer next time and send this one again
+                self.settle = (self.settle + SETTLE_STEP).min(SETTLE_MAX);
+                debug!(settle = ?self.settle, "the check was early, we settle for longer");
+                sleep(BUSY_WAIT);
+                return Ok(Attempt::Resend { drain: false });
             }
-            match self.phase_check(left.min(bound))? {
-                Some(PHASE_BUSY) => {
-                    debug!(?wait, "the unit is busy, we ask it again");
-                    sleep(wait.min(left));
-                    wait = (wait * 2).min(BUSY_WAIT_MAX);
-                    bound = RECHECK_WAIT;
-                }
-                Some(phase) => break phase,
-                None => return Ok(Attempt::Resend),
-            }
+            Some(phase) => phase,
+            None => return Ok(Attempt::Resend { drain: true }),
         };
 
         // Now we act of the phase byte we got back (could be not what we asked for on errors)

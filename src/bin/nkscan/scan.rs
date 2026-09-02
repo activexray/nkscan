@@ -351,6 +351,11 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
             }
 
             let pass = scanned.pass;
+            // Writing what arrived is right for a short pass and wrong for an
+            // empty one, which would be a black frame
+            if pass.blocks == 0 {
+                bail!("the unit gave nothing for frame {}", n + 1);
+            }
             if !pass.complete {
                 warn!(
                     frame = n + 1,

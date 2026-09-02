@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Python bindings pick the interleaving the way the CLI does.
 - **Breaking:** `Device` has a new `opened` field, so `list` tells a unit in use from one that gave no answer.
+- **Breaking:** `Pass` has a new `blocks` field, and a scan that arrives with none of them is an error rather than a black frame.
 
 ### Fixed
 

@@ -249,6 +249,7 @@ impl Session {
             layout: started.layout,
             cooperation: started.cooperations,
             complete: decoder.complete(),
+            blocks: decoder.decoded(),
             rows,
             cols,
         })

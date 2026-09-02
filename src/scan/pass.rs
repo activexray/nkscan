@@ -22,6 +22,9 @@ pub struct Pass {
     pub cooperation: Vec<CooperativeAction>,
     /// Whether every block the layout promised arrived
     pub complete: bool,
+    /// How many of them did. A pass can come back short, and one that comes
+    /// back with none is a pass the unit gave nothing for
+    pub blocks: usize,
     /// Image rows and columns: the sensor (the layout's pixels) and the feed
     /// (its lines)
     pub rows: usize,

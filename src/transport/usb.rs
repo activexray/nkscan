@@ -202,6 +202,12 @@ impl Transport for UsbTransport {
         if self.dirty {
             self.resync();
         }
+        // A command that gets no answer is only ever debugged from the bytes
+        // that went out for it
+        if enabled!(Level::TRACE) {
+            let hex: Vec<String> = cdb.iter().map(|b| format!("{b:02X}")).collect();
+            trace!(cdb = hex.join(" "), ?data, "command");
+        }
         let deadline = Instant::now() + timeout;
         let mut wait = BUSY_WAIT;
         loop {
@@ -248,6 +254,7 @@ impl UsbTransport {
         if self.read_in(&mut phase, timeout)? == 0 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "empty phase response").into());
         }
+        trace!(phase = format!("{:02X}h", phase[0]), "phase");
         if phase[0] == PHASE_BUSY {
             return Ok(Attempt::Busy);
         }

@@ -196,6 +196,39 @@ impl UsbTransport {
         out[..buf.len()].copy_from_slice(&buf);
         Ok(buf.len())
     }
+
+    /// Read a whole data IN phase
+    ///
+    /// The unit sends the data in pieces. An LS-40 sends one image line for
+    /// each piece, so one read gets the first line only. We read until we have
+    /// the transfer length the CDB asked for, and after the first piece we ask
+    /// for the size of that piece. Nikon's own USB code does the same.
+    fn read_data_in(
+        &mut self,
+        out: &mut [u8],
+        deadline: Instant,
+        timeout: Duration,
+    ) -> Result<usize, Error> {
+        let mut done = 0;
+        let mut piece = out.len();
+        while done < out.len() {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(Error::Timeout(timeout));
+            }
+            let want = piece.min(out.len() - done);
+            let got = self.read_in(&mut out[done..done + want], left)?;
+            // The unit has nothing more to send
+            if got == 0 {
+                break;
+            }
+            if done == 0 && got < out.len() {
+                piece = got;
+            }
+            done += got;
+        }
+        Ok(done)
+    }
 }
 
 impl Transport for UsbTransport {
@@ -325,7 +358,7 @@ impl UsbTransport {
                 self.write_out(x, timeout)?;
                 x.len()
             }
-            (PHASE_DATA_IN, Data::In(x)) => self.read_in(x, timeout)?,
+            (PHASE_DATA_IN, Data::In(x)) => self.read_data_in(x, deadline, timeout)?,
             (PHASE_NONE, _) => {
                 return Err(
                     io::Error::new(io::ErrorKind::InvalidData, "no phase after command").into(),

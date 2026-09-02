@@ -150,15 +150,12 @@ impl Session {
 /// A READ for anything but a whole number of granules is rounded up by the
 /// unit and the surplus arrives regardless, out of step with the phase
 /// protocol, so the rounding happens here where the buffer is sized for it.
-/// `chunk` is already a whole number of them; `left` is not, since a packed
-/// multi-line pass reads a whole group of CCD rows at a time and the line
-/// count need not divide by the rows in a group
+/// `left` is not a whole number of them, since a packed multi-line pass reads a
+/// whole group of CCD rows at a time and the line count need not divide by the
+/// rows in a group. `chunk` is one, and `granule` is at least 1, both from
+/// [`chunk_size`](Session::chunk_size)
 fn whole_granules(left: usize, granule: usize, chunk: usize) -> usize {
-    let want = chunk.min(left);
-    match granule {
-        0 => want,
-        g => want.div_ceil(g).saturating_mul(g).min(chunk),
-    }
+    chunk.min(left).div_ceil(granule) * granule
 }
 
 /// How far a transfer fell short, when that is what the unit reported
@@ -422,6 +419,5 @@ mod tests {
     #[test]
     fn an_unconstrained_unit_reads_what_is_left() {
         assert_eq!(whole_granules(7, 1, 4096), 7);
-        assert_eq!(whole_granules(7, 0, 4096), 7);
     }
 }

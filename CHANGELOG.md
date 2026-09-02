@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The USB transport reads a data IN phase until it has the transfer length the CDB asked for, so a unit that sends one image line at a time no longer stops a pass after one line. The LS-40 does this.
+- The USB transport no longer sends 06h (status reception code) before the status. An LS-50 sends the status without it and an LS-40 stops answering after it.
 - Command retries for the USB backend, fixing a bug raised by the second phase check in an LS-40.
 - A phase check the unit never answers counts as busy, which is what an LS-40 does for seconds at a time.
 - The line gap comes from the page, not from whatever the transport padded after it.

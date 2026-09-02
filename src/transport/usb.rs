@@ -15,8 +15,6 @@ use tracing::*;
 // Single-byte transport opcodes on bulk-OUT (LS5K 1-1-2)
 /// Tell the unit to prepare a phase response
 const PHASE_CHECK_CODE: u8 = 0xD0;
-/// Tell the unit we are ready to receive the phase response
-const STATUS_RECEPTION_CODE: u8 = 0x06;
 
 // Phase codes (LS5K table 1-1-2-1)
 const PHASE_NONE: u8 = 0x00;
@@ -380,8 +378,10 @@ impl UsbTransport {
             }
         };
 
-        // Finally grab the sense codes at the end by indicating we are ready to receive the status
-        self.write_out(&[STATUS_RECEPTION_CODE], timeout)?;
+        // 1-1-2-2 has the host send 06h (status reception code) here, and
+        // Nikon's own USB code sends it. An LS-50 sends the status without it,
+        // after a data IN, a data OUT and a status phase. An LS-40 stops
+        // answering after it.
 
         // 1-1-5-2 says we'll always get 8 bytes back from status
         let mut sb = [0u8; 8];

@@ -23,8 +23,8 @@ const PHASE_DATA_OUT: u8 = 0x02;
 const PHASE_DATA_IN: u8 = 0x03;
 const PHASE_BUSY: u8 = 0x04;
 
-/// The first wait before sending a busy unit its command again, and the longest
-/// that wait becomes
+/// The first wait before asking a busy unit again, and the longest that wait
+/// becomes
 ///
 /// A unit that answers one BUSY was asked early. One that keeps answering BUSY
 /// is warming up, which takes it tens of seconds from cold, so the wait grows
@@ -53,13 +53,42 @@ const RESYNC_TIMEOUT: Duration = Duration::from_millis(200);
 /// would take longer than the command that is waiting
 const RESYNC_LIMIT: usize = 1 << 20;
 
+/// What is left of the time a command was given
+///
+/// Every step of the phase handshake reads its wait from this, so the timeout
+/// the caller set covers the whole command and not each of its parts
+#[derive(Clone, Copy)]
+struct Budget {
+    deadline: Instant,
+    total: Duration,
+}
+
+impl Budget {
+    fn new(total: Duration) -> Self {
+        Self {
+            deadline: Instant::now() + total,
+            total,
+        }
+    }
+
+    /// How long is left, or the timeout error naming what the caller asked for
+    fn left(&self) -> Result<Duration, Error> {
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            Err(Error::Timeout(self.total))
+        } else {
+            Ok(left)
+        }
+    }
+}
+
 /// A USB-connected Nikon scanner
-#[allow(dead_code)]
 pub struct UsbTransport {
     ep_out: Endpoint<Bulk, Out>,
     ep_in: Endpoint<Bulk, In>,
     in_max_packet: usize,
     /// We have to keep a handle to the interface here as the lifetime of the endpoints are attached to it
+    #[allow(dead_code)]
     interface: Interface,
     /// Whether the last command left the phase handshake unfinished
     ///
@@ -74,7 +103,8 @@ pub struct UsbTransport {
 /// Map a `nusb` transfer error into this crate's SCSI error
 fn transfer_err(e: TransferError, timeout: Duration) -> Error {
     let kind = match &e {
-        // We never cancel transfers, so a cancelled one is always the timeout
+        // nusb cancels the transfer itself when the timeout runs out, and we
+        // cancel none of our own, so a cancelled one is always that timeout
         TransferError::Cancelled => return Error::Timeout(timeout),
         // Endpoint halted (broken pipe)
         TransferError::Stall => io::ErrorKind::BrokenPipe,
@@ -84,6 +114,53 @@ fn transfer_err(e: TransferError, timeout: Duration) -> Error {
         TransferError::Fault | TransferError::Unknown(_) => io::ErrorKind::Other,
     };
     Error::Io(io::Error::new(kind, e))
+}
+
+/// What one read off the IN pipe gave us
+enum Chunk {
+    /// Bytes copied into the caller's buffer
+    Got(usize),
+    /// The unit sent more than the read asked for. The bytes are off the wire
+    /// and we have nowhere to put them, so the two ends are out of step
+    TooMuch(usize),
+}
+
+impl Chunk {
+    /// The byte count, where an over-long answer ends the command
+    fn count(self, asked: usize) -> Result<usize, Error> {
+        match self {
+            Chunk::Got(n) => Ok(n),
+            Chunk::TooMuch(n) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("device sent {n} bytes for a {asked}-byte read, so the stream is out of step"),
+            )
+            .into()),
+        }
+    }
+}
+
+/// What a phase check answered
+enum Phase {
+    /// The unit's phase code
+    Code(u8),
+    /// The unit did not take the question, or did not answer it in time
+    Silent,
+    /// The pipe answered with more than a phase byte, so it holds an answer we
+    /// did not ask for
+    Stale(usize),
+}
+
+/// What one try at a command gave us
+enum Attempt {
+    /// The unit answered the command
+    Done(Completion),
+    /// The command is spent and can go out again. `drain` says the unit went
+    /// quiet rather than answering, so it may still answer late
+    Resend { drain: bool },
+    /// The IN pipe holds something we did not put there, so the command goes
+    /// out again after a drain. The error says what we read, for the case
+    /// where the drain does not fix it
+    Desync(Error),
 }
 
 impl UsbTransport {
@@ -120,10 +197,14 @@ impl UsbTransport {
             ep_in,
             in_max_packet,
             interface,
-            // The flag does not outlive the process that set it, and a
-            // program that died mid-command left its answer on the pipe, so a
-            // fresh handle assumes the worst and drains before its first command
-            dirty: true,
+            // A program that died mid-command left its answer on the pipe, and
+            // a fresh handle cannot tell. We do not drain to find out: the read
+            // that says the pipe is empty is a read that times out, and that
+            // costs every open 200 ms on Linux and over two seconds on
+            // Windows. The first command reads the leftovers as its phase
+            // byte, and that is a desync, which drains and sends the command
+            // again
+            dirty: false,
         })
     }
 
@@ -133,7 +214,7 @@ impl UsbTransport {
     /// next phase byte is a stale data byte, the one after that is worse, and
     /// the way out is a power cycle. Draining until the pipe comes back empty
     /// puts the two ends back in step, which is verified against an LS-50 that
-    /// had been desynced on purpose - eight stale bytes drained and the unit
+    /// had been desynced on purpose: eight stale bytes drained and the unit
     /// answered INQUIRY again without a reset
     fn resync(&mut self) {
         let mut dropped = 0usize;
@@ -145,16 +226,23 @@ impl UsbTransport {
             {
                 Ok(b) if !b.is_empty() => dropped += b.len(),
                 // Empty or refused: the unit has nothing more to say
-                _ => break,
+                _ => {
+                    if dropped > 0 {
+                        warn!(
+                            bytes = dropped,
+                            "the last command left its answer in the pipe, dropped it to get back in step"
+                        );
+                    }
+                    self.dirty = false;
+                    return;
+                }
             }
         }
-        if dropped > 0 {
-            warn!(
-                bytes = dropped,
-                "the last command left its answer in the pipe, dropped it to get back in step"
-            );
-        }
-        self.dirty = false;
+        // The flag stays set, so the next command drains again
+        warn!(
+            bytes = dropped,
+            "the unit has more to say than we will drop, so we are still out of step"
+        );
     }
 
     /// Write `bytes` to the Bulk Out endpoint
@@ -170,9 +258,9 @@ impl UsbTransport {
     ///
     /// The request is rounded up to whole packets, so the unit can answer with
     /// more than `out` holds. Those bytes are off the wire and there is nowhere
-    /// to put them: whatever is read next starts mid-answer, so this ends the
-    /// transport rather than dropping them and carrying on
-    fn read_in(&mut self, out: &mut [u8], timeout: Duration) -> Result<usize, Error> {
+    /// to put them, so the caller decides: a phase check reads a pipe that is
+    /// out of step, and every other read is past saving
+    fn read_in(&mut self, out: &mut [u8], timeout: Duration) -> Result<Chunk, Error> {
         // We need to request a whole-number of self.in_max_packet-sized chunks
         let req = out.len().max(1).div_ceil(self.in_max_packet) * self.in_max_packet;
         let buf = self
@@ -181,18 +269,10 @@ impl UsbTransport {
             .into_result()
             .map_err(|e| transfer_err(e, timeout))?;
         if buf.len() > out.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "device sent {} bytes for a {}-byte read, so the stream is out of step",
-                    buf.len(),
-                    out.len()
-                ),
-            )
-            .into());
+            return Ok(Chunk::TooMuch(buf.len()));
         }
         out[..buf.len()].copy_from_slice(&buf);
-        Ok(buf.len())
+        Ok(Chunk::Got(buf.len()))
     }
 
     /// Read a whole data IN phase
@@ -201,21 +281,14 @@ impl UsbTransport {
     /// each piece, so one read gets the first line only. We read until we have
     /// the transfer length the CDB asked for, and after the first piece we ask
     /// for the size of that piece. Nikon's own USB code does the same.
-    fn read_data_in(
-        &mut self,
-        out: &mut [u8],
-        deadline: Instant,
-        timeout: Duration,
-    ) -> Result<usize, Error> {
+    fn read_data_in(&mut self, out: &mut [u8], budget: Budget) -> Result<usize, Error> {
         let mut done = 0;
         let mut piece = out.len();
         while done < out.len() {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Err(Error::Timeout(timeout));
-            }
             let want = piece.min(out.len() - done);
-            let got = self.read_in(&mut out[done..done + want], left)?;
+            let got = self
+                .read_in(&mut out[done..done + want], budget.left()?)?
+                .count(want)?;
             // The unit has nothing more to send
             if got == 0 {
                 break;
@@ -227,96 +300,37 @@ impl UsbTransport {
         }
         Ok(done)
     }
-}
 
-impl Transport for UsbTransport {
-    fn max_transfer(&self) -> usize {
-        // Hard-code 128 KB as a normal-ish chunk size
-        // Should be fine?
-        128 * 1024
-    }
-
-    fn execute(
-        &mut self,
-        cdb: &[u8],
-        mut data: Data,
-        timeout: Duration,
-    ) -> Result<Completion, Error> {
-        // A command that failed partway through left the unit mid-answer, so
-        // clear that before starting another rather than reading its leftovers
-        // as this one's phases
-        if self.dirty {
-            self.resync();
-        }
-        // A command that gets no answer is only ever debugged from the bytes
-        // that went out for it
-        if enabled!(Level::TRACE) {
-            let hex: Vec<String> = cdb.iter().map(|b| format!("{b:02X}")).collect();
-            trace!(cdb = hex.join(" "), ?data, "command");
-        }
-        let deadline = Instant::now() + timeout;
-        loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Err(Error::Timeout(timeout));
-            }
-            // Cleared again only by a run that reaches the end of the handshake
-            self.dirty = true;
-            match self.exchange(cdb, data.reborrow(), left)? {
-                Attempt::Done(completion) => {
-                    self.dirty = false;
-                    return Ok(completion);
-                }
-                Attempt::Resend { drain } => {
-                    // A check that ran out of time can still be answered, so
-                    // drop the answer before the command goes out again
-                    if drain {
-                        debug!("the unit stopped answering, we send the command again");
-                        self.resync();
-                    }
-                    sleep(BUSY_WAIT.min(left));
-                }
-            }
-        }
-    }
-}
-
-/// What one try at a command gave us
-enum Attempt {
-    /// The unit answered the command
-    Done(Completion),
-    /// The command is spent and can go out again. `drain` says the unit went
-    /// quiet rather than answering, so it may still answer late
-    Resend { drain: bool },
-}
-
-impl UsbTransport {
-    /// Ask what the unit wants next, `None` where it did not take the question
-    /// or did not answer it inside `wait`
-    fn phase_check(&mut self, wait: Duration) -> Result<Option<u8>, Error> {
+    /// Ask what the unit wants next
+    fn phase_check(&mut self, wait: Duration) -> Result<Phase, Error> {
         match self.write_out(&[PHASE_CHECK_CODE], wait) {
             Ok(()) => {}
-            Err(Error::Timeout(_)) => return Ok(None),
+            Err(Error::Timeout(_)) => return Ok(Phase::Silent),
             Err(e) => return Err(e),
         }
         let mut phase = [0u8; 1];
         match self.read_in(&mut phase, wait) {
-            Ok(0) => Err(io::Error::new(io::ErrorKind::InvalidData, "empty phase response").into()),
-            Ok(_) => {
-                trace!(phase = format!("{:02X}h", phase[0]), "phase");
-                Ok(Some(phase[0]))
+            Ok(Chunk::Got(0)) => {
+                Err(io::Error::new(io::ErrorKind::InvalidData, "empty phase response").into())
             }
-            Err(Error::Timeout(_)) => Ok(None),
+            Ok(Chunk::Got(_)) => {
+                trace!(phase = format!("{:02X}h", phase[0]), "phase");
+                Ok(Phase::Code(phase[0]))
+            }
+            // A pipe that answers a one-byte question with a page of data is
+            // holding the answer to a command that came before ours
+            Ok(Chunk::TooMuch(n)) => Ok(Phase::Stale(n)),
+            Err(Error::Timeout(_)) => Ok(Phase::Silent),
             Err(e) => Err(e),
         }
     }
 
     /// One whole command, from the CDB to the status bytes
-    fn exchange(&mut self, cdb: &[u8], data: Data, timeout: Duration) -> Result<Attempt, Error> {
+    fn exchange(&mut self, cdb: &[u8], data: Data, budget: Budget) -> Result<Attempt, Error> {
         // Following the phase spec from 1-1-2 in LS5K spec
 
         // A unit that will not take the command has not run it
-        match self.write_out(cdb, timeout.min(PHASE_WAIT)) {
+        match self.write_out(cdb, budget.left()?.min(PHASE_WAIT)) {
             Ok(()) => {}
             Err(Error::Timeout(_)) => return Ok(Attempt::Resend { drain: true }),
             Err(e) => return Err(e),
@@ -325,56 +339,67 @@ impl UsbTransport {
         // It holds the command from here. BUSY says it is working on that one,
         // so we ask it again: a second command would be a second command, and
         // the LS-40 refuses a repeated READ with 05h-2Ch
-        let deadline = Instant::now() + timeout;
         let mut wait = BUSY_WAIT;
         let mut bound = PHASE_WAIT;
         let phase = loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Err(Error::Timeout(timeout));
-            }
+            let left = budget.left()?;
             match self.phase_check(left.min(bound))? {
-                Some(PHASE_BUSY) => {
+                Phase::Code(PHASE_BUSY) => {
                     sleep(wait.min(left));
                     wait = (wait * 2).min(BUSY_WAIT_MAX);
                     bound = RECHECK_WAIT;
                 }
-                Some(phase) => break phase,
+                Phase::Code(phase) => break phase,
                 // Nothing at all, so there is nothing to wait for
-                None => return Ok(Attempt::Resend { drain: true }),
+                Phase::Silent => return Ok(Attempt::Resend { drain: true }),
+                Phase::Stale(n) => {
+                    return Ok(Attempt::Desync(
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("a phase check read {n} bytes off the pipe"),
+                        )
+                        .into(),
+                    ));
+                }
             }
         };
 
-        // Now we act of the phase byte we got back (could be not what we asked for on errors)
+        // Now we act on the phase byte we got back, which on an error is not
+        // the one we asked for
         let transferred = match (phase, data) {
             (PHASE_STATUS, Data::None) => 0,
-            (PHASE_STATUS, x) => {
-                debug!("We requested a non-none data phase {:?} but got none", x);
+            (PHASE_STATUS, d) => {
+                // A refused command has no data phase
+                debug!(data = ?d, "the unit went to status with no data phase");
                 0
             }
             (PHASE_DATA_OUT, Data::Out(x)) => {
-                self.write_out(x, timeout)?;
+                self.write_out(x, budget.left()?)?;
                 x.len()
             }
-            (PHASE_DATA_IN, Data::In(x)) => self.read_data_in(x, deadline, timeout)?,
+            (PHASE_DATA_IN, Data::In(x)) => self.read_data_in(x, budget)?,
+            // 00h is "nothing is received", so the unit does not hold the
+            // command we just wrote
             (PHASE_NONE, _) => {
-                return Err(
-                    io::Error::new(io::ErrorKind::InvalidData, "no phase after command").into(),
-                );
+                return Ok(Attempt::Desync(
+                    io::Error::new(io::ErrorKind::InvalidData, "no phase after the command").into(),
+                ));
             }
             (p @ (PHASE_DATA_IN | PHASE_DATA_OUT), d) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("device reported phase {p:#04x} but command supplied {d:?}"),
+                    format!("the unit asked for phase {p:02X}h but the command carries {d:?}"),
                 )
                 .into());
             }
             (x, _) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("invalid phase byte {x:#04x}"),
-                )
-                .into());
+                return Ok(Attempt::Desync(
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("{x:02X}h is not a phase code"),
+                    )
+                    .into(),
+                ));
             }
         };
 
@@ -385,7 +410,7 @@ impl UsbTransport {
 
         // 1-1-5-2 says we'll always get 8 bytes back from status
         let mut sb = [0u8; 8];
-        let n = self.read_in(&mut sb, timeout)?;
+        let n = self.read_in(&mut sb, budget.left()?)?.count(sb.len())?;
 
         if n != 8 {
             return Err(io::Error::new(
@@ -398,24 +423,82 @@ impl UsbTransport {
         // According to table 1-1-5-1 this will only ever be Good or CheckCondition, which is reasonable
         let status = Status::from(sb[0]);
 
-        let sense = {
-            Some(Sense {
-                key: sb[1],
-                asc: sb[2],
-                ascq: sb[3],
-                tsc: Some(sb[4]),
-                // This wrapper carries the four sense bytes and nothing else,
-                // so there is no ILI or information field to read
-                ili: false,
-                information: None,
-                raw: sb.to_vec(),
-            })
-        };
+        let sense = Some(Sense {
+            key: sb[1],
+            asc: sb[2],
+            ascq: sb[3],
+            tsc: Some(sb[4]),
+            // This wrapper carries the four sense bytes and nothing else, so
+            // there is no ILI or information field to read
+            ili: false,
+            information: None,
+            raw: sb.to_vec(),
+        });
 
         Ok(Attempt::Done(Completion {
             status,
             sense,
             transferred,
         }))
+    }
+}
+
+impl Transport for UsbTransport {
+    fn max_transfer(&self) -> usize {
+        // A cap on what one READ asks for, not a limit of the unit
+        128 * 1024
+    }
+
+    fn execute(
+        &mut self,
+        cdb: &[u8],
+        mut data: Data,
+        timeout: Duration,
+    ) -> Result<Completion, Error> {
+        // A command that failed partway through left the unit mid-answer, so
+        // drop that before starting another rather than reading its leftovers
+        // as this one's phases
+        if self.dirty {
+            self.resync();
+        }
+        // A command that gets no answer is only ever debugged from the bytes
+        // that went out for it
+        if enabled!(Level::TRACE) {
+            let hex: Vec<String> = cdb.iter().map(|b| format!("{b:02X}")).collect();
+            trace!(cdb = hex.join(" "), ?data, "command");
+        }
+        let budget = Budget::new(timeout);
+        let mut drained = false;
+        loop {
+            budget.left()?;
+            // Cleared again only by a run that reaches the end of the handshake
+            self.dirty = true;
+            match self.exchange(cdb, data.reborrow(), budget)? {
+                Attempt::Done(completion) => {
+                    self.dirty = false;
+                    return Ok(completion);
+                }
+                Attempt::Resend { drain } => {
+                    // A check that ran out of time can still be answered, so
+                    // drop the answer before the command goes out again
+                    if drain {
+                        debug!("the unit stopped answering, we send the command again");
+                        self.resync();
+                    }
+                    sleep(BUSY_WAIT.min(budget.left()?));
+                }
+                // One drain and one resend is the whole recovery. A unit that
+                // gives a second phase byte we cannot read is not out of step:
+                // it is answering with something we do not understand
+                Attempt::Desync(e) => {
+                    if drained {
+                        return Err(e);
+                    }
+                    drained = true;
+                    warn!(%e, "the pipe is out of step, we drop it and send the command again");
+                    self.resync();
+                }
+            }
+        }
     }
 }

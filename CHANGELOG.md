@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `Address::registration_gap` and `Capabilities::reads_lines_at_once_at`. Both answer the multi-line question at one resolution.
+- The USB transport traces every CDB and the phase byte that answered it, so `--log trace` shows the exchange.
 
 ### Changed
 
@@ -23,13 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The USB transport no longer sends 06h (status reception code) before the status. An LS-50 sends the status without it and an LS-40 stops answering after it.
 - Command retries for the USB backend, fixing a bug raised by the second phase check in an LS-40.
 - A phase check the unit never answers counts as busy, which is what an LS-40 does for seconds at a time.
+- A busy USB unit is polled for its phase rather than sent the same command a second time.
 - The line gap comes from the page, not from whatever the transport padded after it.
 - The last image READ of a pass asks for a whole number of granules, so the unit no longer rounds it up and sends a surplus the phase protocol cannot place.
 - A pass refused for its layout or its stream shape stops the scan, rather than leaving one open that refuses every later command with `05h-2Ch`.
 - `Session::open` stops a stale scan before RESERVE UNIT, which such a scan refuses.
 - A USB handle no longer drains the pipe at open. That drain ends in a read that times out, which costs every open 200 ms on Linux and over two seconds on Windows, where nusb also warns that the cancelled transfer has not come back. A pipe left dirty by a dead process is now found by the first command and cleared before it goes out again.
 - One command's timeout covers the whole command. Each step of the phase handshake was given the full timeout of its own, so a command could take several times what the caller asked for.
+- The first command of a session gets the ready budget, so a cold unit that stays busy for tens of seconds no longer fails the connect.
 - A scan under 4000 dpi on the LS-5000 stopped with `decode is not supported`. Its CCD rows are one optical line apart, so any pitch above 1 puts them on one output line. Such a scan now reads one row at a time.
+- A frame table the unit will not hold names the frames and the bytes it refused, rather than reporting `05h-24h` and its sense buffer.
+- A strip that measures no frames writes no table, so the run ends with `No frames on this strip` and `--thumbnail` keeps the pass, rather than stopping at `05h-26h` with nothing to show for it.
 
 ## [0.9.0]
 

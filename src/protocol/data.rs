@@ -394,6 +394,14 @@ impl Boundary {
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+        // A record with nothing in it tells the unit nothing, and it answers
+        // common error 2 for it
+        if self.frames.is_empty() {
+            return Err(Error::Unsupported {
+                op: "frame table",
+                reason: "no frames were measured, so there is no table to send".into(),
+            });
+        }
         // The count is one byte (2-11-6 byte 2), so more than 255 frames cannot
         // be encoded
         if self.frames.len() > u8::MAX as usize {
@@ -550,6 +558,13 @@ impl BoundaryType2 {
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+        // As `Boundary::to_bytes`: an empty record is refused with common error 2
+        if self.frames.is_empty() {
+            return Err(Error::Unsupported {
+                op: "frame table",
+                reason: "no frames were measured, so there is no table to send".into(),
+            });
+        }
         if self.frames.len() > u8::MAX as usize {
             return Err(Error::Unsupported {
                 op: "boundary_type2",

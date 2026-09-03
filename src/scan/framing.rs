@@ -241,7 +241,12 @@ pub fn discover_with(
 
             let measured =
                 thumbnail::frames(session.capabilities(), &pass, samples, length, polarity)?;
-            session.set_boundaries(&measured)?;
+            // Nothing measured is nothing to tell the unit, and it refuses an
+            // empty record. The caller gets the pass either way, which is the
+            // only evidence of why the strip measured empty
+            if !measured.frames.is_empty() {
+                session.set_boundaries(&measured)?;
+            }
             let found = measured.frames.clone();
             info!(frames = found.len(), "detected frames");
             Ok(Discovery {
@@ -285,7 +290,9 @@ pub fn discover_with(
                 length,
                 polarity,
             )?;
-            session.set_boundaries_type2(&measured)?;
+            if !measured.frames.is_empty() {
+                session.set_boundaries_type2(&measured)?;
+            }
 
             let x_start = session.capabilities().address.x_axis.address_range.start;
             let x_boundary = session.capabilities().address.x_axis.boundary;

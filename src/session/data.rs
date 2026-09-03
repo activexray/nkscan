@@ -8,7 +8,7 @@ use crate::{
         cdbs::{Execute, GetParameter, Read, Send, SendDiagnostic, SetParameter},
         curves::Curves,
         data::{self, BoundaryType2, FrameTable, PerfInformation},
-        sense::{self, Failure, Fault},
+        sense::{self, Failure, Fault, Refusal},
         window::Channel,
     },
     transport::{Data, Sense, Status},
@@ -169,9 +169,31 @@ impl Session {
     /// 2-11-6: after a thumbnail of strip film the host works these out and
     /// sends them, which is the only way frames the unit cannot measure for
     /// itself come to have a length
+    /// A table the unit will not hold comes back as `05h-24h`, invalid field in
+    /// CDB, with no field pointer. The rectangles travel in the parameter list,
+    /// and illegal data there is `05h-26h`, so the objection is to the CDB, and
+    /// the frame count is the only thing in a table that reaches one: it sizes
+    /// the transfer length. Neither spec says how many frames the record holds.
+    /// A four-frame table is accepted and this one was five, so report the size
+    /// that was refused and leave the limit unstated
     pub fn set_boundaries(&mut self, boundary: &data::Boundary) -> Result<(), Error> {
         let bytes = boundary.to_bytes()?;
-        self.send_data(data::DataType::Boundary, 0, &bytes)?;
+        self.send_data(data::DataType::Boundary, 0, &bytes)
+            .map_err(|e| match e {
+                Error::Device(fault)
+                    if matches!(*fault, Fault::Rejected(Refusal::BadCdbField, _)) =>
+                {
+                    Error::Unsupported {
+                        op: "frame table",
+                        reason: format!(
+                            "this unit would not take a {}-frame table of {} bytes",
+                            boundary.frames.len(),
+                            bytes.len()
+                        ),
+                    }
+                }
+                e => e,
+            })?;
         self.frames = Some(FrameTable::Boundary(boundary.clone()));
         Ok(())
     }

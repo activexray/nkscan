@@ -132,7 +132,9 @@ impl Chunk {
             Chunk::Got(n) => Ok(n),
             Chunk::TooMuch(n) => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("device sent {n} bytes for a {asked}-byte read, so the stream is out of step"),
+                format!(
+                    "device sent {n} bytes for a {asked}-byte read, so the stream is out of step"
+                ),
             )
             .into()),
         }

@@ -3,7 +3,7 @@
 use super::{Completion, Data, Error, Sense, Status, Transport};
 use nusb::{
     DeviceInfo, Endpoint, Interface, MaybeFuture,
-    transfer::{Buffer, Bulk, In, Out, TransferError},
+    transfer::{Buffer, Bulk, BulkOrInterrupt, EndpointDirection, In, Out, TransferError},
 };
 use std::{
     io,
@@ -116,12 +116,31 @@ fn transfer_err(e: TransferError, timeout: Duration) -> Error {
     Error::Io(io::Error::new(kind, e))
 }
 
+/// Clear an endpoint the unit halted
+///
+/// A stall stands until CLEAR_FEATURE, which 1-1-6-1-1 has this unit
+/// supporting. Leaving it set would fail every transfer after the one that
+/// stalled, so the command that hit it is the only one that has to be lost
+fn clear_stall<T: BulkOrInterrupt, D: EndpointDirection>(
+    ep: &mut Endpoint<T, D>,
+    e: TransferError,
+) {
+    if e != TransferError::Stall {
+        return;
+    }
+    match ep.clear_halt().wait() {
+        Ok(()) => warn!("the unit halted the endpoint, cleared it for the next command"),
+        Err(e) => warn!(%e, "the unit halted the endpoint and it would not clear"),
+    }
+}
+
 /// What one read off the IN pipe gave us
 enum Chunk {
     /// Bytes copied into the caller's buffer
     Got(usize),
-    /// The unit sent more than the read asked for. The bytes are off the wire
-    /// and we have nowhere to put them, so the two ends are out of step
+    /// The unit answered with this many bytes for a read that asked for fewer.
+    /// The buffer took what it holds and the surplus is off the wire with
+    /// nowhere to put it
     TooMuch(usize),
 }
 
@@ -147,8 +166,8 @@ enum Phase {
     Code(u8),
     /// The unit did not take the question, or did not answer it in time
     Silent,
-    /// The pipe answered with more than a phase byte, so it holds an answer we
-    /// did not ask for
+    /// The answer was not the one byte 1-1-2-1 defines, so the pipe is out of
+    /// step: it gave nothing at all, or an answer we did not ask for
     Stale(usize),
 }
 
@@ -221,11 +240,7 @@ impl UsbTransport {
     fn resync(&mut self) {
         let mut dropped = 0usize;
         while dropped < RESYNC_LIMIT {
-            match self
-                .ep_in
-                .transfer_blocking(Buffer::new(self.in_max_packet), RESYNC_TIMEOUT)
-                .into_result()
-            {
+            match self.transfer_in(self.in_max_packet, RESYNC_TIMEOUT) {
                 Ok(b) if !b.is_empty() => dropped += b.len(),
                 // Empty or refused: the unit has nothing more to say
                 _ => {
@@ -249,32 +264,49 @@ impl UsbTransport {
 
     /// Write `bytes` to the Bulk Out endpoint
     fn write_out(&mut self, bytes: &[u8], timeout: Duration) -> Result<(), Error> {
-        self.ep_out
+        let sent = self
+            .ep_out
             .transfer_blocking(bytes.into(), timeout)
-            .into_result()
-            .map_err(|e| transfer_err(e, timeout))?;
-        Ok(())
+            .into_result();
+        match sent {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                clear_stall(&mut self.ep_out, e);
+                Err(transfer_err(e, timeout))
+            }
+        }
     }
 
-    /// Read bytes from the Bulk In endpoint, filling out and returning the number of bytes read
+    /// One read off the Bulk In endpoint, of enough whole packets to hold
+    /// `want` bytes
     ///
-    /// The request is rounded up to whole packets, so the unit can answer with
-    /// more than `out` holds. Those bytes are off the wire and there is nowhere
-    /// to put them, so the caller decides: a phase check reads a pipe that is
-    /// out of step, and every other read is past saving
-    fn read_in(&mut self, out: &mut [u8], timeout: Duration) -> Result<Chunk, Error> {
-        // We need to request a whole-number of self.in_max_packet-sized chunks
-        let req = out.len().max(1).div_ceil(self.in_max_packet) * self.in_max_packet;
-        let buf = self
+    /// nusb takes the request in whole packets, so a `want` that does not land
+    /// on a packet boundary leaves room for the unit to answer with up to a
+    /// packet more than that. What the surplus means is the caller's to say
+    fn transfer_in(&mut self, want: usize, timeout: Duration) -> Result<Buffer, Error> {
+        let req = want.max(1).div_ceil(self.in_max_packet) * self.in_max_packet;
+        let got = self
             .ep_in
             .transfer_blocking(Buffer::new(req), timeout)
-            .into_result()
-            .map_err(|e| transfer_err(e, timeout))?;
-        if buf.len() > out.len() {
-            return Ok(Chunk::TooMuch(buf.len()));
+            .into_result();
+        got.map_err(|e| {
+            clear_stall(&mut self.ep_in, e);
+            transfer_err(e, timeout)
+        })
+    }
+
+    /// Read from the Bulk In endpoint into `out`, saying what arrived
+    ///
+    /// `out` takes as much as it holds either way, so a [`Chunk::TooMuch`] is
+    /// the caller's to judge rather than a read it has to do again
+    fn read_in(&mut self, out: &mut [u8], timeout: Duration) -> Result<Chunk, Error> {
+        let buf = self.transfer_in(out.len(), timeout)?;
+        let n = buf.len().min(out.len());
+        out[..n].copy_from_slice(&buf[..n]);
+        match buf.len() > out.len() {
+            true => Ok(Chunk::TooMuch(buf.len())),
+            false => Ok(Chunk::Got(n)),
         }
-        out[..buf.len()].copy_from_slice(&buf);
-        Ok(Chunk::Got(buf.len()))
     }
 
     /// Read a whole data IN phase
@@ -288,9 +320,20 @@ impl UsbTransport {
         let mut piece = out.len();
         while done < out.len() {
             let want = piece.min(out.len() - done);
-            let got = self
-                .read_in(&mut out[done..done + want], budget.left()?)?
-                .count(want)?;
+            let last = done + want == out.len();
+            let got = match self.read_in(&mut out[done..done + want], budget.left()?)? {
+                // The phase is as long as the CDB's transfer length, which need
+                // not end on a packet boundary, and the unit fills out that
+                // last packet rather than ending it short. Under a packet's
+                // worth, part of no transfer, and off the wire already, so the
+                // read that finishes the phase drops it. A surplus before then
+                // is not padding, it is the stream out of step
+                Chunk::TooMuch(n) if last => {
+                    trace!(padding = n - want, "dropped the tail of the last packet");
+                    want
+                }
+                chunk => chunk.count(want)?,
+            };
             // The unit has nothing more to send
             if got == 0 {
                 break;
@@ -303,25 +346,27 @@ impl UsbTransport {
         Ok(done)
     }
 
-    /// Ask what the unit wants next
-    fn phase_check(&mut self, wait: Duration) -> Result<Phase, Error> {
-        match self.write_out(&[PHASE_CHECK_CODE], wait) {
+    /// Ask what the unit wants next, in no more than `bound` and no more than
+    /// the command has left
+    ///
+    /// Both halves read the budget, so a check that spends its whole allowance
+    /// asking cannot then spend it again listening
+    fn phase_check(&mut self, budget: Budget, bound: Duration) -> Result<Phase, Error> {
+        match self.write_out(&[PHASE_CHECK_CODE], budget.left()?.min(bound)) {
             Ok(()) => {}
             Err(Error::Timeout(_)) => return Ok(Phase::Silent),
             Err(e) => return Err(e),
         }
         let mut phase = [0u8; 1];
-        match self.read_in(&mut phase, wait) {
-            Ok(Chunk::Got(0)) => {
-                Err(io::Error::new(io::ErrorKind::InvalidData, "empty phase response").into())
-            }
-            Ok(Chunk::Got(_)) => {
+        match self.read_in(&mut phase, budget.left()?.min(bound)) {
+            Ok(Chunk::Got(1)) => {
                 trace!(phase = format!("{:02X}h", phase[0]), "phase");
                 Ok(Phase::Code(phase[0]))
             }
-            // A pipe that answers a one-byte question with a page of data is
-            // holding the answer to a command that came before ours
-            Ok(Chunk::TooMuch(n)) => Ok(Phase::Stale(n)),
+            // Anything but that one byte and the pipe is out of step: a page of
+            // data is the answer to a command that came before ours, and
+            // nothing at all is a packet left over from one
+            Ok(Chunk::Got(n) | Chunk::TooMuch(n)) => Ok(Phase::Stale(n)),
             Err(Error::Timeout(_)) => Ok(Phase::Silent),
             Err(e) => Err(e),
         }
@@ -344,10 +389,9 @@ impl UsbTransport {
         let mut wait = BUSY_WAIT;
         let mut bound = PHASE_WAIT;
         let phase = loop {
-            let left = budget.left()?;
-            match self.phase_check(left.min(bound))? {
+            match self.phase_check(budget, bound)? {
                 Phase::Code(PHASE_BUSY) => {
-                    sleep(wait.min(left));
+                    sleep(wait.min(budget.left()?));
                     wait = (wait * 2).min(BUSY_WAIT_MAX);
                     bound = RECHECK_WAIT;
                 }
@@ -426,7 +470,8 @@ impl UsbTransport {
         let status = Status::from(sb[0]);
 
         let sense = Some(Sense {
-            key: sb[1],
+            // 1-1-5-2 gives the key the low nibble and zeroes the rest
+            key: sb[1] & 0x0F,
             asc: sb[2],
             ascq: sb[3],
             tsc: Some(sb[4]),

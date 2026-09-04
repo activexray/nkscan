@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A scan under 4000 dpi on the LS-5000 stopped with `decode is not supported`. Its CCD rows are one optical line apart, so any pitch above 1 puts them on one output line. Such a scan now reads one row at a time.
 - A frame table the unit will not hold names the frames and the bytes it refused, rather than reporting `05h-24h` and its sense buffer.
 - A strip that measures no frames writes no table, so the run ends with `No frames on this strip` and `--thumbnail` keeps the pass, rather than stopping at `05h-26h` with nothing to show for it.
+- The USB transport no longer desyncs on a data IN phase whose length isn't a multiple of the packet size, which multisampling on the LS-5000 can produce. The unit fills out the last packet, and the read that finishes the phase drops that tail. A surplus anywhere earlier is still a stream out of step.
+- A stalled bulk endpoint is cleared, so the command that halted it is the only one lost rather than every command after it.
 
 ## [0.9.0]
 

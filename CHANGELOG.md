@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The USB transport no longer errors out of a scan when the unit pads the status phase's closing packet to a whole packet size, the same padding already tolerated on a data phase's last packet.
+
 ## [0.10.0]
 
 ### Added

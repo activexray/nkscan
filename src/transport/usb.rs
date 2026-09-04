@@ -309,6 +309,25 @@ impl UsbTransport {
         }
     }
 
+    /// Read the closing packet of a phase, where the unit fills it out to a
+    /// whole number of packets instead of ending it short
+    ///
+    /// Whatever `out` asks for is what the phase has left, so a
+    /// [`Chunk::TooMuch`] here is that padding, not the pipe out of step -
+    /// unlike a read that has more of the phase still to come after it
+    fn read_last(&mut self, out: &mut [u8], timeout: Duration) -> Result<usize, Error> {
+        match self.read_in(out, timeout)? {
+            Chunk::Got(n) => Ok(n),
+            Chunk::TooMuch(n) => {
+                trace!(
+                    padding = n - out.len(),
+                    "dropped the tail of the last packet"
+                );
+                Ok(out.len())
+            }
+        }
+    }
+
     /// Read a whole data IN phase
     ///
     /// The unit sends the data in pieces. An LS-40 sends one image line for
@@ -320,19 +339,16 @@ impl UsbTransport {
         let mut piece = out.len();
         while done < out.len() {
             let want = piece.min(out.len() - done);
+            // The phase is as long as the CDB's transfer length, which need not
+            // end on a packet boundary, and the unit fills out that last
+            // packet rather than ending it short. A surplus before then is not
+            // padding, it is the stream out of step
             let last = done + want == out.len();
-            let got = match self.read_in(&mut out[done..done + want], budget.left()?)? {
-                // The phase is as long as the CDB's transfer length, which need
-                // not end on a packet boundary, and the unit fills out that
-                // last packet rather than ending it short. Under a packet's
-                // worth, part of no transfer, and off the wire already, so the
-                // read that finishes the phase drops it. A surplus before then
-                // is not padding, it is the stream out of step
-                Chunk::TooMuch(n) if last => {
-                    trace!(padding = n - want, "dropped the tail of the last packet");
-                    want
-                }
-                chunk => chunk.count(want)?,
+            let got = if last {
+                self.read_last(&mut out[done..done + want], budget.left()?)?
+            } else {
+                self.read_in(&mut out[done..done + want], budget.left()?)?
+                    .count(want)?
             };
             // The unit has nothing more to send
             if got == 0 {
@@ -454,9 +470,11 @@ impl UsbTransport {
         // after a data IN, a data OUT and a status phase. An LS-40 stops
         // answering after it.
 
-        // 1-1-5-2 says we'll always get 8 bytes back from status
+        // 1-1-5-2 says we'll always get 8 bytes back from status. It is the
+        // closing packet of its own phase same as a data phase's last one, and
+        // the unit pads it out to a whole packet the same way
         let mut sb = [0u8; 8];
-        let n = self.read_in(&mut sb, budget.left()?)?.count(sb.len())?;
+        let n = self.read_last(&mut sb, budget.left()?)?;
 
         if n != 8 {
             return Err(io::Error::new(

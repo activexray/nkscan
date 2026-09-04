@@ -7,10 +7,10 @@ result
 # LibreOffice lock files, from opening the specs
 .~lock.*#
 
-# Raw scan dumps from examples/scan.rs
+# The scratch dump protocol::decode's round-trip test reads when it is there
 scan.raw
 
-# CDB traces from examples/scan.rs
+# Scratch dumps and logs a debugging run leaves behind
 ours.log
 *.log
 thumb.raw

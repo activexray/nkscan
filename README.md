@@ -1,9 +1,9 @@
 # nkscan
 
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/activexray/nkscan/ci.yml)
-![Crates.io Version](https://img.shields.io/crates/v/nkscan)
-![docs.rs](https://img.shields.io/docsrs/nkscan)
-![PyPI Version](https://img.shields.io/pypi/v/nkscan)
+[![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/activexray/nkscan/ci.yml)](https://github.com/activexray/nkscan/actions/workflows/ci.yml)
+[![Crates.io Version](https://img.shields.io/crates/v/nkscan)](https://crates.io/crates/nkscan)
+[![docs.rs](https://img.shields.io/docsrs/nkscan)](https://docs.rs/nkscan)
+[![PyPI Version](https://img.shields.io/pypi/v/nkscan)](https://pypi.org/project/nkscan/)
 
 A cross-platform and performant driver for Nikon (Coolscan) film scanners.
 

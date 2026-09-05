@@ -256,6 +256,19 @@ class Session:
         works the same as a detected one, just slower if the stage has to home
         first to reach it
         """
+    def prime_bh(self, early: tuple[builtins.int, builtins.int, builtins.int, builtins.int]) -> None:
+        r"""
+        Work around the Bell&Howell first-positioning fault
+        
+        On BH-perforated stock (cine film), the first frame positioning after
+        the framing pass can fail its verification when the target sits deeper
+        than about frame 6, and the unit rewinds the film in response. Workaround is
+        to rewind to a frame <=6 before transporting to a higher number.
+        
+        Call this once with a low frame, after discovery and before the first `scan_frame`,
+        whenever the first frame you actually mean to scan is deeper than that.
+        Films without BH perforations never trip the fault, so skip it there.
+        """
     def scan_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], dpi: typing.Optional[builtins.int] = None, samples: builtins.int = 1, superfine: builtins.bool = False, infrared: builtins.bool = False, clean: builtins.bool = False, lock_white_balance: builtins.bool = True, exposures: typing.Optional[typing.Mapping[builtins.str, builtins.int]] = None, progress: typing.Optional[typing.Any] = None) -> ScanResult:
         r"""
         Focus, meter, take the pass over `frame`, and optionally clean it

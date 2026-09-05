@@ -68,6 +68,10 @@ pub fn scan_frame_with(
     samples: &mut Samples,
     mut on: impl FnMut(Phase, Progress) -> ControlFlow<()>,
 ) -> Result<Scanned, Error> {
+    // An edited or hand-made frame needs its transport registration in place
+    // before the first stage move, not after
+    session.ensure_frame_registration(&frame)?;
+
     let mut windows = recipe.windows(session.capabilities(), frame)?;
 
     session.focus_frame(frame, Focus::default())?;

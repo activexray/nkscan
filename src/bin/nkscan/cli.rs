@@ -38,6 +38,8 @@ pub enum Action {
     List,
     /// Perform a scan. Defaults to batch scanning with sensible defaults.
     Scan(Scan),
+    /// Find the frames on what is loaded and write them out for editing, without scanning. Pairs with `scan --frames-file`
+    Discover(Discover),
     /// Dump a scanner's INQUIRY pages. Reads only; nothing moves.
     Dump(Dump),
     /// Eject the loaded film or holder
@@ -49,6 +51,33 @@ pub enum Action {
 pub struct Eject {
     /// The scanner to eject. Optional, will default to the first found.
     pub device: Option<String>,
+}
+
+/// Find the frames without scanning them
+#[derive(clap::Args)]
+pub struct Discover {
+    /// The scanner to connect to. Optional, will default to the first found.
+    pub device: Option<String>,
+
+    /// Where to write, as a path prefix. The boundaries go to <basename>_<n>_frames.json
+    #[arg(long, default_value = "scan")]
+    pub basename: PathBuf,
+
+    /// Film format. One of: 135, half, IX240, 16, 645, 66, 67, 68, 69, or a custom frame length in mm. Defaults to what the holder reports (if any).
+    #[arg(long, value_parser = FilmFormat::from_str)]
+    pub format: Option<FilmFormat>,
+
+    /// Film type, which says which way detection reads the gaps between frames
+    #[arg(long, value_enum, default_value_t = FilmType::Negative)]
+    pub film: FilmType,
+
+    /// Keep the framing thumbnail as <basename>_<n>_thumbnail.tiff, on units that support this
+    #[arg(long)]
+    pub thumbnail: bool,
+
+    /// Eject when done. Without this the film stays loaded, ready for `nkscan scan --frames-file`
+    #[arg(long)]
+    pub eject: bool,
 }
 
 /// Which scanner to ask about itself
@@ -98,6 +127,12 @@ pub struct Scan {
     /// Naming any stops after one holder rather than batching.
     #[arg(long, value_delimiter = ',')]
     pub frames: Vec<usize>,
+
+    /// Scan the frames listed in a boundaries file from `nkscan discover`,
+    /// instead of running discovery here. Edit that file's `frames` array to
+    /// move, shrink or drop detections before handing it back
+    #[arg(long, value_name = "JSON", conflicts_with = "format")]
+    pub frames_file: Option<PathBuf>,
 
     /// Include the IR pass
     #[arg(long)]

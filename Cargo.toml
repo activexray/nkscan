@@ -46,6 +46,8 @@ indicatif = { version = "0.18", optional = true }
 tiff = { version = "0.11", optional = true }
 moxcms = { version = "0.9", optional = true }
 ctrlc = { version = "3", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
 
 
 [features]
@@ -57,6 +59,8 @@ cli = [
   "dep:tiff",
   "dep:moxcms",
   "dep:ctrlc",
+  "dep:serde",
+  "dep:serde_json",
 ]
 python = ["dep:pyo3", "dep:numpy", "dep:pyo3-stub-gen"]
 

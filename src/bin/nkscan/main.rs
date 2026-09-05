@@ -6,8 +6,11 @@ use tracing_subscriber::EnvFilter;
 
 mod cancel;
 mod cli;
+mod common;
+mod discover;
 mod dump;
 mod eject;
+mod frames;
 mod io;
 mod mono;
 mod progress;
@@ -70,6 +73,11 @@ fn main() -> anyhow::Result<()> {
         cli::Action::Scan(args) => {
             let outcome = scan::run(args);
             // A pass that ended early still has its bar drawn
+            progress::clear();
+            outcome?
+        }
+        cli::Action::Discover(args) => {
+            let outcome = discover::run(args);
             progress::clear();
             outcome?
         }

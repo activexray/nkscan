@@ -256,6 +256,14 @@ class Session:
         works the same as a detected one, just slower if the stage has to home
         first to reach it
         """
+    def set_frames(self, frames: typing.Sequence[tuple[builtins.int, builtins.int, builtins.int, builtins.int]]) -> None:
+        r"""
+        Send an edited set of frame boundaries to the unit as one table
+        
+        Call this after modifying what [`Session.discover_frames`][Self.discover_frames]
+        returned, before scanning. Every rectangle becomes a frame entry, with
+        perforation registration derived per top on roll film.
+        """
     def scan_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], dpi: typing.Optional[builtins.int] = None, samples: builtins.int = 1, superfine: builtins.bool = False, infrared: builtins.bool = False, clean: builtins.bool = False, lock_white_balance: builtins.bool = True, exposures: typing.Optional[typing.Mapping[builtins.str, builtins.int]] = None, progress: typing.Optional[typing.Any] = None) -> ScanResult:
         r"""
         Focus, meter, take the pass over `frame`, and optionally clean it

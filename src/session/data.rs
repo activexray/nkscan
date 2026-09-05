@@ -206,6 +206,120 @@ impl Session {
         Ok(())
     }
 
+    /// Derive `FramePosition`s for arbitrary frame tops, registering each
+    /// against the unit's own perforation reading at its address
+    fn derive_positions(
+        &mut self,
+        frames: &[data::Rect],
+    ) -> Result<Vec<data::FramePosition>, Error> {
+        let caps = &self.caps;
+        let origin = caps.address.y_axis.address_range.start;
+        let end = caps.address.y_axis.address_range.last;
+        // The resolution discovery's pass ran at, so an address maps onto the
+        // perforation table with the same column arithmetic that built it
+        let asked = u32::from(caps.address.thumbnail_resolution.start).max(1);
+        let optical_y = u32::from(caps.address.y_axis.optical_dpi)
+            .max(u32::from(caps.address.x_axis.optical_dpi));
+        let pitch = (optical_y / asked).max(1);
+
+        let perfs = self.read_perforations()?;
+        let mut positions = Vec::with_capacity(frames.len());
+        for (n, r) in frames.iter().enumerate() {
+            if r.top < origin || r.top > end {
+                return Err(malformed(format!(
+                    "frame {}: top {} is outside the axis range {origin}..={end}, \
+                     so there is nowhere to register it",
+                    n + 1,
+                    r.top
+                )));
+            }
+            // Nearest column: detection's own tops are exact multiples of the
+            // pitch away from the origin, an edited one may not be
+            let col = ((r.top - origin) + pitch / 2) / pitch;
+            match perfs.at(col as usize) {
+                Some(perf) => positions.push(data::FramePosition::new(r.top, perf)),
+                None => {
+                    return Err(malformed(format!(
+                        "frame {}: no perforation reading at address {} (column {col}), \
+                         so this frame cannot be registered for the transport",
+                        n + 1,
+                        r.top
+                    )));
+                }
+            }
+        }
+        Ok(positions)
+    }
+
+    /// The boundary table `frames` corresponds to, for the loaded medium
+    pub fn rebuild_table(&mut self, frames: &[data::Rect]) -> Result<FrameTable, Error> {
+        // A discovered table decides by being one; no table yet - the
+        // `--frames-file` case, where this session skipped discovery - decides
+        // by what the unit's family speaks, which is also what the flag that
+        // carried through the probe says
+        let type2 = match self.frames.as_ref() {
+            Some(table) => matches!(table, FrameTable::BoundaryType2(_)),
+            None => self.uses_frame_type_2(),
+        };
+
+        if !type2 {
+            return Ok(FrameTable::Boundary(data::Boundary {
+                frames: frames.to_vec(),
+            }));
+        }
+        let mut positions = self.derive_positions(frames)?;
+        // Sorted by top, as discovery built the original
+        positions.sort_by_key(|f| f.top);
+        Ok(FrameTable::BoundaryType2(BoundaryType2 {
+            frames: positions,
+        }))
+    }
+
+    /// Send an edited set of frame boundaries as one table, before any scanning
+    ///
+    /// Returns the table that was sent.
+    pub fn update_frames(&mut self, frames: &[data::Rect]) -> Result<FrameTable, Error> {
+        let table = self.rebuild_table(frames)?;
+        match &table {
+            FrameTable::Boundary(b) => self.set_boundaries(b)?,
+            FrameTable::BoundaryType2(t) => self.set_boundaries_type2(t)?,
+        }
+        Ok(table)
+    }
+
+    /// Make sure the unit's boundary table carries a registration for `rect`'s
+    /// top line, before anything moves toward it
+    ///
+    /// Callers that know a whole edited set up front should prefer rebuilding and
+    /// sending the table once themselves ([`Self::rebuild_table`]); this is the
+    /// fallback for callers who arrive one frame at a time.
+    pub fn ensure_frame_registration(&mut self, rect: &data::Rect) -> Result<(), Error> {
+        let missing = match self.frames.as_ref() {
+            Some(FrameTable::BoundaryType2(t)) => !t.frames.iter().any(|f| f.top == rect.top),
+            _ => false,
+        };
+        if !missing {
+            return Ok(());
+        }
+
+        // Cloned ahead of the unit round-trip below, which borrows mutably
+        let mut amended = match self.frames.as_ref() {
+            Some(FrameTable::BoundaryType2(t)) => t.clone(),
+            _ => unreachable!("checked above"),
+        };
+        let entry = *self
+            .derive_positions(std::slice::from_ref(rect))?
+            .first()
+            .expect("one frame in, one position out");
+        // Kept sorted by top, as discovery built the original
+        match amended.frames.binary_search_by(|f| f.top.cmp(&rect.top)) {
+            Ok(i) => amended.frames[i] = entry,
+            Err(i) => amended.frames.insert(i, entry),
+        }
+        info!(top = rect.top, "registered an edited frame position");
+        self.set_boundaries_type2(&amended)
+    }
+
     pub fn read_perforations(&mut self) -> Result<data::PerfInformation, Error> {
         let (_, record) = self.read_record(data::DataType::Perforation, 0)?;
         self.test_unit_ready(Duration::from_millis(500))?;

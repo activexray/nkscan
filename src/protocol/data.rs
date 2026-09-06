@@ -62,6 +62,18 @@ pub enum DataType {
 }
 
 impl DataType {
+    /// Bytes the data header leaves out of the length it reports
+    ///
+    /// `Boundary2` reports the parameter length of the record, which is two
+    /// bytes less than the record. The unit refuses a read of that length with
+    /// `05h-24h`. Nikon Scan asks for the two extra bytes
+    pub const fn understated(self) -> u32 {
+        match self {
+            Self::Boundary2 => 2,
+            _ => 0,
+        }
+    }
+
     pub const fn row(self) -> Row {
         use DataTypes as D;
         /// Widths and counts for the rows neither spec fills in
@@ -522,10 +534,11 @@ impl BoundaryType2 {
     /// Put `frame` in the slot its top falls in, so a SET WINDOW at that top
     /// picks it
     ///
-    /// The unit reads a window inside the frame whose entry has the greatest
-    /// top at or under the window's, so a nudged top replaces that entry rather
-    /// than joining the table, whose length the holder's frame count caps. A
-    /// top ahead of every entry takes the first slot. Order is kept either way
+    /// The unit reads a window in the frame whose entry has the greatest top at
+    /// or below the top of the window. A new top replaces that entry and is not
+    /// added to the table: a seventh entry on an LS-50 moved the film 1528
+    /// addresses from the requested position. A top before every entry replaces
+    /// the first entry. The order of the table does not change
     pub fn register(&mut self, frame: FramePosition) {
         let slot = self
             .frames
@@ -547,9 +560,9 @@ impl BoundaryType2 {
         // Byte 2: actual number of images.
         let count = usize::from(head[2]);
 
-        // The parameter length describes everything following the field
-        // itself, i.e. total parameter size is length + 1.
-        let total = parameter_length.checked_add(1)?;
+        // Two short of the record, not one: a six-frame table of 52 bytes
+        // reports 50, both in what the unit sends and in what it accepts
+        let total = parameter_length.checked_add(2)?;
 
         // The reserved byte is currently ignored.
         let expected = Self::HEAD.checked_add(count.checked_mul(Self::BOUNDARY)?)?;
@@ -1019,6 +1032,27 @@ mod tests {
         let mut empty = BoundaryType2::default();
         empty.register(at(7));
         assert_eq!(tops(&empty), [7]);
+    }
+
+    /// The two ends of the parameter length must agree. `to_bytes` writes two
+    /// bytes less than the record, as the unit does, and `from_bytes` accepted
+    /// one byte less and refused a real table as malformed
+    #[test]
+    fn a_type2_table_decodes_what_it_encodes() {
+        let perf = PerforationInformation {
+            perf_number: 24,
+            count_switching_flag: false,
+            perf_decimal: 1,
+            pulse_number: 24,
+        };
+        let table = BoundaryType2 {
+            frames: (0..6)
+                .map(|n| FramePosition::new(n * 2952, &perf))
+                .collect(),
+        };
+        let bytes = table.to_bytes().expect("encode");
+        assert_eq!(bytes.len(), 4 + 6 * 8);
+        assert_eq!(BoundaryType2::from_bytes(&bytes), Some(table));
     }
 
     /// A frame detected on line 2 seeks by line 2's own reading

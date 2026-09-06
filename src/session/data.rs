@@ -67,7 +67,7 @@ impl Session {
         let (probe, _) = data::Header::from_bytes(&probe)
             .ok_or_else(|| malformed(format!("{kind:?} header was {} bytes", probe.len())))?;
 
-        let raw = fetch(data::HEADER as u32 + probe.length)?;
+        let raw = fetch(data::HEADER as u32 + probe.length + kind.understated())?;
         let (header, payload) = data::Header::from_bytes(&raw)
             .ok_or_else(|| malformed(format!("{kind:?} header was {} bytes", raw.len())))?;
 
@@ -204,6 +204,18 @@ impl Session {
         self.send_data(data::DataType::Boundary2, 0, &bytes)?;
         self.frames = Some(FrameTable::BoundaryType2(boundary.clone()));
         Ok(())
+    }
+
+    /// Send a table for one pass without adopting it as what the session knows
+    ///
+    /// [`framing::register`](crate::scan::framing::register) makes a table for
+    /// a rectangle that the measured table has no entry for. The session keeps
+    /// the measured table, because an entry is replaced and not added
+    pub fn set_boundaries_type2_for_pass(
+        &mut self,
+        boundary: &data::BoundaryType2,
+    ) -> Result<(), Error> {
+        self.send_data(data::DataType::Boundary2, 0, &boundary.to_bytes()?)
     }
 
     pub fn read_perforations(&mut self) -> Result<data::PerfInformation, Error> {

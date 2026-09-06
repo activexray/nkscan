@@ -62,8 +62,9 @@ impl Session {
         };
 
         // The header reports what the unit holds whatever we asked for, so one
-        // short read is enough to size the real one
-        let probe = fetch(data::HEADER as u32)?;
+        // short read is enough to size the real one. It reports the record's
+        // own header only if the read includes it, so the probe takes both
+        let probe = fetch(data::HEADER as u32 + kind.head())?;
         let (probe, _) = data::Header::from_bytes(&probe)
             .ok_or_else(|| malformed(format!("{kind:?} header was {} bytes", probe.len())))?;
 
@@ -204,6 +205,18 @@ impl Session {
         self.send_data(data::DataType::Boundary2, 0, &bytes)?;
         self.frames = Some(FrameTable::BoundaryType2(boundary.clone()));
         Ok(())
+    }
+
+    /// Send a table for one pass without adopting it as what the session knows
+    ///
+    /// [`framing::register`](crate::scan::framing::register) makes a table for
+    /// a rectangle that the measured table has no entry for. The session keeps
+    /// the measured table, because an entry is replaced and not added
+    pub fn set_boundaries_type2_for_pass(
+        &mut self,
+        boundary: &data::BoundaryType2,
+    ) -> Result<(), Error> {
+        self.send_data(data::DataType::Boundary2, 0, &boundary.to_bytes()?)
     }
 
     pub fn read_perforations(&mut self) -> Result<data::PerfInformation, Error> {

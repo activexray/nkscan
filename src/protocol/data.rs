@@ -62,6 +62,23 @@ pub enum DataType {
 }
 
 impl DataType {
+    /// Bytes of the record's own header, which 2-11-2 calls the header length
+    ///
+    /// A read of the data header alone reports a length two bytes short of the
+    /// record for `Boundary2`, and the unit then refuses that length with
+    /// `05h-24h`. A read of the data header and this reports the whole record.
+    /// The unit accepts no length between the two: for a 52-byte table it takes
+    /// 6 and 10 bytes and refuses 7, 8, 12, 16, 20 and 24
+    pub const fn head(self) -> u32 {
+        match self {
+            Self::Boundary => Boundary::HEAD as u32,
+            Self::Boundary2 => BoundaryType2::HEAD as u32,
+            Self::Perforation => PerfInformation::HEAD as u32,
+            Self::Setup => Setup::HEAD as u32,
+            _ => 0,
+        }
+    }
+
     pub const fn row(self) -> Row {
         use DataTypes as D;
         /// Widths and counts for the rows neither spec fills in
@@ -519,6 +536,26 @@ impl BoundaryType2 {
     /// Bytes occupied by each boundary record.
     const BOUNDARY: usize = 8;
 
+    /// Put `frame` in the slot its top falls in, so a SET WINDOW at that top
+    /// picks it
+    ///
+    /// The unit reads a window in the frame whose entry has the greatest top at
+    /// or below the top of the window. A new top replaces that entry and is not
+    /// added to the table: a seventh entry on an LS-50 moved the film 1528
+    /// addresses from the requested position. A top before every entry replaces
+    /// the first entry. The order of the table does not change
+    pub fn register(&mut self, frame: FramePosition) {
+        let slot = self
+            .frames
+            .iter()
+            .rposition(|f| f.top <= frame.top)
+            .unwrap_or(0);
+        match self.frames.get_mut(slot) {
+            Some(entry) => *entry = frame,
+            None => self.frames.push(frame),
+        }
+    }
+
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
         let head: &[u8; Self::HEAD] = b.get(..Self::HEAD)?.try_into().ok()?;
 
@@ -528,9 +565,9 @@ impl BoundaryType2 {
         // Byte 2: actual number of images.
         let count = usize::from(head[2]);
 
-        // The parameter length describes everything following the field
-        // itself, i.e. total parameter size is length + 1.
-        let total = parameter_length.checked_add(1)?;
+        // Two short of the record, not one: a six-frame table of 52 bytes
+        // reports 50, both in what the unit sends and in what it accepts
+        let total = parameter_length.checked_add(2)?;
 
         // The reserved byte is currently ignored.
         let expected = Self::HEAD.checked_add(count.checked_mul(Self::BOUNDARY)?)?;
@@ -978,6 +1015,50 @@ impl Header {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A nudged top replaces the entry it falls under, so the table stays the
+    /// length the holder allows and stays in order
+    #[test]
+    fn a_registered_top_takes_the_slot_it_falls_in() {
+        let perf = PerforationInformation::default();
+        let at = |top| FramePosition::new(top, &perf);
+        let tops = |table: &BoundaryType2| table.frames.iter().map(|f| f.top).collect::<Vec<_>>();
+        let mut table = BoundaryType2 {
+            frames: vec![at(100), at(200), at(300)],
+        };
+
+        table.register(at(250));
+        assert_eq!(tops(&table), [100, 250, 300]);
+        table.register(at(50));
+        assert_eq!(tops(&table), [50, 250, 300]);
+        table.register(at(900));
+        assert_eq!(tops(&table), [50, 250, 900]);
+
+        let mut empty = BoundaryType2::default();
+        empty.register(at(7));
+        assert_eq!(tops(&empty), [7]);
+    }
+
+    /// The two ends of the parameter length must agree. `to_bytes` writes two
+    /// bytes less than the record, as the unit does, and `from_bytes` accepted
+    /// one byte less and refused a real table as malformed
+    #[test]
+    fn a_type2_table_decodes_what_it_encodes() {
+        let perf = PerforationInformation {
+            perf_number: 24,
+            count_switching_flag: false,
+            perf_decimal: 1,
+            pulse_number: 24,
+        };
+        let table = BoundaryType2 {
+            frames: (0..6)
+                .map(|n| FramePosition::new(n * 2952, &perf))
+                .collect(),
+        };
+        let bytes = table.to_bytes().expect("encode");
+        assert_eq!(bytes.len(), 4 + 6 * 8);
+        assert_eq!(BoundaryType2::from_bytes(&bytes), Some(table));
+    }
 
     /// A frame detected on line 2 seeks by line 2's own reading
     #[test]

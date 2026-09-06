@@ -31,6 +31,27 @@ use tracing::*;
 /// The most film to leave either side of a frame, as the format over this
 const MARGIN: u32 = 50;
 
+/// Stage addresses one thumbnail column spans
+///
+/// The pass asks for the thumbnail resolution, and a thumbnail pitch is the
+/// optical resolution over what was asked, rounded down, so this is the pass's
+/// own `line_pitch` without the pass in hand
+pub(crate) fn line_pitch(caps: &Capabilities) -> u32 {
+    let optical =
+        u32::from(caps.address.y_axis.optical_dpi).max(u32::from(caps.address.x_axis.optical_dpi));
+    match u32::from(caps.address.thumbnail_resolution.start) {
+        0 => 1,
+        asked => (optical / asked).max(1),
+    }
+}
+
+/// The thumbnail line nearest a Y address
+pub(crate) fn line_at(caps: &Capabilities, y: u32) -> usize {
+    let pitch = line_pitch(caps);
+    let origin = caps.address.y_axis.address_range.start;
+    ((y.saturating_sub(origin) + pitch / 2) / pitch) as usize
+}
+
 /// Whether this unit and adapter will thumbnail at all
 ///
 /// Support follows the adapter rather than the model, so this is re-decided

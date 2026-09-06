@@ -278,6 +278,13 @@ pub struct PyScanResult {
     exposures: HashMap<String, u32>,
     /// Pixels dust removal rebuilt, where asked for
     cleaned: Option<usize>,
+    /// The columns of the arrays that are the frame that was asked for
+    ///
+    /// A unit that positions the film itself gets a pass longer than the frame,
+    /// so the arrays continue past the frame at each end. This is accurate to
+    /// about a tenth of a millimeter. To get the frame exactly, find its edges
+    /// in the arrays. On the other units this is the full width
+    frame_columns: (usize, usize),
 }
 
 fn channel_name(id: u8) -> String {
@@ -451,9 +458,9 @@ impl PySession {
 
     /// Focus, meter, take the pass over `frame`, and optionally clean it
     ///
-    /// `frame` is `(top, left, bottom, right)`, one of `discover_frames`'s. `exposures`,
-    /// keyed the way `ScanResult.exposures` is, reuses an exposure already decided
-    /// rather than metering this frame fresh
+    /// `frame` is `(top, left, bottom, right)`, one of `discover_frames`'s, or one of
+    /// them moved or cropped. `exposures`, keyed the way `ScanResult.exposures` is,
+    /// reuses an exposure already decided rather than metering this frame fresh
     #[pyo3(signature = (
         frame,
         dpi=None,
@@ -550,6 +557,7 @@ impl PySession {
                         cols,
                         exposures,
                         cleaned: scanned.cleaned,
+                        frame_columns: (scanned.frame_lines.start, scanned.frame_lines.end),
                     })
                 })
             })

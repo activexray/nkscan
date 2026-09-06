@@ -351,6 +351,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
             }
 
             let pass = scanned.pass;
+            let columns = scanned.frame_lines;
             // Writing what arrived is right for a short pass and wrong for an
             // empty one, which would be a black frame
             if pass.blocks == 0 {
@@ -371,6 +372,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
                 first + n,
                 &samples,
                 &pass,
+                columns.clone(),
                 icc,
                 film == cli::FilmType::Mono,
                 ir,
@@ -378,7 +380,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
             info!(
                 frame = n + 1,
                 "{} x {} at {} dpi, wrote {}",
-                pass.cols,
+                columns.len(),
                 pass.rows,
                 pass.layout.dpi,
                 written

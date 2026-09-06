@@ -62,12 +62,13 @@ impl Session {
         };
 
         // The header reports what the unit holds whatever we asked for, so one
-        // short read is enough to size the real one
-        let probe = fetch(data::HEADER as u32)?;
+        // short read is enough to size the real one. It reports the record's
+        // own header only if the read includes it, so the probe takes both
+        let probe = fetch(data::HEADER as u32 + kind.head())?;
         let (probe, _) = data::Header::from_bytes(&probe)
             .ok_or_else(|| malformed(format!("{kind:?} header was {} bytes", probe.len())))?;
 
-        let raw = fetch(data::HEADER as u32 + probe.length + kind.understated())?;
+        let raw = fetch(data::HEADER as u32 + probe.length)?;
         let (header, payload) = data::Header::from_bytes(&raw)
             .ok_or_else(|| malformed(format!("{kind:?} header was {} bytes", raw.len())))?;
 

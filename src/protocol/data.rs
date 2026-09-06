@@ -62,14 +62,19 @@ pub enum DataType {
 }
 
 impl DataType {
-    /// Bytes the data header leaves out of the length it reports
+    /// Bytes of the record's own header, which 2-11-2 calls the header length
     ///
-    /// `Boundary2` reports the parameter length of the record, which is two
-    /// bytes less than the record. The unit refuses a read of that length with
-    /// `05h-24h`. Nikon Scan asks for the two extra bytes
-    pub const fn understated(self) -> u32 {
+    /// A read of the data header alone reports a length two bytes short of the
+    /// record for `Boundary2`, and the unit then refuses that length with
+    /// `05h-24h`. A read of the data header and this reports the whole record.
+    /// The unit accepts no length between the two: for a 52-byte table it takes
+    /// 6 and 10 bytes and refuses 7, 8, 12, 16, 20 and 24
+    pub const fn head(self) -> u32 {
         match self {
-            Self::Boundary2 => 2,
+            Self::Boundary => Boundary::HEAD as u32,
+            Self::Boundary2 => BoundaryType2::HEAD as u32,
+            Self::Perforation => PerfInformation::HEAD as u32,
+            Self::Setup => Setup::HEAD as u32,
             _ => 0,
         }
     }

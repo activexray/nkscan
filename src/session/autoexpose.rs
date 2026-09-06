@@ -242,6 +242,7 @@ impl Session {
         let expected = (windows.first()?.size.1 / pitch) as usize;
         let found = boundaries::locate(image, expected, polarity)?;
         self.note_gate_offset((found.start as u32) * pitch);
+        self.note_picture_start((found.start as u32) * pitch);
         debug!(?found, "the frame in the metering pass");
         Some(found)
     }

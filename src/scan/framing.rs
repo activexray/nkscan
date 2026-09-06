@@ -177,6 +177,15 @@ pub fn frames(caps: &Capabilities) -> Result<Boundary, Error> {
     Ok(Boundary { frames })
 }
 
+/// Whether `frame` is a whole frame, which the scannable range takes one of
+///
+/// A frame is more than half the range deep and a shorter rectangle - a half
+/// frame, a crop - is not, so the boundary between them is where the range
+/// stops being one frame deep
+pub(crate) fn whole_frame(caps: &Capabilities, frame: Rect) -> bool {
+    frame.bottom.saturating_sub(frame.top) > caps.address.y_axis.boundary / 2
+}
+
 /// The rectangle for a pass that includes all of `frame`
 ///
 /// Where a unit positions the film by its perforation table, the window does
@@ -184,8 +193,8 @@ pub fn frames(caps: &Capabilities) -> Result<Boundary, Error> {
 /// frame's own line, and the frame appears part-way into the pass with film
 /// in front of it, so a pass the length of the frame ends that much film
 /// short of the frame's end. Nikon Scan asks for the whole scannable range
-/// for every frame, and a rectangle more than half the range is a whole
-/// frame, since one frame is all the range takes.
+/// for every frame, and a whole frame is the range, since one frame is all
+/// the range takes.
 ///
 /// A shorter rectangle - a half frame, a crop - adds the measured offset
 /// instead, or the whole slack of the range until the offset has been
@@ -197,7 +206,7 @@ pub fn pass_rect(caps: &Capabilities, frame: Rect, offset: Option<u32>) -> Rect 
     }
     let boundary = caps.address.y_axis.boundary;
     let extent = frame.bottom.saturating_sub(frame.top);
-    let length = match extent > boundary / 2 {
+    let length = match whole_frame(caps, frame) {
         true => boundary,
         false => extent + offset.unwrap_or(boundary - extent),
     };

@@ -47,6 +47,9 @@ pub struct Session {
     /// The furthest into a pass a frame has started this session, in window
     /// addresses, where the unit positions the film by its perforation table
     gate_offset: Option<u32>,
+    /// Where the last metering pass showed the frame starting, in window
+    /// addresses, for the pass that is about to follow it
+    picture_start: Option<u32>,
     /// CCD row response curves, read once in the preamble
     curves: Option<Arc<Curves>>,
     /// Whether we hold the unit, so [`Drop`] only releases what it took
@@ -113,6 +116,7 @@ impl Session {
             frames: None,
             frame_type_2,
             gate_offset: None,
+            picture_start: None,
             curves: None,
         };
         // INQUIRY answers while the unit is still initializing, so probing says
@@ -370,6 +374,22 @@ impl Session {
     /// Note a reading of where a frame started in its pass, in window addresses
     pub fn note_gate_offset(&mut self, start: u32) {
         self.gate_offset = Some(self.gate_offset.unwrap_or(0).max(start));
+    }
+
+    /// Take where the last metering pass showed the frame starting, in window
+    /// addresses
+    ///
+    /// Taken rather than read because the reading belongs to the one pass
+    /// that is about to follow it: the next pass latches the film somewhere
+    /// else, and a stale reading would move the frame to the wrong place
+    pub fn take_picture_start(&mut self) -> Option<u32> {
+        self.picture_start.take()
+    }
+
+    /// Note where a metering pass showed the frame starting, in window
+    /// addresses
+    pub(crate) fn note_picture_start(&mut self, start: u32) {
+        self.picture_start = Some(start);
     }
 
     /// Re-read what the scanner says it can do

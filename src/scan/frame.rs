@@ -106,13 +106,53 @@ pub fn scan_frame_with(
         }
     };
 
-    // Metering measured where a positioned pass starts its picture, so a
-    // shorter rectangle can size its pass to the measurement now
+    // A whole frame can be put where the range takes all of it. The unit
+    // latches the film by the record at the detected top, and a top the
+    // detection placed early leaves the frame part-way out the end of the
+    // range, where no window can read it. Metering measured where the frame
+    // actually started, and registering the record that far on moves the
+    // frame to the top of the range. The line the record comes back for is
+    // below the one measured, by the fraction the computed pitch is short
+    // of the film's own, so the frame lands at the top rather than before it
+    let original = frame;
+    let mut frame = frame;
+    // Taken whether or not this rectangle is a whole frame: a reading that
+    // belongs to one pass must not survive into the next
+    let measured = session.take_picture_start();
+    let corrected = framing::whole_frame(session.capabilities(), frame)
+        .then_some(measured)
+        .flatten()
+        .filter(|at| *at > 0)
+        .map(|at| Rect {
+            top: frame.top + at,
+            ..frame
+        });
+    if let Some(rect) = corrected {
+        framing::register(session, rect)?;
+        debug!(
+            from = original.top,
+            to = rect.top,
+            "registered the frame where the metering pass measured it"
+        );
+        frame = rect;
+    }
+
     let over = framing::pass_rect(session.capabilities(), frame, session.gate_offset());
     let mut windows = recipe.windows(session.capabilities(), over)?;
     exposures.apply(&mut windows);
 
     let pass = session.scan_pass_with(&windows, SCAN_TIMEOUT, samples, |p| on(Phase::Scan, p))?;
+
+    // The table goes back to what it measured, so the next rectangle of this
+    // session starts from the measured table rather than this one's place
+    if frame != original
+        && let Err(e) = framing::register(session, original)
+    {
+        warn!(
+            %e,
+            "could not put the measured frame table back, so a later rectangle may position against this one"
+        );
+    }
 
     // Find the frame before to_full_scale: the finder reads each sample as a
     // fraction of the full scale the layout's bits describe, which the

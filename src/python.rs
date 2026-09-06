@@ -460,7 +460,10 @@ impl PySession {
     ///
     /// `frame` is `(top, left, bottom, right)`, one of `discover_frames`'s, or one of
     /// them moved or cropped. `exposures`, keyed the way `ScanResult.exposures` is,
-    /// reuses an exposure already decided rather than metering this frame fresh
+    /// reuses an exposure already decided rather than metering this frame fresh.
+    /// `positive` is which way the loaded film reads, as in `discover_frames`:
+    /// where the unit positions the film itself it is what finds the frame in
+    /// the pass, so a scan of that kind wants it
     #[pyo3(signature = (
         frame,
         dpi=None,
@@ -469,6 +472,7 @@ impl PySession {
         infrared=false,
         clean=false,
         lock_white_balance=true,
+        positive=false,
         exposures=None,
         progress=None,
     ))]
@@ -483,6 +487,7 @@ impl PySession {
         infrared: bool,
         clean: bool,
         lock_white_balance: bool,
+        positive: bool,
         exposures: Option<HashMap<String, u32>>,
         progress: Option<Py<PyAny>>,
     ) -> PyResult<PyScanResult> {
@@ -492,6 +497,11 @@ impl PySession {
             left,
             bottom,
             right,
+        };
+        let polarity = if positive {
+            Polarity::Positive
+        } else {
+            Polarity::Negative
         };
 
         let locked = exposures.map(|by_name| {
@@ -524,6 +534,7 @@ impl PySession {
                     exposures: locked.as_ref(),
                     lock_white_balance,
                     clean,
+                    polarity: Some(polarity),
                 };
                 let scanned = frame::scan_frame_with(
                     session,

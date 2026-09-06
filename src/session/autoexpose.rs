@@ -10,12 +10,17 @@ use crate::{
     },
     scan::{
         autoexpose::{AutoExposure, Exposures, prescan_windows},
+        boundaries::{self, Polarity},
+        framing::Framing,
         pass::Progress,
         window::Recipe,
     },
     session::Session,
 };
-use std::{ops::ControlFlow, time::Duration};
+use std::{
+    ops::{ControlFlow, Range},
+    time::Duration,
+};
 use tracing::*;
 
 /// Long enough for a low-resolution pass over a whole frame
@@ -28,14 +33,17 @@ impl Session {
     /// the frame rather than off whatever the last pass left in the unit, and
     /// cover the channels `recipe` will scan. `lock_white_balance` keeps the
     /// channels in the ratio the unit calls neutral, which is what a scan that
-    /// has to stay comparable to the next one wants.
+    /// has to stay comparable to the next one wants. `polarity`, where the
+    /// unit positions the film itself, is what finds the frame in the metering
+    /// pass so the film in front of it stays out of the reading
     pub fn autoexpose_frame(
         &mut self,
         frame: Rect,
         recipe: &Recipe,
         lock_white_balance: bool,
+        polarity: Option<Polarity>,
     ) -> Result<Exposures, Error> {
-        self.autoexpose_frame_with(frame, recipe, lock_white_balance, |_, _| {
+        self.autoexpose_frame_with(frame, recipe, lock_white_balance, polarity, |_, _| {
             ControlFlow::Continue(())
         })
     }
@@ -47,12 +55,13 @@ impl Session {
         frame: Rect,
         recipe: &Recipe,
         lock_white_balance: bool,
+        polarity: Option<Polarity>,
         on: impl FnMut(usize, Progress) -> ControlFlow<()>,
     ) -> Result<Exposures, Error> {
         let windows = recipe
             .metering(self.capabilities())
             .windows(self.capabilities(), frame)?;
-        self.autoexpose_with(&windows, lock_white_balance, on)
+        self.autoexpose_with(&windows, lock_white_balance, polarity, on)
     }
 
     /// Meter `windows` and answer their new exposures
@@ -65,11 +74,9 @@ impl Session {
         windows: &[Window],
         lock_white_balance: bool,
     ) -> Result<Exposures, Error> {
-        self.autoexpose_with(
-            windows,
-            lock_white_balance,
-            |_, _| ControlFlow::Continue(()),
-        )
+        self.autoexpose_with(windows, lock_white_balance, None, |_, _| {
+            ControlFlow::Continue(())
+        })
     }
 
     /// The same as [`Self::autoexpose`], letting `on` cancel by returning `Break`
@@ -80,6 +87,7 @@ impl Session {
         &mut self,
         windows: &[Window],
         lock_white_balance: bool,
+        polarity: Option<Polarity>,
         mut on: impl FnMut(usize, Progress) -> ControlFlow<()>,
     ) -> Result<Exposures, Error> {
         let mechanism = AutoExposure::choose(self.capabilities(), lock_white_balance)?;
@@ -128,10 +136,18 @@ impl Session {
                     let image = Image::new(layout, &samples)?;
                     n += 1;
 
+                    // Where the frame actually is, where the unit positions
+                    // the film itself: metering the whole pass reads the film
+                    // in front of the picture, which is brighter than anything
+                    // in the picture on a negative
+                    let columns =
+                        polarity.and_then(|pol| self.positioned(&image, layout, &windows, pol));
+
                     // Correct from what this pass measured, whether or not
                     // another one follows: the exposures the scan gets are the
                     // ones the last pass asked for, never the ones it ran at
-                    let next = metering.apply(self.capabilities(), &image, &windows)?;
+                    let next =
+                        metering.apply(self.capabilities(), &image, &windows, columns.clone())?;
                     for (w, exposure) in windows.iter_mut().zip(next) {
                         w.exposure = exposure;
                     }
@@ -140,7 +156,7 @@ impl Session {
                     // on target, so confirming it costs a pass to learn nothing.
                     // Only a clipped channel, whose correction is a retreat
                     // rather than a measurement, is worth another
-                    let measured = metering.measured(&image, &windows);
+                    let measured = metering.measured(&image, &windows, columns);
                     debug!(pass = n, measured, "metering pass");
                     if measured {
                         break;
@@ -152,7 +168,7 @@ impl Session {
                 }
 
                 let layout = layout.expect("the loop runs at least once");
-                let measured = metering.measure(&Image::new(&layout, &samples)?, &windows);
+                let measured = metering.measure(&Image::new(&layout, &samples)?, &windows, None);
                 // `setup` is a diagnostic - nothing below reads it - and it is
                 // the one command in a pass the unit can be slow about: a whole
                 // PROBE_TIMEOUT per channel on some holders, which reads as the
@@ -204,5 +220,29 @@ impl Session {
             seeded.push(w);
         }
         Ok(seeded)
+    }
+
+    /// The columns of a metering pass that are the frame, where the unit
+    /// positions the film itself
+    ///
+    /// The frame's own edges are the answer, wherever the unit put it. Finding
+    /// them here also measures where a positioned pass starts its picture,
+    /// which sizes the passes of shorter rectangles later in the session
+    fn positioned(
+        &mut self,
+        image: &Image<'_>,
+        layout: &crate::protocol::image::Layout,
+        windows: &[Window],
+        polarity: Polarity,
+    ) -> Option<Range<usize>> {
+        if Framing::choose(self.capabilities()) != Framing::Perforation {
+            return None;
+        }
+        let pitch = layout.line_pitch.max(1);
+        let expected = (windows.first()?.size.1 / pitch) as usize;
+        let found = boundaries::locate(image, expected, polarity)?;
+        self.note_gate_offset((found.start as u32) * pitch);
+        debug!(?found, "the frame in the metering pass");
+        Some(found)
     }
 }

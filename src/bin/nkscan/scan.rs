@@ -291,6 +291,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
                 exposures: locked.as_ref(),
                 lock_white_balance: hold_white_balance,
                 clean,
+                polarity: Some(film.into()),
             };
             let scanned = frame::scan_frame_with(
                 session,
@@ -351,7 +352,9 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
             }
 
             let pass = scanned.pass;
-            let columns = scanned.frame_lines;
+            // Nikon Scan hands back the whole range it scanned and leaves the
+            // frame's place in it to whoever consumes the file; so does this
+            let frame = scanned.frame_lines;
             // Writing what arrived is right for a short pass and wrong for an
             // empty one, which would be a black frame
             if pass.blocks == 0 {
@@ -372,17 +375,19 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
                 first + n,
                 &samples,
                 &pass,
-                columns.clone(),
+                0..pass.cols,
                 icc,
                 film == cli::FilmType::Mono,
                 ir,
             )?;
             info!(
                 frame = n + 1,
-                "{} x {} at {} dpi, wrote {}",
-                columns.len(),
+                "{} x {} at {} dpi, the frame at columns {}..{}, wrote {}",
+                pass.cols,
                 pass.rows,
                 pass.layout.dpi,
+                frame.start,
+                frame.end,
                 written
                     .iter()
                     .map(|p| p.display().to_string())

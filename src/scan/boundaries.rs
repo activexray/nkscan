@@ -25,6 +25,7 @@
 
 use super::meter::ceiling;
 use crate::protocol::decode::Image;
+use std::ops::Range;
 use tracing::*;
 
 // ----- reading the film
@@ -72,6 +73,15 @@ const TAIL: usize = 50;
 
 /// The shortest run of flat film worth a reading: the frame length over this
 const FLAT_RUN: usize = 24;
+
+/// The same for a pass holding one frame, where the flat film is the gap
+/// either side of it
+///
+/// A gate-length pass leaves a few hundred addresses of gap at full
+/// resolution and a tenth of that in a metering pass, so this is short. The
+/// tail percentile that picks the level out of what was read is what keeps a
+/// short run of flat picture from setting it
+const GAP_RUN: usize = 4;
 
 /// The narrowest run of picture worth keeping: the frame length over this
 ///
@@ -127,6 +137,18 @@ const DRIFT: f32 = 0.05;
 /// on medium format, camera to camera. This is the entire safety net on how
 /// far a correction may move `length` - not a secondary check
 const GATE: f32 = 0.10;
+
+/// How much shorter than the expected length a frame may be, as a fraction of
+/// it
+///
+/// Not the real gate's variance, which [`GATE`] covers in `detect`: this has
+/// to cover the detected length being wrong as well, which it is by more than
+/// a real gate ever is - a strip whose transport under-advanced reads as
+/// frames longer than the format, and the tiling as shorter. The high side
+/// is not constrained at all: a span cannot run past the end of the pass, and
+/// the scoring is by the span, so the longest well-edged one wins rather than
+/// the one nearest the expected length
+const LEEWAY: f32 = 1.0 / 3.0;
 
 /// The fewest frames that have to sit on the wind before the rest of the strip
 /// is laid out from it, and what share of the frames found they have to be
@@ -256,6 +278,75 @@ pub fn detect(image: &Image, length: usize, polarity: Polarity) -> Detected {
     }
 }
 
+/// The one frame in a pass the unit itself positioned
+///
+/// Where a unit positions the film by its perforation table, the window does
+/// not say where the frame appears: the film is latched by the record at the
+/// frame's own line and the frame shows up wherever that leaves it. This
+/// finds the frame by its edges instead - film with nothing on it outside,
+/// picture inside, the two about `length` apart - and the range it answers
+/// is the frame exactly, however far off the window's guess was.
+///
+/// `None` where the pass shows no such pair. A frame that was never exposed
+/// is the same film as the gap around it, and a rectangle from the middle of
+/// a frame has no edges of its own; both are placed by the caller some other
+/// way
+pub fn locate(image: &Image, length: usize, polarity: Polarity) -> Option<Range<usize>> {
+    let columns = columns(image);
+    let split = otsu(&columns.texture);
+    let unexposed = Unexposed::from_base(around(&columns, split, polarity), &columns, polarity);
+    let (picture, film) = score_columns(&columns, split, unexposed.as_ref());
+
+    // Only film with nothing on it marks an edge, as in `detect`
+    let gap: Vec<f32> = film
+        .iter()
+        .zip(&picture)
+        .map(|(&film, &picture)| match film {
+            true => 1.0 - picture,
+            false => 0.0,
+        })
+        .collect();
+    let sums = Sums::new(&picture, &gap);
+
+    let play = ((length as f32 * LEEWAY) as usize).max(1);
+    let reach = (length / EDGE_REACH).max(1);
+
+    let cols = columns.texture.len();
+    let shortest = length.saturating_sub(play).max(1);
+    if length == 0 || cols < shortest {
+        return None;
+    }
+
+    let mut best = (0.0f32, None);
+    for start in 0..=cols - shortest {
+        for end in (start + shortest)..=cols {
+            if sums.mean(&sums.covered, (start, end)) < BODY {
+                continue;
+            }
+            // An edge is a step: picture against film with nothing on it.
+            // Without this a span of an even pass scores as well as any
+            // other, since its insides and outsides read the same
+            let into = sums.mean(&sums.covered, (start, start + reach))
+                - sums.mean(&sums.covered, (start.saturating_sub(reach), start));
+            let out = sums.mean(&sums.covered, (end.saturating_sub(reach), end))
+                - sums.mean(&sums.covered, (end, end + reach));
+            if into <= 0.0 && out <= 0.0 {
+                continue;
+            }
+            let edges = sums.edges(start, end, reach);
+            if edges <= 0.0 {
+                continue;
+            }
+            let span = (end - start) as f32;
+            let score = sums.worth(start, end) + (EDGE_BONUS * edges - FRAME_COST) * span;
+            if score > best.0 {
+                best = (score, Some(start..end));
+            }
+        }
+    }
+    best.1
+}
+
 // ----- what the film itself reads at
 
 /// Where a strip's unexposed film sits and how far its pictures reach from
@@ -278,7 +369,12 @@ struct Unexposed {
 impl Unexposed {
     /// What a strip's flat columns say, where they say anything
     fn measure(columns: &Columns, split: f32, polarity: Polarity, length: usize) -> Option<Self> {
-        let base = base(columns, split, polarity, length)?;
+        Self::from_base(base(columns, split, polarity, length), columns, polarity)
+    }
+
+    /// The same, from a level the caller measured its own way
+    fn from_base(base: Option<f32>, columns: &Columns, polarity: Polarity) -> Option<Self> {
+        let base = base?;
         let sign = polarity.sign();
 
         // Only the picture's side of the unexposed film says how far it goes
@@ -451,16 +547,17 @@ fn score_columns(
     split: f32,
     unexposed: Option<&Unexposed>,
 ) -> (Vec<f32>, Vec<bool>) {
-    let Some(contrast) = Contrast::measure(&columns.texture, split) else {
-        return (vec![0.0; columns.texture.len()], columns.lit.clone());
-    };
+    let contrast = Contrast::measure(&columns.texture, split);
 
     (0..columns.texture.len())
         .map(|x| {
             if !columns.lit[x] {
                 return (0.0, false);
             }
-            let varies = contrast.score(columns.texture[x]);
+            let varies = match &contrast {
+                Some(c) => c.score(columns.texture[x]),
+                None => 0.0,
+            };
             let Some(film) = unexposed else {
                 return (varies, true);
             };
@@ -490,12 +587,46 @@ fn base(columns: &Columns, split: f32, polarity: Polarity, length: usize) -> Opt
                 .map(|x| columns.density[x]),
         );
     }
-    if flat.len() < shortest {
+    pick(flat, polarity, shortest)
+}
+
+/// The same for a pass holding one frame, whose gaps are the runs at the ends
+///
+/// A pass the unit positioned is film edge to edge, so a flat run at either
+/// end is film like any other - which is just as well, because the gap either
+/// side of one frame is all the flat film there is
+fn around(columns: &Columns, split: f32, polarity: Polarity) -> Option<f32> {
+    let mut flat: Vec<f32> = Vec::new();
+    for (start, end) in runs(&columns.texture, split) {
+        if end - start < GAP_RUN {
+            continue;
+        }
+        flat.extend(
+            (start..end)
+                .filter(|&x| columns.lit[x])
+                .map(|x| columns.density[x]),
+        );
+    }
+    // A pass in which nothing varies has no runs under the split, but every
+    // column of it is flat film
+    if flat.is_empty() {
+        flat.extend(
+            (0..columns.texture.len())
+                .filter(|&x| columns.lit[x])
+                .map(|x| columns.density[x]),
+        );
+    }
+    pick(flat, polarity, GAP_RUN)
+}
+
+/// The unexposed level, well into the tail of what the flat runs read
+///
+/// A flat run is not always a gap, since an even sky is flat too, so this
+/// takes the far end of the film's own side rather than an average
+fn pick(mut flat: Vec<f32>, polarity: Polarity, least: usize) -> Option<f32> {
+    if flat.len() < least {
         return None;
     }
-
-    // Well into the tail: a flat run is not always a gap, since an even sky is
-    // flat too and one run often spans a gap and the picture beside it
     flat.sort_by(f32::total_cmp);
     let last = flat.len() - 1;
     let tail = last * TAIL / 1000;
@@ -1196,5 +1327,90 @@ mod tests {
         let found = strip.detect();
         assert!(found.frames.is_empty(), "{:?}", found.frames);
         assert_eq!(found.pitch, 0);
+    }
+
+    /// A pass a positioned unit returns: film edge to edge, one frame in it.
+    /// The frame is where the unit put it, not where the window asked
+    fn positioned(frames: Vec<usize>, length: usize, polarity: Polarity) -> (Samples, usize) {
+        let mut strip = Strip::new(frames, length, polarity);
+        strip.feed = strip.frames.iter().max().unwrap_or(&0) + length + 23;
+        let feed = strip.feed;
+        (strip.render(), feed)
+    }
+
+    fn located(
+        samples: &Samples,
+        feed: usize,
+        length: usize,
+        polarity: Polarity,
+    ) -> Option<Range<usize>> {
+        let layout = Layout::single_line(SENSOR as u32, feed as u32, vec![1, 2, 3]);
+        let image = Image::new(&layout, samples).expect("the buffer is the layout's size");
+        super::locate(&image, length, polarity)
+    }
+
+    /// The frame is found by its edges, at whatever offset into the pass the
+    /// unit left it
+    #[test]
+    fn a_positioned_frame_is_found_wherever_it_sits() {
+        for polarity in [Polarity::Positive, Polarity::Negative] {
+            for gap in [0, 17, 37] {
+                let (samples, feed) = positioned(vec![gap], 120, polarity);
+                let found = located(&samples, feed, 120, polarity)
+                    .unwrap_or_else(|| panic!("{polarity:?} at {gap}"));
+                assert!(
+                    (found.start as i32 - gap as i32).abs() <= 2
+                        && (found.end as i32 - (gap + 120) as i32).abs() <= 2,
+                    "got {found:?}, wanted {gap}..{}",
+                    gap + 120
+                );
+            }
+        }
+    }
+
+    /// An unexposed frame is the same film as the gap around it, so there are
+    /// no edges and nothing to find
+    #[test]
+    fn a_frame_that_was_never_exposed_is_not_found() {
+        let mut strip = Strip::new(vec![30], 120, Polarity::Positive);
+        strip.blank = Some(0);
+        strip.feed = 173;
+        let samples = strip.render();
+        assert!(located(&samples, strip.feed, 120, Polarity::Positive).is_none());
+    }
+
+    /// A picture with no variation in it has no texture, so its density
+    /// against the film around it is all there is to find it by
+    #[test]
+    fn a_flat_picture_is_found_by_its_density() {
+        for polarity in [Polarity::Positive, Polarity::Negative] {
+            let mut strip = Strip::new(vec![29], 120, polarity);
+            strip.flat = Some(0);
+            strip.feed = 172;
+            let samples = strip.render();
+            let found = located(&samples, strip.feed, 120, polarity)
+                .unwrap_or_else(|| panic!("{polarity:?}"));
+            assert!(
+                (found.start as i32 - 29).abs() <= 2 && (found.end as i32 - 149).abs() <= 2,
+                "got {found:?}"
+            );
+        }
+    }
+
+    /// The expected length is the detected frame's, and detection can be
+    /// wrong by more than a real gate is. The frame is still the whole
+    /// picture, not the best-edged stretch of it that comes nearest the
+    /// length it should have had
+    #[test]
+    fn a_wrong_expected_length_still_finds_the_whole_picture() {
+        let (samples, feed) = positioned(vec![37], 120, Polarity::Negative);
+        for expected in [60, 120, 170] {
+            let found = located(&samples, feed, expected, Polarity::Negative)
+                .unwrap_or_else(|| panic!("expected {expected}"));
+            assert!(
+                (found.start as i32 - 37).abs() <= 2 && (found.end as i32 - 157).abs() <= 2,
+                "expected {expected}, got {found:?}"
+            );
+        }
     }
 }

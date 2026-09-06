@@ -177,54 +177,33 @@ pub fn frames(caps: &Capabilities) -> Result<Boundary, Error> {
     Ok(Boundary { frames })
 }
 
-/// How far into the scannable range the unit puts a frame
-///
-/// 2-11-9 says the unit moves the film until the top of the frame is at the top
-/// of the range. The unit stops this far before it. Measured on an LS-50 with
-/// the SA-21 at five positions along a strip: 158, 169, 163, 167 and 171. The
-/// direction of the stage movement and the pass resolution do not change it. No
-/// page reports it. A Type2 entry has no length, so the unit cannot center the
-/// frame in the range
-const GATE_OFFSET: u32 = 166;
-
 /// The rectangle for a pass that includes all of `frame`
 ///
-/// A pass as long as the frame starts in the gap in front of it and stops that
-/// distance before the end of the frame. This pass starts at the top of the
-/// frame and continues one [`GATE_OFFSET`] past each end, so it includes the
-/// frame even if the offset is wrong by its own value. For a whole 35mm frame
-/// this is the full range, which is what Nikon Scan uses for every scan. A half
-/// frame or a crop adds the offset only
-pub fn pass_rect(caps: &Capabilities, frame: Rect) -> Rect {
-    let offset = gate_offset(caps);
-    if offset == 0 {
+/// Where a unit positions the film by its perforation table, the window does
+/// not say where the frame appears: the film is latched by the record at the
+/// frame's own line, and the frame appears part-way into the pass with film
+/// in front of it, so a pass the length of the frame ends that much film
+/// short of the frame's end. Nikon Scan asks for the whole scannable range
+/// for every frame, and a rectangle more than half the range is a whole
+/// frame, since one frame is all the range takes.
+///
+/// A shorter rectangle - a half frame, a crop - adds the measured offset
+/// instead, or the whole slack of the range until the offset has been
+/// measured. Everywhere else the window addresses the film itself and the
+/// frame is already where the window says
+pub fn pass_rect(caps: &Capabilities, frame: Rect, offset: Option<u32>) -> Rect {
+    if Framing::choose(caps) != Framing::Perforation {
         return frame;
     }
+    let boundary = caps.address.y_axis.boundary;
     let extent = frame.bottom.saturating_sub(frame.top);
-    let bottom = frame.top + (extent + 2 * offset).min(caps.address.y_axis.boundary);
-    Rect { bottom, ..frame }
-}
-
-/// Where `frame` is after the unit moves the film
-///
-/// Focus and metering use this, so they do not measure the gap in front of the
-/// picture. A rectangle with no room to move does not move
-pub fn picture_rect(caps: &Capabilities, frame: Rect) -> Rect {
-    let extent = frame.bottom.saturating_sub(frame.top);
-    let room = caps.address.y_axis.boundary.saturating_sub(extent);
-    let offset = gate_offset(caps).min(room);
+    let length = match extent > boundary / 2 {
+        true => boundary,
+        false => extent + offset.unwrap_or(boundary - extent),
+    };
     Rect {
-        top: frame.top + offset,
-        bottom: frame.bottom + offset,
+        bottom: frame.top + length.min(boundary),
         ..frame
-    }
-}
-
-/// 0 where the window addresses the film itself
-pub(crate) fn gate_offset(caps: &Capabilities) -> u32 {
-    match Framing::choose(caps) == Framing::Perforation {
-        true => GATE_OFFSET,
-        false => 0,
     }
 }
 
@@ -430,49 +409,55 @@ mod tests {
     use super::*;
     use crate::{protocol::caps::other::DataTypes, scan::window::tests::caps};
 
-    /// A pass adds an offset at each end of a frame that the unit positions,
-    /// and focus and metering use the position of the frame. The other
-    /// mechanisms address the film with the window and use neither
+    /// A pass over a frame the unit positions is the whole range, which is
+    /// what Nikon Scan asks for. The other mechanisms address the film with
+    /// the window and the frame is its own pass
     #[test]
-    fn a_perforation_framed_pass_includes_the_whole_frame() {
+    fn a_perforation_framed_pass_is_the_whole_range() {
         let frame = Rect {
             top: 2236,
             left: 518,
-            bottom: 2236 + 8964,
+            bottom: 2236 + 11964,
             right: 518 + 8964,
         };
         let plain = caps();
-        assert_eq!(pass_rect(&plain, frame), frame);
-        assert_eq!(picture_rect(&plain, frame), frame);
+        assert_eq!(pass_rect(&plain, frame, Some(166)), frame);
 
         let mut perforated = caps();
         perforated.features.data_types |= DataTypes::PERFORATION_READ;
         assert_eq!(Framing::choose(&perforated), Framing::Perforation);
-
-        let over = pass_rect(&perforated, frame);
-        assert_eq!(over.top, frame.top);
-        assert_eq!(over.bottom, frame.bottom + 2 * GATE_OFFSET);
-        assert_eq!(
-            picture_rect(&perforated, frame).top,
-            frame.top + GATE_OFFSET
+        let boundary = perforated.address.y_axis.boundary;
+        assert!(
+            frame.bottom - frame.top > boundary / 2,
+            "the fixture has to make this a whole frame"
         );
+
+        let over = pass_rect(&perforated, frame, Some(166));
+        assert_eq!(over.top, frame.top);
+        assert_eq!(over.bottom - over.top, boundary);
     }
 
-    /// A frame as long as the range gets no margin, because a margin would be
-    /// after the end of the range
+    /// A rectangle shorter than half the range - a half frame, a crop - adds
+    /// the measured offset, and before anything is measured the whole slack of
+    /// the range, which is the most the offset can be
     #[test]
-    fn a_frame_as_long_as_the_range_gets_no_margin() {
+    fn a_shorter_rect_adds_the_offset() {
         let mut perforated = caps();
         perforated.features.data_types |= DataTypes::PERFORATION_READ;
         let boundary = perforated.address.y_axis.boundary;
+        let half = boundary / 4;
+
         let frame = Rect {
-            top: 0,
-            left: 0,
-            bottom: boundary,
-            right: 8964,
+            top: 2236,
+            left: 518,
+            bottom: 2236 + half,
+            right: 518 + 8964,
         };
-        assert_eq!(pass_rect(&perforated, frame).bottom, boundary);
-        assert_eq!(picture_rect(&perforated, frame).top, 0);
+        let measured = pass_rect(&perforated, frame, Some(166));
+        assert_eq!(measured.bottom - measured.top, half + 166);
+
+        let unmeasured = pass_rect(&perforated, frame, None);
+        assert_eq!(unmeasured.bottom - unmeasured.top, boundary);
     }
 
     /// A cartridge addresses the film itself, so its range runs the length of

@@ -59,6 +59,10 @@ pub fn next_free(basename: &Path) -> usize {
 
 /// Write one frame, returning the files it made
 ///
+/// `columns` is which feed lines of the pass the file is made of: the whole
+/// pass, as Nikon Scan writes, or a frame within it that the caller has
+/// already found.
+///
 /// `icc` is embedded as-is where it is given. Without one the file says nothing
 /// about its color, which is the truth: the samples are linear and this unit
 /// has no characterization of its own.

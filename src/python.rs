@@ -278,6 +278,13 @@ pub struct PyScanResult {
     exposures: HashMap<String, u32>,
     /// Pixels dust removal rebuilt, where asked for
     cleaned: Option<usize>,
+    /// The columns of the arrays that are the frame that was asked for
+    ///
+    /// A unit that positions the film itself gets a pass longer than the frame,
+    /// so the arrays continue past the frame at each end. This is accurate to
+    /// about a tenth of a millimeter. To get the frame exactly, find its edges
+    /// in the arrays. On the other units this is the full width
+    frame_columns: (usize, usize),
 }
 
 fn channel_name(id: u8) -> String {
@@ -451,12 +458,9 @@ impl PySession {
 
     /// Focus, meter, take the pass over `frame`, and optionally clean it
     ///
-    /// `frame` is `(top, left, bottom, right)`, one of `discover_frames`'s, or one of them
-    /// moved or cropped. `exposures`, keyed the way `ScanResult.exposures` is, reuses an
-    /// exposure already decided rather than metering this frame fresh. `frames` is
-    /// `discover_frames`'s whole list: a unit that positions the film by its frame table
-    /// honours that table only as a whole, so a session that did not measure the strip
-    /// needs it back before a moved or cropped frame can be put where it asks
+    /// `frame` is `(top, left, bottom, right)`, one of `discover_frames`'s, or one of
+    /// them moved or cropped. `exposures`, keyed the way `ScanResult.exposures` is,
+    /// reuses an exposure already decided rather than metering this frame fresh
     #[pyo3(signature = (
         frame,
         dpi=None,
@@ -467,7 +471,6 @@ impl PySession {
         lock_white_balance=true,
         exposures=None,
         progress=None,
-        frames=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn scan_frame(
@@ -482,16 +485,14 @@ impl PySession {
         lock_white_balance: bool,
         exposures: Option<HashMap<String, u32>>,
         progress: Option<Py<PyAny>>,
-        frames: Option<Vec<(u32, u32, u32, u32)>>,
     ) -> PyResult<PyScanResult> {
-        let rect = |(top, left, bottom, right): (u32, u32, u32, u32)| Rect {
+        let (top, left, bottom, right) = frame;
+        let frame = Rect {
             top,
             left,
             bottom,
             right,
         };
-        let frame = rect(frame);
-        let frames: Vec<Rect> = frames.unwrap_or_default().into_iter().map(rect).collect();
 
         let locked = exposures.map(|by_name| {
             let mut e = Exposures::default();
@@ -503,7 +504,6 @@ impl PySession {
 
         py.detach(move || {
             self.with(|session| {
-                framing::remember(session, &frames)?;
                 let caps = session.capabilities();
                 let dpi = dpi.unwrap_or(caps.address.x_axis.optical_dpi);
                 let interleaving = if superfine || !caps.reads_lines_at_once_at(dpi) {
@@ -557,6 +557,7 @@ impl PySession {
                         cols,
                         exposures,
                         cleaned: scanned.cleaned,
+                        frame_columns: (scanned.frame_lines.start, scanned.frame_lines.end),
                     })
                 })
             })

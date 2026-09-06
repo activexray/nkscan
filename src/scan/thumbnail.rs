@@ -31,17 +31,6 @@ use tracing::*;
 /// The most film to leave either side of a frame, as the format over this
 const MARGIN: u32 = 50;
 
-/// Lines a frame lands ahead of the perforation record the unit is handed for it
-///
-/// Positioned by a record, the unit puts the scan window's first line this many
-/// thumbnail lines before the line the record was read at, on every frame and
-/// at every offset within one, so the record that lands a frame where the
-/// thumbnail found it is this many lines on. Measured on an LS-50 with the
-/// SA-21, where a line is 6 encoder pulses: the scan of a detected rectangle
-/// opened on 164 addresses of the gap ahead of the picture, and with the lead
-/// applied on the picture's edge
-pub(crate) const PERFORATION_LEAD: usize = 4;
-
 /// Stage addresses one thumbnail column spans
 ///
 /// The pass asks for the thumbnail resolution, and a thumbnail pitch is the
@@ -191,7 +180,7 @@ pub fn frames_type2(
         .iter()
         .filter_map(|&col| {
             let top = origin + col as u32 * pitch;
-            let perf = perf_info.at(col + PERFORATION_LEAD);
+            let perf = perf_info.at(col);
             debug!(col, top, ?perf, "detected column");
             if top + length > end {
                 // A column with no reading is one the stage cannot be sent to

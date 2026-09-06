@@ -11,9 +11,7 @@ use crate::{
     error::Error,
     protocol::{
         caps::{Capabilities, address::CoordinateBase, film::FilmFormat, other::DataTypes},
-        data::{
-            Boundary, BoundaryType2, FramePosition, FrameTable, Op, PerforationInformation, Rect,
-        },
+        data::{Boundary, FramePosition, FrameTable, Op, PerforationInformation, Rect},
         decode::Samples,
     },
     session::Session,
@@ -179,27 +177,86 @@ pub fn frames(caps: &Capabilities) -> Result<Boundary, Error> {
     Ok(Boundary { frames })
 }
 
+/// How far into the scannable range the unit puts a frame
+///
+/// 2-11-9 says the unit moves the film until the top of the frame is at the top
+/// of the range. The unit stops this far before it. Measured on an LS-50 with
+/// the SA-21 at five positions along a strip: 158, 169, 163, 167 and 171. The
+/// direction of the stage movement and the pass resolution do not change it. No
+/// page reports it. A Type2 entry has no length, so the unit cannot center the
+/// frame in the range
+const GATE_OFFSET: u32 = 166;
+
+/// The rectangle for a pass that includes all of `frame`
+///
+/// A pass as long as the frame starts in the gap in front of it and stops that
+/// distance before the end of the frame. This pass starts at the top of the
+/// frame and continues one [`GATE_OFFSET`] past each end, so it includes the
+/// frame even if the offset is wrong by its own value. For a whole 35mm frame
+/// this is the full range, which is what Nikon Scan uses for every scan. A half
+/// frame or a crop adds the offset only
+pub fn pass_rect(caps: &Capabilities, frame: Rect) -> Rect {
+    let offset = gate_offset(caps);
+    if offset == 0 {
+        return frame;
+    }
+    let extent = frame.bottom.saturating_sub(frame.top);
+    let bottom = frame.top + (extent + 2 * offset).min(caps.address.y_axis.boundary);
+    Rect { bottom, ..frame }
+}
+
+/// Where `frame` is after the unit moves the film
+///
+/// Focus and metering use this, so they do not measure the gap in front of the
+/// picture. A rectangle with no room to move does not move
+pub fn picture_rect(caps: &Capabilities, frame: Rect) -> Rect {
+    let extent = frame.bottom.saturating_sub(frame.top);
+    let room = caps.address.y_axis.boundary.saturating_sub(extent);
+    let offset = gate_offset(caps).min(room);
+    Rect {
+        top: frame.top + offset,
+        bottom: frame.bottom + offset,
+        ..frame
+    }
+}
+
+/// 0 where the window addresses the film itself
+pub(crate) fn gate_offset(caps: &Capabilities) -> u32 {
+    match Framing::choose(caps) == Framing::Perforation {
+        true => GATE_OFFSET,
+        false => 0,
+    }
+}
+
 /// Register `frame` with the unit before a pass over it, where the unit
 /// positions the film by its table rather than by the window
 ///
-/// A perforation-framed unit moves the film to the perforation record of the
-/// table entry a SET WINDOW Y falls under and reads the window inside that
-/// frame's gate, so a rectangle off the table - a nudged frame, a crop - is
-/// read as an offset into whatever frame it fell under and blacks out past the
-/// gate. Writing the record of the rectangle's own thumbnail line into the slot
-/// its top falls under moves the film there instead. The unit only honours a
-/// table as a whole, so this starts from the table the session knows, from
-/// discovery or from [`remember`], and does nothing where there is none; a top
-/// already in that table is left alone, and every other mechanism addresses the
-/// window itself and needs nothing here
+/// The unit reads a rectangle that is not in the table as an offset into the
+/// frame that contains its top, and gives black data after the end of that
+/// frame. An entry with the perforation record of the rectangle's own thumbnail
+/// line moves the film to the rectangle instead. The unit accepts a table only
+/// as a whole, so this starts from the table the session knows, and reads the
+/// unit's table if the session knows none. A top already in the table is left
+/// alone.
+///
+/// The session keeps the measured table, not this one. The next rectangle must
+/// start from the measured table, because an entry is replaced and not added
 pub fn register(session: &mut Session, frame: Rect) -> Result<(), Error> {
     if Framing::choose(session.capabilities()) != Framing::Perforation {
         return Ok(());
     }
-    let Some(mut table) = session.frames_type2().cloned() else {
-        return Ok(());
+    let mut table = match session.frames_type2() {
+        Some(table) => table.clone(),
+        // Nothing measured this strip, so ask the unit what it is holding
+        None => match session.boundaries_type2() {
+            Ok(table) => table,
+            Err(e) => {
+                debug!(%e, "no frame table to register against");
+                return Ok(());
+            }
+        },
     };
-    if table.frames.iter().any(|f| f.top == frame.top) {
+    if table.frames.is_empty() || table.frames.iter().any(|f| f.top == frame.top) {
         return Ok(());
     }
 
@@ -211,35 +268,18 @@ pub fn register(session: &mut Session, frame: Rect) -> Result<(), Error> {
         ?perf,
         "registered a frame off the table"
     );
-    session.set_boundaries_type2(&table)
+    session.set_boundaries_type2_for_pass(&table)
 }
 
-/// Give a session that did not measure the strip the frames discovery found
+/// The perforation record that puts the top of a frame at `top`
 ///
-/// The unit keeps the last thumbnail's perforation table but refuses to read
-/// its frame table back, and honours a table only as a whole, so a session
-/// opened after discovery has to be handed the frames to write it again. Only a
-/// perforation-framed unit needs this, and a session that already knows a
-/// table keeps it
-pub fn remember(session: &mut Session, frames: &[Rect]) -> Result<(), Error> {
-    if Framing::choose(session.capabilities()) != Framing::Perforation
-        || session.frames_type2().is_some()
-        || frames.is_empty()
-    {
-        return Ok(());
-    }
-    let mut table = BoundaryType2::default();
-    for frame in frames {
-        let (_, perf) = record(session, frame.top)?;
-        table.frames.push(FramePosition::new(frame.top, &perf));
-    }
-    debug!(frames = table.frames.len(), "wrote the frame table back");
-    session.set_boundaries_type2(&table)
-}
-
-/// The perforation record that lands a frame with its top at `top`
+/// The record read at the frame's own line. Do not calculate one: the pattern
+/// phases have different lengths, 24, 28, 12, 28 and 14 pulses in one
+/// perforation of a measured strip, so arithmetic on a record uses a length
+/// that only the pass measures. Nikon Scan also reads the record from the
+/// table
 fn record(session: &mut Session, top: u32) -> Result<(usize, PerforationInformation), Error> {
-    let line = thumbnail::line_at(session.capabilities(), top) + thumbnail::PERFORATION_LEAD;
+    let line = thumbnail::line_at(session.capabilities(), top);
     let perfs = session.read_perforations()?;
     let perf = perfs.at(line).ok_or_else(|| Error::Unsupported {
         op: "frame registration",
@@ -388,7 +428,52 @@ pub fn discover_with(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scan::window::tests::caps;
+    use crate::{protocol::caps::other::DataTypes, scan::window::tests::caps};
+
+    /// A pass adds an offset at each end of a frame that the unit positions,
+    /// and focus and metering use the position of the frame. The other
+    /// mechanisms address the film with the window and use neither
+    #[test]
+    fn a_perforation_framed_pass_includes_the_whole_frame() {
+        let frame = Rect {
+            top: 2236,
+            left: 518,
+            bottom: 2236 + 8964,
+            right: 518 + 8964,
+        };
+        let plain = caps();
+        assert_eq!(pass_rect(&plain, frame), frame);
+        assert_eq!(picture_rect(&plain, frame), frame);
+
+        let mut perforated = caps();
+        perforated.features.data_types |= DataTypes::PERFORATION_READ;
+        assert_eq!(Framing::choose(&perforated), Framing::Perforation);
+
+        let over = pass_rect(&perforated, frame);
+        assert_eq!(over.top, frame.top);
+        assert_eq!(over.bottom, frame.bottom + 2 * GATE_OFFSET);
+        assert_eq!(
+            picture_rect(&perforated, frame).top,
+            frame.top + GATE_OFFSET
+        );
+    }
+
+    /// A frame as long as the range gets no margin, because a margin would be
+    /// after the end of the range
+    #[test]
+    fn a_frame_as_long_as_the_range_gets_no_margin() {
+        let mut perforated = caps();
+        perforated.features.data_types |= DataTypes::PERFORATION_READ;
+        let boundary = perforated.address.y_axis.boundary;
+        let frame = Rect {
+            top: 0,
+            left: 0,
+            bottom: boundary,
+            right: 8964,
+        };
+        assert_eq!(pass_rect(&perforated, frame).bottom, boundary);
+        assert_eq!(picture_rect(&perforated, frame).top, 0);
+    }
 
     /// A cartridge addresses the film itself, so its range runs the length of
     /// the roll at one frame per boundary. These are an IA-20's

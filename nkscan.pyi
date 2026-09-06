@@ -198,6 +198,16 @@ class ScanResult:
         r"""
         Pixels dust removal rebuilt, where asked for
         """
+    @property
+    def frame_columns(self) -> tuple[builtins.int, builtins.int]:
+        r"""
+        The columns of the arrays that are the frame that was asked for
+        
+        A unit that positions the film itself gets a pass longer than the frame,
+        so the arrays continue past the frame at each end. This is accurate to
+        about a tenth of a millimeter. To get the frame exactly, find its edges
+        in the arrays. On the other units this is the full width
+        """
 
 class ScannerError(builtins.RuntimeError):
     r"""
@@ -256,16 +266,13 @@ class Session:
         works the same as a detected one, just slower if the stage has to home
         first to reach it
         """
-    def scan_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], dpi: typing.Optional[builtins.int] = None, samples: builtins.int = 1, superfine: builtins.bool = False, infrared: builtins.bool = False, clean: builtins.bool = False, lock_white_balance: builtins.bool = True, exposures: typing.Optional[typing.Mapping[builtins.str, builtins.int]] = None, progress: typing.Optional[typing.Any] = None, frames: typing.Optional[typing.Sequence[tuple[builtins.int, builtins.int, builtins.int, builtins.int]]] = None) -> ScanResult:
+    def scan_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], dpi: typing.Optional[builtins.int] = None, samples: builtins.int = 1, superfine: builtins.bool = False, infrared: builtins.bool = False, clean: builtins.bool = False, lock_white_balance: builtins.bool = True, exposures: typing.Optional[typing.Mapping[builtins.str, builtins.int]] = None, progress: typing.Optional[typing.Any] = None) -> ScanResult:
         r"""
         Focus, meter, take the pass over `frame`, and optionally clean it
         
-        `frame` is `(top, left, bottom, right)`, one of `discover_frames`'s, or one of them
-        moved or cropped. `exposures`, keyed the way `ScanResult.exposures` is, reuses an
-        exposure already decided rather than metering this frame fresh. `frames` is
-        `discover_frames`'s whole list: a unit that positions the film by its frame table
-        honours that table only as a whole, so a session that did not measure the strip
-        needs it back before a moved or cropped frame can be put where it asks
+        `frame` is `(top, left, bottom, right)`, one of `discover_frames`'s, or one of
+        them moved or cropped. `exposures`, keyed the way `ScanResult.exposures` is,
+        reuses an exposure already decided rather than metering this frame fresh
         """
     def close(self) -> None:
         r"""

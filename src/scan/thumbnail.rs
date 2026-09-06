@@ -40,7 +40,28 @@ const MARGIN: u32 = 50;
 /// SA-21, where a line is 6 encoder pulses: the scan of a detected rectangle
 /// opened on 164 addresses of the gap ahead of the picture, and with the lead
 /// applied on the picture's edge
-const PERFORATION_LEAD: usize = 4;
+pub(crate) const PERFORATION_LEAD: usize = 4;
+
+/// Stage addresses one thumbnail column spans
+///
+/// The pass asks for the thumbnail resolution, and a thumbnail pitch is the
+/// optical resolution over what was asked, rounded down, so this is the pass's
+/// own `line_pitch` without the pass in hand
+pub(crate) fn line_pitch(caps: &Capabilities) -> u32 {
+    let optical =
+        u32::from(caps.address.y_axis.optical_dpi).max(u32::from(caps.address.x_axis.optical_dpi));
+    match u32::from(caps.address.thumbnail_resolution.start) {
+        0 => 1,
+        asked => (optical / asked).max(1),
+    }
+}
+
+/// The thumbnail line nearest a Y address
+pub(crate) fn line_at(caps: &Capabilities, y: u32) -> usize {
+    let pitch = line_pitch(caps);
+    let origin = caps.address.y_axis.address_range.start;
+    ((y.saturating_sub(origin) + pitch / 2) / pitch) as usize
+}
 
 /// Whether this unit and adapter will thumbnail at all
 ///

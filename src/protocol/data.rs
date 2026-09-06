@@ -519,6 +519,25 @@ impl BoundaryType2 {
     /// Bytes occupied by each boundary record.
     const BOUNDARY: usize = 8;
 
+    /// Put `frame` in the slot its top falls in, so a SET WINDOW at that top
+    /// picks it
+    ///
+    /// The unit reads a window inside the frame whose entry has the greatest
+    /// top at or under the window's, so a nudged top replaces that entry rather
+    /// than joining the table, whose length the holder's frame count caps. A
+    /// top ahead of every entry takes the first slot. Order is kept either way
+    pub fn register(&mut self, frame: FramePosition) {
+        let slot = self
+            .frames
+            .iter()
+            .rposition(|f| f.top <= frame.top)
+            .unwrap_or(0);
+        match self.frames.get_mut(slot) {
+            Some(entry) => *entry = frame,
+            None => self.frames.push(frame),
+        }
+    }
+
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
         let head: &[u8; Self::HEAD] = b.get(..Self::HEAD)?.try_into().ok()?;
 
@@ -978,6 +997,29 @@ impl Header {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A nudged top replaces the entry it falls under, so the table stays the
+    /// length the holder allows and stays in order
+    #[test]
+    fn a_registered_top_takes_the_slot_it_falls_in() {
+        let perf = PerforationInformation::default();
+        let at = |top| FramePosition::new(top, &perf);
+        let tops = |table: &BoundaryType2| table.frames.iter().map(|f| f.top).collect::<Vec<_>>();
+        let mut table = BoundaryType2 {
+            frames: vec![at(100), at(200), at(300)],
+        };
+
+        table.register(at(250));
+        assert_eq!(tops(&table), [100, 250, 300]);
+        table.register(at(50));
+        assert_eq!(tops(&table), [50, 250, 300]);
+        table.register(at(900));
+        assert_eq!(tops(&table), [50, 250, 900]);
+
+        let mut empty = BoundaryType2::default();
+        empty.register(at(7));
+        assert_eq!(tops(&empty), [7]);
+    }
 
     /// A frame detected on line 2 seeks by line 2's own reading
     #[test]

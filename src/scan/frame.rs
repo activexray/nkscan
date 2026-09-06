@@ -7,6 +7,7 @@ use crate::{
         autoexpose::Exposures,
         clean::clean_frame,
         focus::Focus,
+        framing,
         pass::{Pass, Progress},
         window::Recipe,
     },
@@ -70,6 +71,7 @@ pub fn scan_frame_with(
 ) -> Result<Scanned, Error> {
     let mut windows = recipe.windows(session.capabilities(), frame)?;
 
+    framing::register(session, frame)?;
     session.focus_frame(frame, Focus::default())?;
 
     let exposures = match options.exposures {

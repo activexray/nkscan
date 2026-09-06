@@ -11,7 +11,9 @@ use crate::{
     error::Error,
     protocol::{
         caps::{Capabilities, address::CoordinateBase, film::FilmFormat, other::DataTypes},
-        data::{Boundary, FrameTable, Op, Rect},
+        data::{
+            Boundary, BoundaryType2, FramePosition, FrameTable, Op, PerforationInformation, Rect,
+        },
         decode::Samples,
     },
     session::Session,
@@ -175,6 +177,78 @@ pub fn frames(caps: &Capabilities) -> Result<Boundary, Error> {
         })
         .collect();
     Ok(Boundary { frames })
+}
+
+/// Register `frame` with the unit before a pass over it, where the unit
+/// positions the film by its table rather than by the window
+///
+/// A perforation-framed unit moves the film to the perforation record of the
+/// table entry a SET WINDOW Y falls under and reads the window inside that
+/// frame's gate, so a rectangle off the table - a nudged frame, a crop - is
+/// read as an offset into whatever frame it fell under and blacks out past the
+/// gate. Writing the record of the rectangle's own thumbnail line into the slot
+/// its top falls under moves the film there instead. The unit only honours a
+/// table as a whole, so this starts from the table the session knows, from
+/// discovery or from [`remember`], and does nothing where there is none; a top
+/// already in that table is left alone, and every other mechanism addresses the
+/// window itself and needs nothing here
+pub fn register(session: &mut Session, frame: Rect) -> Result<(), Error> {
+    if Framing::choose(session.capabilities()) != Framing::Perforation {
+        return Ok(());
+    }
+    let Some(mut table) = session.frames_type2().cloned() else {
+        return Ok(());
+    };
+    if table.frames.iter().any(|f| f.top == frame.top) {
+        return Ok(());
+    }
+
+    let (line, perf) = record(session, frame.top)?;
+    table.register(FramePosition::new(frame.top, &perf));
+    debug!(
+        top = frame.top,
+        line,
+        ?perf,
+        "registered a frame off the table"
+    );
+    session.set_boundaries_type2(&table)
+}
+
+/// Give a session that did not measure the strip the frames discovery found
+///
+/// The unit keeps the last thumbnail's perforation table but refuses to read
+/// its frame table back, and honours a table only as a whole, so a session
+/// opened after discovery has to be handed the frames to write it again. Only a
+/// perforation-framed unit needs this, and a session that already knows a
+/// table keeps it
+pub fn remember(session: &mut Session, frames: &[Rect]) -> Result<(), Error> {
+    if Framing::choose(session.capabilities()) != Framing::Perforation
+        || session.frames_type2().is_some()
+        || frames.is_empty()
+    {
+        return Ok(());
+    }
+    let mut table = BoundaryType2::default();
+    for frame in frames {
+        let (_, perf) = record(session, frame.top)?;
+        table.frames.push(FramePosition::new(frame.top, &perf));
+    }
+    debug!(frames = table.frames.len(), "wrote the frame table back");
+    session.set_boundaries_type2(&table)
+}
+
+/// The perforation record that lands a frame with its top at `top`
+fn record(session: &mut Session, top: u32) -> Result<(usize, PerforationInformation), Error> {
+    let line = thumbnail::line_at(session.capabilities(), top) + thumbnail::PERFORATION_LEAD;
+    let perfs = session.read_perforations()?;
+    let perf = perfs.at(line).ok_or_else(|| Error::Unsupported {
+        op: "frame registration",
+        reason: format!(
+            "a frame at {top} needs the perforation reading of thumbnail line {line}, and the last pass measured {}",
+            perfs.perfs.len()
+        ),
+    })?;
+    Ok((line, perf.clone()))
 }
 
 /// The discovered frame table, however that happened.

@@ -179,6 +179,20 @@ impl Polarity {
     }
 }
 
+/// What a pass longer than its frame needs to find the frame in itself
+///
+/// A perforation-framed unit positions the film, so a pass takes more than the
+/// frame and the frame is somewhere in it. [`locate`] finds it from these: the
+/// film either side of a picture is what marks its edges, and how long the
+/// picture should be is what tells a whole frame from the gap next to it
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Picture {
+    /// Which way a picture reads against the film around it
+    pub polarity: Polarity,
+    /// How long the frame is, in window addresses
+    pub extent: u32,
+}
+
 /// What a strip turned out to hold
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Detected {

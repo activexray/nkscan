@@ -8,7 +8,7 @@ use crate::{
     },
     scan::{
         autoexpose::Exposures,
-        boundaries::{self, Polarity},
+        boundaries::{self, Picture, Polarity},
         clean::clean_frame,
         focus::Focus,
         framing,
@@ -100,7 +100,11 @@ pub fn scan_frame_with(
         Some(locked) => locked.clone(),
         None => {
             let lock = options.lock_white_balance;
-            session.autoexpose_frame_with(over, recipe, lock, options.polarity, |pass, p| {
+            let picture = options.polarity.map(|polarity| Picture {
+                polarity,
+                extent: frame.bottom.saturating_sub(frame.top),
+            });
+            session.autoexpose_frame_with(over, recipe, lock, picture, |pass, p| {
                 on(Phase::Meter(pass), p)
             })?
         }
@@ -144,9 +148,13 @@ pub fn scan_frame_with(
     let pass = session.scan_pass_with(&windows, SCAN_TIMEOUT, samples, |p| on(Phase::Scan, p))?;
 
     // The table goes back to what it measured, so the next rectangle of this
-    // session starts from the measured table rather than this one's place
+    // session starts from the measured table rather than this one's place.
+    // Written rather than registered: `register` starts from the measured
+    // table, and the original top is still in it, so it would find nothing to
+    // do and leave this pass's table in the unit
     if frame != original
-        && let Err(e) = framing::register(session, original)
+        && let Some(measured) = session.frames_type2().cloned()
+        && let Err(e) = session.set_boundaries_type2_for_pass(&measured)
     {
         warn!(
             %e,
@@ -201,6 +209,10 @@ fn lines_of(
             return found.start..found.end.min(pass.cols);
         }
         if let Some(offset) = session.gate_offset() {
+            // The furthest start seen, which is what sizes a pass. It is the
+            // wrong end of the readings to crop at, but the pass is handed
+            // back whole and this only says where the frame is in it, so an
+            // overestimate misreports the frame rather than cutting it
             let at = (offset / pitch) as usize;
             return at..(at + expected).min(pass.cols);
         }

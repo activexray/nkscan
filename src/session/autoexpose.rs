@@ -10,7 +10,7 @@ use crate::{
     },
     scan::{
         autoexpose::{AutoExposure, Exposures, prescan_windows},
-        boundaries::{self, Polarity},
+        boundaries::{self, Picture},
         framing::Framing,
         pass::Progress,
         window::Recipe,
@@ -33,17 +33,17 @@ impl Session {
     /// the frame rather than off whatever the last pass left in the unit, and
     /// cover the channels `recipe` will scan. `lock_white_balance` keeps the
     /// channels in the ratio the unit calls neutral, which is what a scan that
-    /// has to stay comparable to the next one wants. `polarity`, where the
-    /// unit positions the film itself, is what finds the frame in the metering
-    /// pass so the film in front of it stays out of the reading
+    /// has to stay comparable to the next one wants. `picture`, where the unit
+    /// positions the film itself, is what finds the frame in the metering pass
+    /// so the film in front of it stays out of the reading
     pub fn autoexpose_frame(
         &mut self,
         frame: Rect,
         recipe: &Recipe,
         lock_white_balance: bool,
-        polarity: Option<Polarity>,
+        picture: Option<Picture>,
     ) -> Result<Exposures, Error> {
-        self.autoexpose_frame_with(frame, recipe, lock_white_balance, polarity, |_, _| {
+        self.autoexpose_frame_with(frame, recipe, lock_white_balance, picture, |_, _| {
             ControlFlow::Continue(())
         })
     }
@@ -55,13 +55,13 @@ impl Session {
         frame: Rect,
         recipe: &Recipe,
         lock_white_balance: bool,
-        polarity: Option<Polarity>,
+        picture: Option<Picture>,
         on: impl FnMut(usize, Progress) -> ControlFlow<()>,
     ) -> Result<Exposures, Error> {
         let windows = recipe
             .metering(self.capabilities())
             .windows(self.capabilities(), frame)?;
-        self.autoexpose_with(&windows, lock_white_balance, polarity, on)
+        self.autoexpose_with(&windows, lock_white_balance, picture, on)
     }
 
     /// Meter `windows` and answer their new exposures
@@ -87,7 +87,7 @@ impl Session {
         &mut self,
         windows: &[Window],
         lock_white_balance: bool,
-        polarity: Option<Polarity>,
+        picture: Option<Picture>,
         mut on: impl FnMut(usize, Progress) -> ControlFlow<()>,
     ) -> Result<Exposures, Error> {
         let mechanism = AutoExposure::choose(self.capabilities(), lock_white_balance)?;
@@ -140,8 +140,7 @@ impl Session {
                     // the film itself: metering the whole pass reads the film
                     // in front of the picture, which is brighter than anything
                     // in the picture on a negative
-                    let columns =
-                        polarity.and_then(|pol| self.positioned(&image, layout, &windows, pol));
+                    let columns = picture.and_then(|p| self.positioned(&image, layout, p));
 
                     // Correct from what this pass measured, whether or not
                     // another one follows: the exposures the scan gets are the
@@ -232,15 +231,16 @@ impl Session {
         &mut self,
         image: &Image<'_>,
         layout: &crate::protocol::image::Layout,
-        windows: &[Window],
-        polarity: Polarity,
+        picture: Picture,
     ) -> Option<Range<usize>> {
         if Framing::choose(self.capabilities()) != Framing::Perforation {
             return None;
         }
         let pitch = layout.line_pitch.max(1);
-        let expected = (windows.first()?.size.1 / pitch) as usize;
-        let found = boundaries::locate(image, expected, polarity)?;
+        // The frame's own length, not the window's: the window is longer than
+        // the frame, and how much longer is what this is measuring
+        let expected = (picture.extent / pitch) as usize;
+        let found = boundaries::locate(image, expected, picture.polarity)?;
         self.note_gate_offset((found.start as u32) * pitch);
         self.note_picture_start((found.start as u32) * pitch);
         debug!(?found, "the frame in the metering pass");

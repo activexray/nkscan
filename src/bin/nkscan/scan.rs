@@ -375,7 +375,6 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
                 first + n,
                 &samples,
                 &pass,
-                0..pass.cols,
                 icc,
                 film == cli::FilmType::Mono,
                 ir,

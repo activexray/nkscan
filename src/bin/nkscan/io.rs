@@ -16,7 +16,6 @@ use nkscan::{
 use std::{
     fs::File,
     io::BufWriter,
-    ops::Range,
     path::{Path, PathBuf},
 };
 use tiff::{
@@ -59,10 +58,6 @@ pub fn next_free(basename: &Path) -> usize {
 
 /// Write one frame, returning the files it made
 ///
-/// `columns` is which feed lines of the pass the file is made of: the whole
-/// pass, as Nikon Scan writes, or a frame within it that the caller has
-/// already found.
-///
 /// `icc` is embedded as-is where it is given. Without one the file says nothing
 /// about its color, which is the truth: the samples are linear and this unit
 /// has no characterization of its own.
@@ -76,13 +71,11 @@ pub fn next_free(basename: &Path) -> usize {
 ///
 /// `infrared` says whether to keep the mask. Cleaning takes the IR pass for
 /// itself, so a pass can carry infrared the operator never asked to see.
-#[allow(clippy::too_many_arguments)]
 pub fn write_frame(
     basename: &Path,
     n: usize,
     samples: &Samples,
     pass: &Pass,
-    columns: Range<usize>,
     icc: Option<&[u8]>,
     mono: bool,
     infrared: bool,
@@ -117,7 +110,6 @@ pub fn write_frame(
                 &color_path,
                 &planes,
                 pass,
-                columns.clone(),
                 Source::Luminance {
                     planes: source_planes,
                     luminance,
@@ -125,44 +117,22 @@ pub fn write_frame(
                 Some(&gray),
             )?
         }
-        (None, Some(gray), _) => write_planes::<Gray16>(
-            &color_path,
-            &planes,
-            pass,
-            columns.clone(),
-            Source::Planes(&[gray]),
-            None,
-        )?,
-        (None, None, 3) => write_planes::<RGB16>(
-            &color_path,
-            &planes,
-            pass,
-            columns.clone(),
-            Source::Planes(&color),
-            icc,
-        )?,
-        (None, None, 1) => write_planes::<Gray16>(
-            &color_path,
-            &planes,
-            pass,
-            columns.clone(),
-            Source::Planes(&color),
-            icc,
-        )?,
+        (None, Some(gray), _) => {
+            write_planes::<Gray16>(&color_path, &planes, pass, Source::Planes(&[gray]), None)?
+        }
+        (None, None, 3) => {
+            write_planes::<RGB16>(&color_path, &planes, pass, Source::Planes(&color), icc)?
+        }
+        (None, None, 1) => {
+            write_planes::<Gray16>(&color_path, &planes, pass, Source::Planes(&color), icc)?
+        }
         (None, None, n) => bail!("{n} color planes is not a TIFF this writes"),
     }
     written.push(color_path);
 
     if let Some(ir) = samples.ir.as_ref().filter(|_| infrared) {
         // The mask measures obstructions rather than color, so no profile
-        write_planes::<Gray16>(
-            &ir_path,
-            &[ir],
-            pass,
-            columns.clone(),
-            Source::Planes(&[0]),
-            None,
-        )?;
+        write_planes::<Gray16>(&ir_path, &[ir], pass, Source::Planes(&[0]), None)?;
         written.push(ir_path);
     }
 
@@ -211,22 +181,8 @@ pub fn write_thumbnail(
 
     let path = thumbnail_path(basename, n);
     match color.len() {
-        3 => write_planes::<RGB16>(
-            &path,
-            &planes,
-            pass,
-            0..pass.cols,
-            Source::Planes(&color),
-            None,
-        )?,
-        1 => write_planes::<Gray16>(
-            &path,
-            &planes,
-            pass,
-            0..pass.cols,
-            Source::Planes(&color),
-            None,
-        )?,
+        3 => write_planes::<RGB16>(&path, &planes, pass, Source::Planes(&color), None)?,
+        1 => write_planes::<Gray16>(&path, &planes, pass, Source::Planes(&color), None)?,
         n => bail!("{n} color planes is not a thumbnail this writes"),
     }
     Ok(path)
@@ -262,7 +218,6 @@ fn write_planes<C>(
     path: &Path,
     planes: &[&[u16]],
     pass: &Pass,
-    columns: Range<usize>,
     source: Source<'_>,
     icc: Option<&[u8]>,
 ) -> Result<()>
@@ -272,10 +227,7 @@ where
     let file =
         BufWriter::new(File::create(path).with_context(|| format!("creating {}", path.display()))?);
     let mut tiff = TiffEncoder::new(file)?;
-    // A pass can be longer than the frame, so the file gets only the columns
-    // of the frame
-    let width = columns.len().min(pass.cols);
-    let mut image = tiff.new_image::<C>(width as u32, pass.rows as u32)?;
+    let mut image = tiff.new_image::<C>(pass.cols as u32, pass.rows as u32)?;
 
     // 2-10 resolves both axes to the same pitch for a scan, so one number
     image.resolution(
@@ -290,10 +242,7 @@ where
     }
 
     // Already full scale: `to_full_scale` stretched the buffer after the pass
-    let at = |pixel: usize, plane: usize| {
-        let (row, col) = (pixel / width, pixel % width);
-        planes[plane][row * pass.cols + columns.start + col]
-    };
+    let at = |pixel: usize, plane: usize| planes[plane][pixel];
 
     let per_pixel = source.per_pixel();
     let mut strip = Vec::new();

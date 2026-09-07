@@ -18,7 +18,10 @@ pub enum Error {
     #[error("no such scanner")]
     NotFound,
 
-    #[error("{op} is not supported: {reason}")]
+    #[error("{op} is not supported{}", match reason.is_empty() {
+        true => String::new(),
+        false => format!(": {reason}"),
+    })]
     Unsupported { op: &'static str, reason: String },
 
     #[error("scan cancelled")]

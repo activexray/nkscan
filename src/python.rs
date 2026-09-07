@@ -11,7 +11,7 @@ use crate::{
     protocol::{
         caps::{
             Capabilities as RustCapabilities,
-            set_window::{ColorInterleaving, ScanKind},
+            set_window::{ColorInterleaving, ScanKind, ScanMode},
         },
         data::{Op, Rect},
         decode::Samples,
@@ -158,7 +158,8 @@ pub struct PyCapabilities {
     thumbnail_dpi: (u16, u16),
     /// Focus positions the unit accepts
     focus_range: (u16, u16),
-    /// Most readings of one line a pass may ask for
+    /// Most readings of one line a pass may ask for. 1 where the unit reads a
+    /// line once, so a multi-sample control has nothing to offer
     max_samples: u8,
     /// How this unit finds frames: "published", "thumbnail", "perforation" or
     /// "address". Only the middle two take a thumbnail pass
@@ -232,7 +233,12 @@ impl From<&RustCapabilities> for PyCapabilities {
                 caps.address.focus_range.start,
                 caps.address.focus_range.last,
             ),
-            max_samples: MAX_SAMPLES,
+            // 2-10 byte 43: a unit that does not offer the mode reads a line
+            // once, and refuses a window that asks for more
+            max_samples: match caps.set_window.mode.contains(ScanMode::MULTI_READING) {
+                true => MAX_SAMPLES,
+                false => 1,
+            },
             framing: match framing::Framing::choose(caps) {
                 Framing::Published => "published",
                 Framing::Thumbnail => "thumbnail",

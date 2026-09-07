@@ -181,6 +181,15 @@ impl Recipe {
             });
         }
 
+        // 2-10 byte 43. A unit that does not offer the mode refuses the whole
+        // window, and by then the stage has moved to the frame
+        if self.samples > 1 && !caps.set_window.mode.contains(ScanMode::MULTI_READING) {
+            return Err(Error::Unsupported {
+                op: "multisampling",
+                reason: String::new(),
+            });
+        }
+
         let offered = caps.set_window.interleaving;
         if self.interleaving.bits().count_ones() != 1 || !offered.contains(self.interleaving) {
             return Err(Error::Unsupported {
@@ -346,7 +355,7 @@ pub(crate) mod tests {
         let mut d = vec![0u8; 28];
         d[1] = SetWindowFunction::PAGE_CODE;
         d[3] = 24;
-        d[5] = ScanMode::HIGH_SPEED.bits();
+        d[5] = (ScanMode::HIGH_SPEED | ScanMode::MULTI_READING).bits();
         d[6] = (ColorInterleaving::MULTILINE_SIMULTANEOUS
             | ColorInterleaving::LINE_WITHOUT_DISTANCE)
             .bits();
@@ -474,6 +483,26 @@ pub(crate) mod tests {
     }
 
     /// Likewise a reading count the byte cannot hold
+    /// 2-10 byte 43: a unit that reads a line once refuses a window asking for
+    /// more, so the recipe is refused before the stage moves to the frame
+    #[test]
+    fn a_unit_that_reads_a_line_once_refuses_multisampling() {
+        let mut once = caps();
+        once.set_window.mode -= ScanMode::MULTI_READING;
+
+        assert!(recipe().supported(&once).is_ok());
+        let refused = Recipe {
+            samples: 2,
+            ..recipe()
+        }
+        .supported(&once)
+        .expect_err("multisampling");
+        assert!(
+            format!("{refused}") == "multisampling is not supported",
+            "{refused}"
+        );
+    }
+
     #[test]
     fn a_reading_count_past_the_nibble_is_refused() {
         let caps = caps();

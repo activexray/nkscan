@@ -60,7 +60,8 @@ class Capabilities:
     @property
     def max_samples(self) -> builtins.int:
         r"""
-        Most readings of one line a pass may ask for
+        Most readings of one line a pass may ask for. 1 where the unit reads a
+        line once, so a multi-sample control has nothing to offer
         """
     @property
     def framing(self) -> builtins.str:
@@ -269,7 +270,7 @@ class Session:
     def scan_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], dpi: typing.Optional[builtins.int] = None, samples: builtins.int = 1, superfine: builtins.bool = False, infrared: builtins.bool = False, clean: builtins.bool = False, lock_white_balance: builtins.bool = True, positive: builtins.bool = False, exposures: typing.Optional[typing.Mapping[builtins.str, builtins.int]] = None, progress: typing.Optional[typing.Any] = None) -> ScanResult:
         r"""
         Focus, meter, take the pass over `frame`, and optionally clean it
-
+        
         `frame` is `(top, left, bottom, right)`, one of `discover_frames`'s, or one of
         them moved or cropped. `exposures`, keyed the way `ScanResult.exposures` is,
         reuses an exposure already decided rather than metering this frame fresh.

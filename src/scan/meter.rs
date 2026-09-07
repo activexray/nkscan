@@ -49,7 +49,7 @@ impl Default for Metering {
 impl Metering {
     /// Whether a film type is metered with its channels held together
     ///
-    /// A colour negative's orange mask sits over everything, and metering the
+    /// A color negative's orange mask sits over everything, and metering the
     /// channels as one group leaves it there to be quantised through - the blue
     /// record ends up in a fraction of the range it could have had. Nikon Scan
     /// meters one per channel: a Coolscan V capture has it scaling the start-up

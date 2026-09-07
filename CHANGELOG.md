@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `--samples` above 1 on a unit with no multi-read mode is refused before the stage moves, with `multisampling is not supported`. An LS-50 reported mode bits after the thumbnail and the focus.
 - Metering on a perforation-framed unit measured the film in front of the frame, which cost up to a third of a stop on a dense negative.
-- A frame on a perforation-framed unit came back about a millimetre out, with the gap ahead of it at the head of the file and as much missing from the tail.
+- A frame on a perforation-framed unit came back about a millimeter out, with the gap ahead of it at the head of the file and as much missing from the tail.
 - A frame the detection placed early is moved back onto the range from where the metering pass measured it.
 - `DataType::Boundary2` reads back: the transfer length is the valid data plus the record's own header, and `from_bytes` wanted a parameter length a byte shorter than `to_bytes` writes.
 - The frame table is put back after a pass that corrected a frame's place, so scanning one frame twice no longer moves the film about 4 mm.

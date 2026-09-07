@@ -69,7 +69,7 @@ pub struct Scan {
     pub basename: PathBuf,
 
     /// Autoexpose per channel, taking the film's own cast off. The default for
-    /// colour negative, where that cast is the orange mask.
+    /// color negative, where that cast is the orange mask.
     #[arg(long, conflicts_with = "lock_wb")]
     pub unlock_wb: bool,
 

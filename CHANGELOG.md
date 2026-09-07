@@ -9,25 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- A rectangle that is not in the unit's own frame table can be scanned on a perforation-framed unit. A frame moved along the feed, or a crop, gets the perforation record of its own thumbnail line written into the slot its top falls in, so the film moves to it instead of being read as an offset into whatever frame it fell under.
-- `Scanned::frame_lines` and `ScanResult.frame_columns`, which say which columns of a pass are the frame that was asked for.
-- `Options::polarity` and `scan_frame(positive=...)` in Python. A perforation-framed unit positions the film itself, so the pass is longer than the frame, and the polarity is what finds the frame in it.
+- A frame moved along the feed, or a crop, can be scanned on a perforation-framed unit: it is registered with the unit first, so the film moves to it rather than being read as an offset into the frame it fell in.
+- `Scanned::frame_lines` and `ScanResult.frame_columns`, which say which columns of a pass are the frame.
+- `Options::polarity` and `scan_frame(positive=...)` in Python, which find the frame in a pass longer than it.
 
 ### Changed
 
 - **Breaking:** `Scanned` has a new `frame_lines` field and `Options` a new `polarity` field.
-- **Breaking:** `Session::autoexpose_frame` and `autoexpose_frame_with` take a `boundaries::Picture`, which is what restricts a metering pass to the frame.
-- A pass on a perforation-framed unit takes more than the frame, because the unit decides where the film goes. The CLI writes all of it and reports which columns are the frame, as Nikon Scan hands back the whole range it scanned.
-- `Capabilities.max_samples` in Python answers the SET WINDOW page rather than the library's own ceiling, so a unit that reads a line once reports 1 and a multi-sample control can be hidden.
+- **Breaking:** `Session::autoexpose_frame` and `autoexpose_frame_with` take a `boundaries::Picture`.
+- A pass on a perforation-framed unit takes more than the frame, and the CLI writes all of it and names the frame's columns, as Nikon Scan does.
+- `Capabilities.max_samples` in Python answers the SET WINDOW page, so a unit that reads a line once reports 1 and a multi-sample control can be hidden.
 
 ### Fixed
 
-- `--samples` above 1 on a unit that does not offer the multi-read mode is refused before the stage moves, with `multisampling is not supported`. An LS-50 stopped with `asked for 0x12 of the 0x46 this unit offers` after the thumbnail and the focus.
-- Metering on a perforation-framed unit measured the film in front of the frame, which on a negative is brighter than anything in the picture and pulled every exposure down. Measured at 0.03 to 0.29 stops across one strip, worst on its densest frame.
-- A frame on a perforation-framed unit came back about a millimetre out, with the gap ahead of it at the head of the file and as much missing from the tail. The unit puts the frame that far into the range it scans, which no page reports; the pass now takes enough either side to hold the frame wherever it landed, and the frame's own edges in the pass are what place it.
-- A frame the detection placed early is moved back onto the range from where the metering pass measured it, rather than being read part-way out the end of the range.
-- `DataType::Boundary2` reads back. 2-11-2 gives the transfer length as the valid data plus the record's own header, and the header alone reports two bytes less than the record; the unit refuses that length outright rather than answering short. `BoundaryType2::from_bytes` also read its own encoding as malformed, wanting a parameter length one byte shorter than `to_bytes` writes.
-- The frame table is put back after a pass that corrected a frame's place, so scanning the same frame twice in one session no longer positions the film about 4 mm out.
+- `--samples` above 1 on a unit with no multi-read mode is refused before the stage moves, with `multisampling is not supported`. An LS-50 reported mode bits after the thumbnail and the focus.
+- Metering on a perforation-framed unit measured the film in front of the frame, which cost up to a third of a stop on a dense negative.
+- A frame on a perforation-framed unit came back about a millimetre out, with the gap ahead of it at the head of the file and as much missing from the tail.
+- A frame the detection placed early is moved back onto the range from where the metering pass measured it.
+- `DataType::Boundary2` reads back: the transfer length is the valid data plus the record's own header, and `from_bytes` wanted a parameter length a byte shorter than `to_bytes` writes.
+- The frame table is put back after a pass that corrected a frame's place, so scanning one frame twice no longer moves the film about 4 mm.
 - The USB transport no longer errors out of a scan when the unit pads the status phase's closing packet to a whole packet size, the same padding already tolerated on a data phase's last packet.
 
 ## [0.10.0]

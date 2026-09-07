@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A frame the detection placed early is moved back onto the range from where the metering pass measured it.
 - `DataType::Boundary2` reads back: the transfer length is the valid data plus the record's own header, and `from_bytes` wanted a parameter length a byte shorter than `to_bytes` writes.
 - The frame table is put back after a pass that corrected a frame's place, so scanning one frame twice no longer moves the film about 4 mm.
+- Multi-sampling on a unit that attaches invalid bytes to a line. The unit attaches them to each reading of the line, not to the line as a whole, so a `--samples 2` pass at 4000 dpi asked for 2.2 MB less than the unit sends and then stopped answering. A READ now ends on a reading, which also puts 8x and 16x inside a 128 KiB transfer.
 - The USB transport no longer errors out of a scan when the unit pads the status phase's closing packet to a whole packet size, the same padding already tolerated on a data phase's last packet.
 
 ## [0.10.0]

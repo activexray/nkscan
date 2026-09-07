@@ -162,10 +162,17 @@ fn read_granule(caps: &Capabilities, layout: &Layout, truncated: Option<&Truncat
     let transfer = caps.address.transfer;
 
     // Packed rows are one acquisition, so a READ must not end between them
-    let whole_line = (layout.bytes_per_line() as usize * usize::from(layout.packed_rows)).max(1);
+    let rows = usize::from(layout.packed_rows);
+    let whole_line = (layout.bytes_per_line() as usize * rows).max(1);
 
     if transfer.contains(Transfer::READ_LINE_COLS) {
-        return whole_line;
+        // Each reading is one line across every color, so a READ can end
+        // between two readings of the same line. Readings of different lengths
+        // give no such unit, and the whole line stays the granule
+        return match layout.even_readings() {
+            true => (layout.bytes_per_reading(0) as usize * rows).max(1),
+            false => whole_line,
+        };
     }
     if !transfer.contains(Transfer::READ_LINE) {
         return 1;
@@ -283,11 +290,39 @@ impl Layout {
             .filter(|&id| Channel::from(id).is_color())
     }
 
-    /// Bytes in one line of every channel
-    pub fn bytes_per_line(&self) -> u32 {
-        self.pixels * u32::from(self.bytes_per_sample) * self.readouts()
+    /// How many times the unit reads one line. The minimum is 1
+    pub fn readings(&self) -> u32 {
+        u32::from(self.readings_per_line).max(1)
+    }
+
+    /// Bytes the unit sends for one reading of a line
+    ///
+    /// 2-7 raises TRUNCATED BY DRIVER when the data of one line is not a
+    /// multiple of 512 bytes, the size of a bulk packet. The unit attaches the
+    /// invalid bytes to each reading of the line, and 2-11-5-2 counts each
+    /// reading as a line of its own. A reading is thus the unit that 2-11-3
+    /// reads and the stream repeats. Some channels are read one time only. The
+    /// unit sends these in the first reading, where the decoder expects them
+    pub fn bytes_per_reading(&self, reading: u32) -> u32 {
+        let colors = self.colors().count() as u32;
+        let once = self.channels.len() as u32 - colors;
+        let readouts = colors + if reading == 0 { once } else { 0 };
+        self.pixels * u32::from(self.bytes_per_sample) * readouts
             + self.truncated_bytes_line.0
             + self.truncated_bytes_line.1
+    }
+
+    /// True if all the readings of a line have the same length. A channel the
+    /// unit reads one time makes the first reading longer than the others
+    pub fn even_readings(&self) -> bool {
+        self.readings() == 1 || self.channels.len() as u32 == self.colors().count() as u32
+    }
+
+    /// Bytes in one line of every channel, all its readings included
+    pub fn bytes_per_line(&self) -> u32 {
+        (0..self.readings())
+            .map(|r| self.bytes_per_reading(r))
+            .sum()
     }
 
     /// How many bytes the whole scan will hand back
@@ -593,6 +628,67 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(granule(&all_colors), 10000 * 2 * 3 + 16);
+    }
+
+    /// The pass that stopped an LS-5000 in issue 52: 3945 pixels of three
+    /// 16-bit colors, read twice, with 394 bytes attached. The unit fills each
+    /// reading to a whole 512-byte packet, so a line is two readings of 24064
+    /// bytes and not one of 3945 x 2 x 6 plus a single 394
+    #[test]
+    fn every_reading_of_a_line_carries_what_the_unit_attaches() {
+        let truncation = Truncation {
+            position: Position::ALL_LAST,
+            all_colors: Edges {
+                first: 0,
+                last: 394,
+            },
+            ..Default::default()
+        };
+        let mut windows = rgb(4000, (3945, 5658));
+        for w in &mut windows {
+            w.multiple_reading = 1;
+        }
+
+        let l = Layout::new(&caps(0x03, 1, 1), &windows, 4000, Some(&truncation)).unwrap();
+
+        assert_eq!((l.pixels, l.lines, l.readings()), (3945, 5658, 2));
+        assert_eq!(l.bytes_per_reading(0), 24064);
+        assert_eq!(l.bytes_per_line(), 48128);
+        assert_eq!(l.total_bytes(), 272_308_224);
+
+        // A READ ends on a reading, so 16x multi-sampling is still inside a
+        // 128 KiB transfer
+        assert_eq!(l.granule, 24064);
+        assert_eq!(128 * 1024 / l.granule * l.granule, 120_320);
+    }
+
+    /// The unit reads infrared one time whatever the colors get, so infrared
+    /// makes the first reading of a line longer than the others
+    #[test]
+    fn a_channel_read_once_rides_with_the_first_reading() {
+        let truncation = Truncation {
+            position: Position::ALL_LAST,
+            all_colors: Edges {
+                first: 0,
+                last: 394,
+            },
+            ..Default::default()
+        };
+        let mut windows = rgb(4000, (3945, 5658));
+        windows.push(window(9, 4000, (3945, 5658)));
+        for w in &mut windows {
+            w.multiple_reading = 1;
+            w.composition = Composition::MultilevelRGB;
+        }
+
+        let l = Layout::new(&caps(0x03, 1, 1), &windows, 4000, Some(&truncation)).unwrap();
+
+        assert!(!l.even_readings());
+        assert_eq!(l.bytes_per_reading(0), 3945 * 2 * 4 + 394);
+        assert_eq!(l.bytes_per_reading(1), 3945 * 2 * 3 + 394);
+        assert_eq!(l.bytes_per_line(), 3945 * 2 * 7 + 394 * 2);
+        // Readings of different lengths leave the whole line as the only unit
+        assert_eq!(l.granule, l.bytes_per_line() as usize);
     }
 
     #[test]

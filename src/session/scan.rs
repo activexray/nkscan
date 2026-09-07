@@ -32,31 +32,34 @@ enum Chunk {
     Failed(Error),
 }
 
+/// The position in the stream at the end of the last chunk: the line, the
+/// reading of that line, and the offset into that reading
 struct TruncationState {
     line: usize,
-    offset_in_line: usize,
+    reading: u32,
+    offset_in_reading: usize,
 }
 
 impl TruncationState {
     fn new() -> Self {
         Self {
             line: 0,
-            offset_in_line: 0,
+            reading: 0,
+            offset_in_reading: 0,
         }
     }
 }
 
 fn strip_truncation(buf: &mut Vec<u8>, state: &mut TruncationState, layout: &Layout) {
     // 2-11-5-3 counts the invalid bytes per CCD row, so packed rows carry one
-    // set each and the whole group is what a line means here
+    // set each and the whole group is what a reading means here
     let rows = usize::from(layout.packed_rows);
-
-    let line_bytes = layout.bytes_per_line() as usize * rows;
 
     let (first_bytes, last_bytes) = layout.truncated_bytes_line;
     let first_bytes = first_bytes as usize * rows;
     let last_bytes = last_bytes as usize * rows;
 
+    let readings = layout.readings();
     let total_lines = layout.lines as usize;
     let first_line = layout.truncated_lines_frame.0 as usize;
     let last_line = total_lines - layout.truncated_lines_frame.1 as usize;
@@ -65,26 +68,29 @@ fn strip_truncation(buf: &mut Vec<u8>, state: &mut TruncationState, layout: &Lay
     let mut write = 0;
 
     while read < buf.len() {
-        let remaining_in_line = line_bytes - state.offset_in_line;
-        let n = remaining_in_line.min(buf.len() - read);
+        // The unit attaches its invalid bytes to each reading of a line, so
+        // each reading is stripped separately
+        let reading_bytes = (layout.bytes_per_reading(state.reading) as usize * rows).max(1);
+        let remaining_in_reading = reading_bytes.saturating_sub(state.offset_in_reading);
+        let n = remaining_in_reading.min(buf.len() - read);
 
         let line = state.line;
 
         // Is this line part of the actual image?
         if line >= first_line && line < last_line {
-            let line_start = state.offset_in_line;
-            let line_end = state.offset_in_line + n;
+            let reading_start = state.offset_in_reading;
+            let reading_end = state.offset_in_reading + n;
 
             // Keep only the intersection with:
             //
-            //     [first_bytes, line_bytes - last_bytes)
+            //     [first_bytes, reading_bytes - last_bytes)
             //
-            let keep_start = line_start.max(first_bytes);
-            let keep_end = line_end.min(line_bytes - last_bytes);
+            let keep_start = reading_start.max(first_bytes);
+            let keep_end = reading_end.min(reading_bytes.saturating_sub(last_bytes));
 
             if keep_start < keep_end {
-                let src_start = read + (keep_start - line_start);
-                let src_end = read + (keep_end - line_start);
+                let src_start = read + (keep_start - reading_start);
+                let src_end = read + (keep_end - reading_start);
                 let len = src_end - src_start;
 
                 buf.copy_within(src_start..src_end, write);
@@ -93,11 +99,15 @@ fn strip_truncation(buf: &mut Vec<u8>, state: &mut TruncationState, layout: &Lay
         }
 
         read += n;
-        state.offset_in_line += n;
+        state.offset_in_reading += n;
 
-        if state.offset_in_line == line_bytes {
-            state.offset_in_line = 0;
-            state.line += 1;
+        if state.offset_in_reading == reading_bytes {
+            state.offset_in_reading = 0;
+            state.reading += 1;
+            if state.reading == readings {
+                state.reading = 0;
+                state.line += 1;
+            }
         }
     }
 
@@ -372,5 +382,76 @@ fn read_chunks(
         if full.send(Chunk::Data(buf)).is_err() {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::image::Layout;
+
+    /// Four pixels of three 16-bit colors, read twice, with three bytes
+    /// attached to each reading
+    fn layout(readings: u8) -> Layout {
+        Layout {
+            lines: 2,
+            readings_per_line: readings,
+            truncated_bytes_line: (0, 3),
+            ..Layout::single_line(4, 2, vec![1, 2, 3])
+        }
+    }
+
+    /// One line of `layout`. The valid bytes count up, the attached ones are
+    /// 0xFF
+    fn wire(l: &Layout) -> Vec<u8> {
+        let mut wire = Vec::new();
+        for r in 0..l.readings() {
+            let valid = l.bytes_per_reading(r) as usize - 3;
+            wire.extend((0..valid).map(|i| (r as usize * valid + i) as u8));
+            wire.extend([0xFF; 3]);
+        }
+        wire
+    }
+
+    #[test]
+    fn each_reading_of_a_line_is_stripped_on_its_own() {
+        let l = layout(2);
+        let mut buf = wire(&l);
+        assert_eq!(buf.len(), 54);
+
+        strip_truncation(&mut buf, &mut TruncationState::new(), &l);
+
+        assert_eq!(buf.len(), 48);
+        assert!(!buf.contains(&0xFF));
+        assert_eq!(buf, (0..48).collect::<Vec<u8>>());
+    }
+
+    /// The state keeps a reading that a chunk boundary divides
+    #[test]
+    fn a_chunk_that_ends_inside_a_reading_picks_up_where_it_left_off() {
+        let l = layout(2);
+        let whole = wire(&l);
+        let mut state = TruncationState::new();
+
+        let mut out = Vec::new();
+        for part in whole.chunks(7) {
+            let mut buf = part.to_vec();
+            strip_truncation(&mut buf, &mut state, &l);
+            out.extend_from_slice(&buf);
+        }
+
+        assert_eq!(out, (0..48).collect::<Vec<u8>>());
+    }
+
+    /// A pass that reads a line one time strips the line as a whole
+    #[test]
+    fn one_reading_a_line_is_the_line_itself() {
+        let l = layout(1);
+        let mut buf = wire(&l);
+        assert_eq!(buf.len(), 27);
+
+        strip_truncation(&mut buf, &mut TruncationState::new(), &l);
+
+        assert_eq!(buf, (0..24).collect::<Vec<u8>>());
     }
 }

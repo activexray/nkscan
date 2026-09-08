@@ -5,7 +5,7 @@
 //! never got exposed reads identically to the gap before it, and no amount of
 //! tuning fixes that, because the signal really is the same either way. This
 //! shows one detected frame at a time and lets the operator nudge it with the
-//! arrow keys, in the same column space `boundaries::detect` itself works in -
+//! arrow keys, in the same column space `scan::strip` itself works in -
 //! detection's own guess is always where a frame starts out.
 
 use crate::io::color_planes;

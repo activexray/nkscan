@@ -5,10 +5,10 @@ corpus, saved to thumbnails/ground_truth.json.
     python3 scripts/annotate.py
 
 then open http://localhost:8756. Click the strip to drop a frame at that
-column (width is fixed to the format's frame length, same as detect()
+column (width is fixed to the format's frame length, same as the fit
 would use); drag a frame to move it, click its x to remove it. "Show
-detect()" overlays what boundaries::detect currently reports, in red, for
-comparison - it shells out to `cargo run --example detect_frames`, so the
+fit()" overlays what scan::strip::find currently reports, in red, for
+comparison - it shells out to `cargo run --example fit_strip`, so the
 first request after a source change rebuilds it.
 
 Stdlib only. Needs `magick` (ImageMagick) on PATH to render the previews and
@@ -29,27 +29,27 @@ MANIFEST = CORPUS / "ground_truth.json"
 PREVIEW_CACHE = ROOT / "target" / "annotate-previews"
 PORT = 8756
 
-# Frame height in tenths of a millimeter, mirroring FilmFormat::height_tenths
-# (src/protocol/caps/film.rs) - kept in sync by hand, there are only nine of
-# these and they don't change
-FORMAT_TENTHS = {
-    "ix240": 302,
-    "f135": 360,
-    "f135half": 180,
-    "f16": 200,
-    "f645": 415,
-    "f66": 560,
-    "f67": 695,
-    "f68": 760,
-    "f69": 840,
+# Frame height in dots of a 4000 dpi axis, mirroring
+# FilmFormat::height_dots_4000 (src/protocol/caps/film.rs) - kept in sync by
+# hand, there are only nine of these and they don't change
+FORMAT_DOTS_4000 = {
+    "ix240": 4756,
+    "f135": 5670,
+    "f135half": 2835,
+    "f16": 3150,
+    "f645": 6696,
+    "f66": 8964,
+    "f67": 10945,
+    "f68": 11969,
+    "f69": 13176,
 }
 
 
 def height_dots(fmt: str, dpi: float) -> int:
-    tenths = FORMAT_TENTHS.get(fmt)
-    if tenths is None:
+    dots = FORMAT_DOTS_4000.get(fmt)
+    if dots is None:
         return 0
-    return round(tenths * dpi / 254)
+    return round(dots * dpi / 4000)
 
 
 def guess_format(name: str) -> str:
@@ -112,20 +112,26 @@ def preview_png(name: str) -> bytes:
 
 
 def run_detect(name: str, fmt: str, polarity: str) -> list[int]:
-    """Shell out to the existing example and parse its stderr for columns"""
-    out_tmp = PREVIEW_CACHE / "detect-scratch.tiff"
+    """Shell out to the existing example and parse its output for columns
+
+    The fit does not take the film's polarity - a gap reads flat whichever way
+    round the film is - so `polarity` is accepted and ignored, to keep the
+    query string the page sends unchanged.
+    """
+    del polarity
     PREVIEW_CACHE.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run(
         [
-            "cargo", "run", "-q", "--example", "detect_frames", "--",
-            str(CORPUS / name), "--format", fmt, "--polarity", polarity,
-            "-o", str(out_tmp),
+            "cargo", "run", "-q", "--example", "fit_strip", "--",
+            str(CORPUS / name), "--format", fmt, "-o", str(PREVIEW_CACHE),
         ],
         cwd=ROOT,
         capture_output=True,
         text=True,
     )
-    return [int(m) for m in re.findall(r"columns \[(\d+),", proc.stderr)]
+    # The line of "start..end" places, which follows the summary line
+    places = re.findall(r"(\d+)\.\.(\d+)", proc.stdout)
+    return [int(start) for start, _ in places]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -267,8 +273,8 @@ PAGE = r"""<!doctype html>
     <button id="resetWb">reset WB</button>
     <button id="pickBase" title="click a gap between frames (or the border) afterward - that pixel becomes true black">pick film base as black</button>
     <button id="pickWb" title="click a point that should be neutral (gray/white) afterward - its color cast is removed, its own brightness kept">pick white balance point</button>
-    <button id="showDetect">show detect()</button>
-    <button id="startFromDetect" title="replaces the editable frames below with detect()'s current output, as a draft to correct against the image - not a verified placement">start from detect()</button>
+    <button id="showDetect">show fit()</button>
+    <button id="startFromDetect" title="replaces the editable frames below with the fit's current output, as a draft to correct against the image - not a verified placement">start from fit()</button>
     <button id="save" class="primary">save</button>
     <span id="status"></span>
   </div>
@@ -286,9 +292,9 @@ PAGE = r"""<!doctype html>
 <script>
 let files = [], current = null, frames = [], detected = null, drag = null, zoom = 4;
 
-// Mirrors FORMAT_TENTHS in this script / FilmFormat::height_tenths in Rust
-const FORMAT_TENTHS = { ix240: 302, f135: 360, f135half: 180, f16: 200, f645: 415, f66: 560, f67: 695, f68: 760, f69: 840 };
-function heightDots(fmt, dpi) { return Math.round(FORMAT_TENTHS[fmt] * dpi / 254); }
+// Mirrors FORMAT_DOTS_4000 in this script / FilmFormat::height_dots_4000 in Rust
+const FORMAT_DOTS_4000 = { ix240: 4756, f135: 5670, f135half: 2835, f16: 3150, f645: 6696, f66: 8964, f67: 10945, f68: 11969, f69: 13176 };
+function heightDots(fmt, dpi) { return Math.round(FORMAT_DOTS_4000[fmt] * dpi / 4000); }
 
 async function api(path, opts) { const r = await fetch(path, opts); return r.json(); }
 
@@ -319,7 +325,7 @@ async function select(name) {
   frames = [...current.frames];
   detected = null;
   setPickMode(null);
-  document.getElementById('showDetect').textContent = 'show detect()';
+  document.getElementById('showDetect').textContent = 'show fit()';
   document.querySelectorAll('#sidebar .item').forEach(d => d.classList.toggle('active', d.dataset.name === name));
   document.getElementById('title').textContent = name;
   document.getElementById('format').value = current.format;
@@ -340,9 +346,9 @@ async function select(name) {
   // just a draft: check it against the image before saving, this is
   // exactly the placement that might be wrong
   if (frames.length === 0) {
-    document.getElementById('status').textContent = 'seeding draft from detect()...';
+    document.getElementById('status').textContent = 'seeding draft from fit()...';
     frames = await fetchDetect();
-    document.getElementById('status').textContent = 'draft from detect() - verify against the image before saving';
+    document.getElementById('status').textContent = 'draft from fit() - verify against the image before saving';
     render();
   }
 }
@@ -447,7 +453,7 @@ function render() {
       el.className = 'detected';
       el.style.left = (x * zoom) + 'px';
       el.style.width = (len * zoom) + 'px';
-      el.innerHTML = '<div class="label">detect ' + x + '</div>';
+      el.innerHTML = '<div class="label">fit ' + x + '</div>';
       stage.insertBefore(el, document.getElementById('ruler'));
     });
   }
@@ -586,21 +592,21 @@ document.getElementById('showDetect').onclick = async () => {
   const btn = document.getElementById('showDetect');
   if (detected) {
     detected = null;
-    btn.textContent = 'show detect()';
+    btn.textContent = 'show fit()';
     render();
     return;
   }
-  document.getElementById('status').textContent = 'running detect()...';
+  document.getElementById('status').textContent = 'running fit()...';
   detected = await fetchDetect();
-  btn.textContent = 'hide detect()';
+  btn.textContent = 'hide fit()';
   document.getElementById('status').textContent = '';
   render();
 };
 
 document.getElementById('startFromDetect').onclick = async () => {
-  document.getElementById('status').textContent = 'running detect()...';
+  document.getElementById('status').textContent = 'running fit()...';
   frames = await fetchDetect();
-  document.getElementById('status').textContent = 'draft from detect() - verify against the image before saving';
+  document.getElementById('status').textContent = 'draft from fit() - verify against the image before saving';
   render();
 };
 

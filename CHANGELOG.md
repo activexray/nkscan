@@ -10,13 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - A frame moved along the feed, or a crop, can be scanned on a perforation-framed unit: it is registered with the unit first, so the film moves to it rather than being read as an offset into the frame it fell in.
-- `Scanned::frame_lines` and `ScanResult.frame_columns`, which say which columns of a pass are the frame.
+- `Scanned::frame_lines`, and `ScanResult.frame_columns` in Python as a `(start, end)` tuple. Both say which columns of a pass hold the frame, on a unit whose pass is longer than the frame.
 - `Options::polarity` and `scan_frame(positive=...)` in Python. A perforation-framed unit hands back a pass longer than the frame, and which way the film reads is what finds the picture inside it.
 
 ### Changed
 
 - Frames are found by the bare film between them rather than by their edges. Bare film has no picture on it, so it looks the same whichever way the film reads. Every frame on a strip gets one length and one spacing. `scan::strip` replaces `boundaries::detect`.
-- **Breaking:** `framing::discover`, `discover_with` and Python's `discover_frames` no longer take the film's polarity, and `boundaries::detect` and `Detected` are gone.
+- **Breaking:** Python `discover_frames` no longer takes `positive`. The signature is now `discover_frames(format=None, progress=None)`, so a call that passed `positive` positionally now passes it as `progress`, where it is silently ignored. Frames are found without it.
+- **Breaking:** Python `scan_frame` takes `positive` between `lock_white_balance` and `exposures`, so a call that passed `exposures` positionally now raises `TypeError`. Pass `exposures` by keyword.
+- **Breaking:** `framing::discover` and `discover_with` no longer take the film's polarity, and `boundaries::detect` and `Detected` are gone.
 - **Breaking:** `boundaries::locate` takes no expected length and returns the picture rather than an `Option`. It returns a range starting at column 0 when the pass began part way into the picture, which tells the caller the frame was clipped.
 - **Breaking:** `Scanned` has a new `frame_lines` field and `Options` a new `polarity` field.
 - A pass on a perforation-framed unit takes more than the frame, and the CLI writes all of it and names the frame's columns, as Nikon Scan does.

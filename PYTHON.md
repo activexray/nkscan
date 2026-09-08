@@ -75,6 +75,27 @@ Color negative meters each channel separately, which takes the orange mask off b
 
 `scan_frame` defaults to `True` whatever the film, so pass this explicitly when scanning negatives. `caps.hardware_metering` is `False` on every unit seen, an LS-9000 included - metering happens here rather than in the scanner, which is what makes the setting matter at all.
 
+## A pass longer than the frame
+
+On a unit that positions the film itself, the pass comes back longer than the
+frame and the frame sits somewhere inside it. `ScanResult.frame_columns` is the
+`(start, end)` of the frame in that pass, so the whole pass is yours to keep and
+the crop is yours to apply:
+
+```python
+result = session.scan_frame(frame, positive=False)
+start, end = result.frame_columns
+cropped = {name: plane[:, start:end] for name, plane in result.colors.items()}
+```
+
+`positive` says which way the film reads, which is what finds the picture in the
+pass: bare film is the brightest thing a negative holds and the densest a slide
+holds. Pass `positive=True` for slide and Kodachrome. Getting it wrong costs the
+frame its place, so set it whenever `caps.framing == "perforation"`.
+
+`caps.framing` says whether any of this applies. Every other unit addresses the
+film with the window, so the pass is the frame and `frame_columns` spans it.
+
 ## Nudging frames by hand
 
 `discover_frames` returns the thumbnail it detected against, keyed the same way `ScanResult.colors` is:

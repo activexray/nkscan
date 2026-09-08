@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** `framing::discover` and `discover_with` no longer take the film's polarity, and `boundaries::detect` and `Detected` are gone.
 - **Breaking:** `boundaries::locate` takes no expected length and returns the picture rather than an `Option`. It returns a range starting at column 0 when the pass began part way into the picture, which tells the caller the frame was clipped.
 - **Breaking:** `Scanned` has a new `frame_lines` field and `Options` a new `polarity` field.
-- A pass on a perforation-framed unit takes more than the frame, and the CLI writes all of it and names the frame's columns, as Nikon Scan does.
+- A pass on a perforation-framed unit takes more than the frame, and the CLI writes all of it and names the frame's columns. Cropping to the format would clip a camera whose gate is wider than it, and cropping to the picture would give the strip frames of different sizes.
 - `Capabilities.max_samples` in Python answers the SET WINDOW page, so a unit that reads a line once reports 1 and a multi-sample control can be hidden.
 
 ### Fixed

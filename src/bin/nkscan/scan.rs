@@ -352,8 +352,10 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
             }
 
             let pass = scanned.pass;
-            // Nikon Scan hands back the whole range it scanned and leaves the
-            // frame's place in it to whoever consumes the file; so does this
+            // The whole pass is written. The format is not reliably longer
+            // than the camera's gate, so cropping to it would clip the
+            // picture, and cropping to the picture would give the strip frames
+            // of different sizes. `frame_lines` says where the frame is
             let frame = scanned.frame_lines;
             // Writing what arrived is right for a short pass and wrong for an
             // empty one, which would be a black frame

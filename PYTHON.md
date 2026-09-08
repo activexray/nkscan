@@ -79,8 +79,12 @@ Color negative meters each channel separately, which takes the orange mask off b
 
 On a unit that positions the film itself, the pass comes back longer than the
 frame and the frame sits somewhere inside it. `ScanResult.frame_columns` is the
-`(start, end)` of the frame in that pass, so the whole pass is yours to keep and
-the crop is yours to apply:
+`(start, end)` of the frame in that pass.
+
+Nothing is cropped for you, and that is deliberate: a camera gate is often wider
+than the film format, so cropping to the format clips the picture, and cropping
+to the picture gives a strip frames of different sizes. Keep the pass, and use
+`frame_columns` to draw the frame or to crop on your own terms:
 
 ```python
 result = session.scan_frame(frame, positive=False)

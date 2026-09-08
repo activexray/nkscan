@@ -11,30 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A frame moved along the feed, or a crop, can be scanned on a perforation-framed unit: it is registered with the unit first, so the film moves to it rather than being read as an offset into the frame it fell in.
 - `Scanned::frame_lines` and `ScanResult.frame_columns`, which say which columns of a pass are the frame.
-- `Options::polarity` and `scan_frame(positive=...)` in Python, which find the frame in a pass longer than it.
+- `Options::polarity` and `scan_frame(positive=...)` in Python. A perforation-framed unit hands back a pass longer than the frame, and which way the film reads is what finds the picture inside it.
 
 ### Changed
 
-- Frames are found by the bare film between them rather than by their edges, which reads the same whichever way the film does. The strip is fitted with one length and one pitch for every frame. `scan::strip` replaces `boundaries::detect`.
+- Frames are found by the bare film between them rather than by their edges. Bare film has no picture on it, so it looks the same whichever way the film reads. Every frame on a strip gets one length and one spacing. `scan::strip` replaces `boundaries::detect`.
 - **Breaking:** `framing::discover`, `discover_with` and Python's `discover_frames` no longer take the film's polarity, and `boundaries::detect` and `Detected` are gone.
-- **Breaking:** `boundaries::locate` takes no expected length and answers the picture rather than an `Option`. A pass that opened inside the picture answers from column 0, which is how a caller tells that it clipped the frame.
+- **Breaking:** `boundaries::locate` takes no expected length and returns the picture rather than an `Option`. It returns a range starting at column 0 when the pass began part way into the picture, which tells the caller the frame was clipped.
 - **Breaking:** `Scanned` has a new `frame_lines` field and `Options` a new `polarity` field.
 - A pass on a perforation-framed unit takes more than the frame, and the CLI writes all of it and names the frame's columns, as Nikon Scan does.
 - `Capabilities.max_samples` in Python answers the SET WINDOW page, so a unit that reads a line once reports 1 and a multi-sample control can be hidden.
 
 ### Fixed
 
-- A frame is placed by the bare film either side of the picture, not by the strength of its edges. The edge finder read one frame 2.8 mm out and moved the film that far, so the picture ran off the head of the pass and the next frame showed at the tail.
-- A pass that opened inside the picture is placed from the film behind it, a frame's length back. `take_picture_start` is signed for it.
+- A frame is placed by the bare film either side of the picture, not by the strength of its edges. The old edge finder was 2.8 mm out on one frame and moved the film that far, so the picture ran off the start of the pass and the next frame appeared at the end.
+- A frame is placed from the film after the picture when the pass began part way into it. There is no film before the picture to measure in that case, which is the case that most needs the correction. `take_picture_start` is now signed.
 - A pass reads its levels against its own full scale. A 14-bit unit put every level in the bottom quarter of a 16-bit range, so nothing in the pass looked like bare film.
 - Moving a frame back past the start of the axis keeps its length. The two edges were clamped separately, which left the frame shorter than the format.
-- A frame is scanned at the format the caller asked for, not the length the detection measured off the picture. That length also set the film taken ahead of the frame, so a short measurement both cut the scan and moved the film.
+- A frame is scanned at the format the caller asked for, not at the length measured off the picture. That length also set how much film the pass took before the frame, so one short measurement both cropped the scan and moved the film.
 - The film formats carry Nikon Scan's own frame lengths in address units - 6696 for 6x4.5, 8964 for 6x6, 13176 for 6x9 - rather than a rounded millimeter, which reached 8961 of 6x6's 8964.
-- A frame length is converted to thumbnail lines as a length, not as a position, so a unit whose Y range starts above zero no longer loses that origin from it.
+- A frame length is converted to thumbnail lines as a length, not as a position. On a unit whose Y range starts above zero the conversion subtracted that start, making the length too short.
 - `--samples` above 1 on a unit with no multi-read mode is refused before the stage moves, with `multisampling is not supported`. An LS-50 reported mode bits after the thumbnail and the focus.
 - The thumbnail line is measured against the unit's own perforation table, 2-11-8, rather than computed from the resolution the unit reports. An LS-50 reports 97 dpi, so a line was taken as 41 addresses where the film moves 42.0.
-- A frame on a perforation-framed unit is centered in its pass. It opened on the first line of the picture before, with no film in front of it to find the leading edge against.
-- The correction that moves a frame onto the range aims at the middle of it, moves the whole rectangle, and moves in either direction. Moving the top alone left the pass looking for a frame short by however far it moved.
+- A frame on a perforation-framed unit is centered in its pass. The pass used to start on the first line of the picture, leaving no film before it to find the frame's leading edge against.
+- The correction that moves a frame onto the scannable range aims at the middle of that range, moves the whole rectangle, and moves in either direction. Moving the top without the bottom made the frame shorter by however far it moved.
 - Metering on a perforation-framed unit measured the film in front of the frame, which cost up to a third of a stop on a dense negative.
 - `DataType::Boundary2` reads back: the transfer length is the valid data plus the record's own header, and `from_bytes` wanted a parameter length a byte shorter than `to_bytes` writes.
 - The frame table is put back after a pass that corrected a frame's place, so scanning one frame twice no longer moves the film about 4 mm.

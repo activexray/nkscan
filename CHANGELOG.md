@@ -30,14 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Moving a frame back past the start of the axis keeps its length. The two edges were clamped separately, which left the frame shorter than the format.
 - A frame is scanned at the format the caller asked for, not the length the detection measured off the picture. That length also set the film taken ahead of the frame, so a short measurement both cut the scan and moved the film.
 - The film formats carry Nikon Scan's own frame lengths in address units - 6696 for 6x4.5, 8964 for 6x6, 13176 for 6x9 - rather than a rounded millimeter, which reached 8961 of 6x6's 8964.
-- The nominal frame length handed to the detection was measured from the axis origin rather than as a length, so on a unit whose Y range does not start at zero it was short by the origin.
+- A frame length is converted to thumbnail lines as a length, not as a position, so a unit whose Y range starts above zero no longer loses that origin from it.
 - `--samples` above 1 on a unit with no multi-read mode is refused before the stage moves, with `multisampling is not supported`. An LS-50 reported mode bits after the thumbnail and the focus.
 - The thumbnail line is measured against the unit's own perforation table, 2-11-8, rather than computed from the resolution the unit reports. An LS-50 reports 97 dpi, so a line was taken as 41 addresses where the film moves 42.0.
 - A frame on a perforation-framed unit is centered in its pass. It opened on the first line of the picture before, with no film in front of it to find the leading edge against.
 - The correction that moves a frame onto the range aims at the middle of it, moves the whole rectangle, and moves in either direction. Moving the top alone left the pass looking for a frame short by however far it moved.
 - Metering on a perforation-framed unit measured the film in front of the frame, which cost up to a third of a stop on a dense negative.
-- A frame on a perforation-framed unit came back about a millimeter out, with the gap ahead of it at the head of the file and as much missing from the tail.
-- A frame the detection placed early is moved back onto the range from where the metering pass measured it.
 - `DataType::Boundary2` reads back: the transfer length is the valid data plus the record's own header, and `from_bytes` wanted a parameter length a byte shorter than `to_bytes` writes.
 - The frame table is put back after a pass that corrected a frame's place, so scanning one frame twice no longer moves the film about 4 mm.
 - Multi-sampling on a unit that attaches invalid bytes to a line. It attaches them to each reading, not to the line, so `--samples 2` at 4000 dpi asked for 2.2 MB less than the unit sends and then stopped answering.

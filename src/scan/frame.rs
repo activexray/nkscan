@@ -122,13 +122,26 @@ pub fn scan_frame_with(
     let measured = session.take_picture_start();
     let corrected = framing::recentered(session.capabilities(), frame, measured);
     if let Some(rect) = corrected {
-        registered |= framing::register(session, rect)?;
-        debug!(
-            from = original.top,
-            to = rect.top,
-            "registered the frame where the metering pass measured it"
-        );
-        frame = rect;
+        // A correction is an improvement on a rectangle that already scans, so
+        // one the unit will not take leaves the frame where it was rather than
+        // failing the pass. The commonest reason is a top past wherever the
+        // perforation table stopped counting, at the end of a strip
+        match framing::register(session, rect) {
+            Ok(wrote) => {
+                registered |= wrote;
+                debug!(
+                    from = original.top,
+                    to = rect.top,
+                    "registered the frame where the metering pass measured it"
+                );
+                frame = rect;
+            }
+            Err(e) => warn!(
+                %e,
+                to = rect.top,
+                "could not register the measured place, so the frame is scanned where it was"
+            ),
+        }
     }
 
     let over = framing::pass_rect(session.capabilities(), frame, session.gate_offset());

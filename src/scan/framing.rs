@@ -217,11 +217,17 @@ pub(crate) fn recentered(caps: &Capabilities, frame: Rect, at: Option<i32>) -> O
         return None;
     }
     // The whole rectangle moves: the same frame, elsewhere on the film. Never
-    // back past the start of the axis, which would clamp the two edges
-    // differently and change the frame's length
+    // off either end of the axis, which would clamp the two edges differently
+    // and change the frame's length, and would aim the stage at film the pass
+    // cannot reach. The start wins where the axis cannot hold the frame at all
+    let axis = &caps.address.y_axis;
     let by = by
-        .max(-i64::from(frame.top))
+        .min(i64::from(axis.address_range.last) - i64::from(frame.bottom))
+        .max(i64::from(axis.address_range.start) - i64::from(frame.top))
         .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+    if by == 0 {
+        return None;
+    }
     Some(Rect {
         top: frame.top.saturating_add_signed(by),
         bottom: frame.bottom.saturating_add_signed(by),
@@ -531,6 +537,47 @@ mod tests {
             "a picture measured behind the pass moves the frame back, not on"
         );
         assert_eq!(clipped.bottom - clipped.top, frame.bottom - frame.top);
+    }
+
+    /// The correction moves the frame on the film, so it must not aim it off
+    /// the end of the axis: the stage cannot reach there, and the perforation
+    /// table stops counting past the last perforation on the strip
+    #[test]
+    fn a_correction_stays_on_the_axis() {
+        let mut perforated = caps();
+        perforated.features.data_types |= DataTypes::PERFORATION_READ;
+        perforated.address.thumbnail_resolution = (83u16..=83u16).into();
+        let axis = perforated.address.y_axis.address_range;
+        let extent = 11964;
+
+        // Hard against the far end, so every correction that would move it on
+        // has nowhere to go
+        let late = Rect {
+            top: axis.last - extent,
+            left: 518,
+            bottom: axis.last,
+            right: 518 + 8964,
+        };
+        assert_eq!(recentered(&perforated, late, Some(30_000)), None);
+
+        // And against the near end, where one that would move it back has none
+        let early = Rect {
+            top: axis.start,
+            bottom: axis.start + extent,
+            ..late
+        };
+        assert_eq!(recentered(&perforated, early, Some(-30_000)), None);
+
+        // A correction with room for only part of the move takes that part,
+        // and the frame keeps its length
+        let room = Rect {
+            top: late.top - 300,
+            bottom: late.bottom - 300,
+            ..late
+        };
+        let moved = recentered(&perforated, room, Some(30_000)).expect("a correction");
+        assert_eq!(moved.bottom, axis.last);
+        assert_eq!(moved.bottom - moved.top, extent);
     }
 
     /// A shorter rectangle is not a frame to put on the range

@@ -270,11 +270,13 @@ pub fn pass_rect(caps: &Capabilities, frame: Rect, offset: Option<u32>) -> Rect 
 /// unit's table if the session knows none. A top already in the table is left
 /// alone.
 ///
-/// The session keeps the measured table, not this one. The next rectangle must
-/// start from the measured table, because an entry is replaced and not added
-pub fn register(session: &mut Session, frame: Rect) -> Result<(), Error> {
+/// Answers whether a table was written, which is what the caller has to undo:
+/// the session keeps the measured table, not this one, and the next rectangle
+/// must start from the measured table because an entry is replaced and not
+/// added
+pub fn register(session: &mut Session, frame: Rect) -> Result<bool, Error> {
     if Framing::choose(session.capabilities()) != Framing::Perforation {
-        return Ok(());
+        return Ok(false);
     }
     let mut table = match session.frames_type2() {
         Some(table) => table.clone(),
@@ -283,12 +285,12 @@ pub fn register(session: &mut Session, frame: Rect) -> Result<(), Error> {
             Ok(table) => table,
             Err(e) => {
                 debug!(%e, "no frame table to register against");
-                return Ok(());
+                return Ok(false);
             }
         },
     };
     if table.frames.is_empty() || table.frames.iter().any(|f| f.top == frame.top) {
-        return Ok(());
+        return Ok(false);
     }
 
     let (line, perf) = record(session, frame.top)?;
@@ -299,7 +301,8 @@ pub fn register(session: &mut Session, frame: Rect) -> Result<(), Error> {
         ?perf,
         "registered a frame off the table"
     );
-    session.set_boundaries_type2_for_pass(&table)
+    session.set_boundaries_type2_for_pass(&table)?;
+    Ok(true)
 }
 
 /// The perforation record that puts the top of a frame at `top`

@@ -93,7 +93,10 @@ pub fn scan_frame_with(
     // The pass is longer than the frame where the unit positions the film
     let over = framing::pass_rect(session.capabilities(), frame, session.gate_offset());
 
-    framing::register(session, frame)?;
+    // A table written for this pass has to come back off the unit afterwards,
+    // whether it was written for the rectangle as asked for or for the place
+    // the metering pass then measured
+    let mut registered = framing::register(session, frame)?;
     session.focus_frame(over, Focus::default())?;
 
     let exposures = match options.exposures {
@@ -119,7 +122,7 @@ pub fn scan_frame_with(
     let measured = session.take_picture_start();
     let corrected = framing::recentered(session.capabilities(), frame, measured);
     if let Some(rect) = corrected {
-        framing::register(session, rect)?;
+        registered |= framing::register(session, rect)?;
         debug!(
             from = original.top,
             to = rect.top,
@@ -137,9 +140,9 @@ pub fn scan_frame_with(
     // The table goes back to what it measured, so the next rectangle of this
     // session starts from the measured table rather than this one's place.
     // Written rather than registered: `register` starts from the measured
-    // table, and the original top is still in it, so it would find nothing to
-    // do and leave this pass's table in the unit
-    if frame != original
+    // table, and would find the entry it wants already in it, so it would do
+    // nothing and leave this pass's table in the unit
+    if registered
         && let Some(measured) = session.frames_type2().cloned()
         && let Err(e) = session.set_boundaries_type2_for_pass(&measured)
     {

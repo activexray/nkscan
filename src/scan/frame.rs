@@ -229,6 +229,7 @@ fn lines_of(
         return 0..pass.cols;
     }
 
-    // The window addressed the film itself, so the pass is the frame
-    0..expected.min(pass.cols)
+    // The window addressed the film itself, so the pass is the frame, however
+    // the readout rounded the extent to whole blocks
+    0..pass.cols
 }

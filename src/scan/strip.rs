@@ -10,15 +10,18 @@
 //! the frames are what lies between them. The level is never used, so which
 //! way the film reads does not matter.
 //!
-//! The count comes from the holder. A frame nobody exposed reads as bare film,
-//! so a count measured from the pass leaves it out, and a blank scan is a
-//! better answer than a missing one.
+//! The count falls out of the fit. The film that holds a picture is so many
+//! pitches long, and the pitch is what is being searched, so each candidate
+//! pitch says how many frames it would take to cover that film. A frame
+//! nobody exposed is still counted where the film either side of it is, since
+//! the fit spans it; one at the end of the strip is not, because nothing in
+//! the pass distinguishes it from the bare film past the last frame.
 //!
 //! The format bounds the pitch search. It is not the answer: a camera gate is
 //! not the rectangle the caller scans.
 
 use crate::protocol::decode::Image;
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 use tracing::*;
 
 /// Rows to drop at each end of the sensor axis. The holder edge is a step that
@@ -33,16 +36,34 @@ const REACH: usize = 2;
 /// detail signal
 const SCALE: f32 = 0.90;
 
-/// The share taken to be bare film. Halfway between this and [`SCALE`] is
-/// where a column stops being film
+/// The share taken to be bare film, which is the flat end of the signal
 const BARE: f32 = 0.10;
+
+/// How far from bare film's own level a column may read and still be bare, as
+/// a share of the way to what a picture reads
+const TOLERANCE: f32 = 0.15;
+
+/// The longest flat stretch that lies inside one picture rather than between
+/// two, as a share of the format. A picture is not busy end to end - a sky, a
+/// wall, a wash of shadow - and those parts of it read as flat as film
+const CLOSE: f32 = 0.70;
 
 /// The pitch to search, in twentieths of the format. A short wind leaves the
 /// frames almost touching and a long one leaves film between them
-const PITCH: Range<usize> = 18..31;
+const PITCH: RangeInclusive<usize> = 18..=31;
 
 /// The fewest columns of picture a frame may have
 const PICTURE: usize = 8;
+
+/// The least of the format a run of picture must span to be a frame's, as a
+/// share of it
+///
+/// The edge of the holder's opening, and the cut end of the strip, put a step
+/// across the sensor: every row of those columns differs, which is exactly
+/// what a picture looks like here. They span a few columns against the format
+/// or more that a frame's picture runs, so a short run is one of those and
+/// says nothing about where the film with pictures on it begins or ends
+const RUN: f32 = 0.50;
 
 /// The frames of a strip, in columns of the thumbnail
 #[derive(Debug, Clone, PartialEq)]
@@ -127,21 +148,51 @@ impl Detail {
 
     /// The columns that hold a picture
     ///
-    /// A pass runs from the holder to past the end of the film. Neither of
-    /// those holds a picture, so neither holds a frame
-    fn film(&self) -> Range<usize> {
+    /// A pass runs from the holder, over the film, and out past the end of it.
+    /// Only the film with pictures on it holds frames, and how long that is
+    /// says how many frames a proposed pitch would take.
+    ///
+    /// Three things separate it from the rest of the pass, and `length` - the
+    /// format - is the ruler for two of them. Bare film reads flat, so a
+    /// column within [`TOLERANCE`] of the flattest in the pass is not picture.
+    /// A flat stretch shorter than [`CLOSE`] of the format is inside one
+    /// picture rather than between two. And a run of picture shorter than
+    /// [`RUN`] of the format is an edge rather than a frame's
+    fn film(&self, length: usize) -> Range<usize> {
         let mut sorted = self.at.clone();
         sorted.sort_by(f32::total_cmp);
         let at = |q: f32| sorted[((sorted.len() as f32 * q) as usize).min(sorted.len() - 1)];
-        let level = (at(BARE) + at(SCALE)) / 2.0;
-        let (Some(first), Some(last)) = (
-            self.at.iter().position(|&v| v > level),
-            self.at.iter().rposition(|&v| v > level),
-        ) else {
+        let bare = at(BARE);
+        let level = bare + (at(SCALE) - bare) * TOLERANCE;
+        let close = (length as f32 * CLOSE) as usize;
+        let least = ((length as f32 * RUN) as usize).max(1);
+
+        let mut runs: Vec<Range<usize>> = Vec::new();
+        let mut x = 0;
+        while x < self.at.len() {
+            if self.at[x] <= level {
+                x += 1;
+                continue;
+            }
+            let from = x;
+            while x + 1 < self.at.len() && self.at[x + 1] > level {
+                x += 1;
+            }
+            match runs.last_mut() {
+                Some(last) if from - last.end <= close => last.end = x + 1,
+                _ => runs.push(from..x + 1),
+            }
+            x += 1;
+        }
+
+        let kept: Vec<&Range<usize>> = runs.iter().filter(|r| r.len() >= least).collect();
+        match (kept.first(), kept.last()) {
+            // Whatever lies between the first run of picture and the last is
+            // film too: a gap, or a frame nobody exposed
+            (Some(a), Some(b)) => a.start..b.end,
             // Flat end to end: an empty holder, or a pass that saw no film
-            return 0..0;
-        };
-        first..(last + 1).min(self.at.len())
+            _ => 0..0,
+        }
     }
 
     /// The lowest detail within [`REACH`] of `at`, which is the best a gap
@@ -178,28 +229,28 @@ fn score(detail: &Detail, first: usize, pitch: usize, frames: usize) -> f32 {
 /// Fit the frames of a strip to its thumbnail
 ///
 /// `length` is the frame the caller scans, in columns, which bounds the pitch
-/// search. `frames` is the count the holder takes. Without it the film the
-/// pass found sets the count, which leaves out any frame nobody exposed.
-/// `None` where the pass holds no frames
-pub fn find(image: &Image, frames: Option<usize>, length: usize) -> Option<Strip> {
+/// search. `None` where the pass holds no frames
+pub fn find(image: &Image, length: usize) -> Option<Strip> {
     if length == 0 || image.cols == 0 {
         return None;
     }
     let detail = Detail::new(detail(image));
     let cols = image.cols;
-    let film = detail.film();
-
-    // The format is shorter than the pitch, because a wind leaves film between
-    // the frames, so this rounds down to the frames that fit
-    let frames = frames.unwrap_or(film.len() / length);
-    debug!(?film, cols, frames, "the picture in the pass");
-    if frames == 0 {
-        return None;
-    }
+    let film = detail.film(length);
+    debug!(?film, cols, length, "the picture in the pass");
 
     let least = PICTURE + 2 * REACH + 2;
-    let mut best: Option<(f32, usize, usize)> = None;
-    for pitch in (length * PITCH.start / 20).max(least)..=(length * PITCH.end / 20).max(least) {
+    let mut best: Option<(f32, usize, usize, usize)> = None;
+    for pitch in (length * PITCH.start() / 20).max(least)..=(length * PITCH.end() / 20).max(least) {
+        // The film runs from the first frame's picture to the last one's, so
+        // it is that many pitches long bar the gap the last frame has no
+        // picture over. Nearest rather than rounded either way: that gap is a
+        // fraction of a pitch, and so is however far the level put the ends of
+        // the run inside or outside the pictures themselves
+        let frames = (film.len() + pitch / 2) / pitch;
+        if frames == 0 {
+            continue;
+        }
         // A frame either side of the picture, since the outermost frames may
         // be blank and hold no picture to be found by
         let from = film.start.saturating_sub(pitch);
@@ -211,12 +262,12 @@ pub fn find(image: &Image, frames: Option<usize>, length: usize) -> Option<Strip
         for first in from..=last {
             let at = score(&detail, first, pitch, frames);
             if best.is_none_or(|(had, ..)| at > had) {
-                best = Some((at, first, pitch));
+                best = Some((at, first, pitch, frames));
             }
         }
     }
 
-    let (contrast, first, pitch) = best?;
+    let (contrast, first, pitch, frames) = best?;
     let found: Vec<Range<usize>> = (0..frames).map(|k| picture(first, pitch, k)).collect();
     debug!(?found, pitch, contrast, "fitted the strip");
     Some(Strip {
@@ -254,12 +305,12 @@ mod tests {
         scan::boundaries::{Polarity, tests::Strip as Film},
     };
 
-    /// Fit a rendered strip, telling it `frames` where the caller would know
-    fn fit(film: &Film, frames: Option<usize>, length: usize) -> Strip {
+    /// Fit a rendered strip
+    fn fit(film: &Film, length: usize) -> Strip {
         let samples: Samples = film.render();
         let layout = film.layout();
         let image = Image::new(&layout, &samples).expect("the buffer is the layout's size");
-        find(&image, frames, length).expect("a strip with frames on it")
+        find(&image, length).expect("a strip with frames on it")
     }
 
     /// Every frame drawn has its middle inside the frame fitted to it
@@ -283,7 +334,7 @@ mod tests {
     #[test]
     fn a_fitted_strip_is_regular() {
         let film = Film::new(vec![30, 162, 294, 426], 120, Polarity::Negative);
-        let found = fit(&film, Some(4), 120);
+        let found = fit(&film, 120);
         assert!(
             found.pitch.abs_diff(132) <= REACH,
             "pitch {} in {:?}",
@@ -304,7 +355,7 @@ mod tests {
         let want = [30, 162, 294, 426];
         let fits: Vec<Strip> = [Polarity::Positive, Polarity::Negative]
             .into_iter()
-            .map(|polarity| fit(&Film::new(want.to_vec(), 120, polarity), Some(4), 120))
+            .map(|polarity| fit(&Film::new(want.to_vec(), 120, polarity), 120))
             .collect();
         holds(&fits[0], &want, 120);
         assert_eq!(fits[0].frames, fits[1].frames);
@@ -317,7 +368,7 @@ mod tests {
         let mut film = Film::new(vec![30, 162, 294], 120, Polarity::Positive);
         film.feed = 560;
         film.gate = Some((430, 520));
-        holds(&fit(&film, Some(3), 120), &[30, 162, 294], 120);
+        holds(&fit(&film, 120), &[30, 162, 294], 120);
     }
 
     /// A frame under the holder mask is still where it is. Moved down to clear
@@ -326,7 +377,7 @@ mod tests {
     fn a_frame_behind_the_holder_mask_keeps_its_place() {
         let mut film = Film::new(vec![20, 152, 284], 120, Polarity::Positive);
         film.mask = 40;
-        holds(&fit(&film, Some(3), 120), &[20, 152, 284], 120);
+        holds(&fit(&film, 120), &[20, 152, 284], 120);
     }
 
     /// A flat picture reads as evenly as a gap, and the ladder is what puts it
@@ -336,18 +387,18 @@ mod tests {
         for polarity in [Polarity::Positive, Polarity::Negative] {
             let mut film = Film::new(vec![30, 162, 294], 120, polarity);
             film.flat = Some(1);
-            holds(&fit(&film, Some(3), 120), &[30, 162, 294], 120);
+            holds(&fit(&film, 120), &[30, 162, 294], 120);
         }
     }
 
-    /// An unexposed frame is the same film as the gap around it. Nothing shows
-    /// there, so the count and the wind are the whole of what places it, which
-    /// is the reason the count is asked for rather than measured
+    /// An unexposed frame is the same film as the gap around it. The frames
+    /// either side of it are what place it: the film runs past it, so the fit
+    /// spans it and the ladder puts a frame where the wind says
     #[test]
     fn a_frame_with_no_picture_in_it_still_gets_a_place() {
         let mut film = Film::new(vec![30, 162, 294, 426], 120, Polarity::Positive);
         film.blank = Some(2);
-        holds(&fit(&film, Some(4), 120), &[30, 162, 294, 426], 120);
+        holds(&fit(&film, 120), &[30, 162, 294, 426], 120);
     }
 
     /// A wind barely longer than the gate leaves the frames all but touching,
@@ -356,7 +407,7 @@ mod tests {
     #[test]
     fn a_short_wind_comes_back_short() {
         let film = Film::new(vec![30, 155, 280], 120, Polarity::Negative);
-        let found = fit(&film, Some(3), 120);
+        let found = fit(&film, 120);
         assert!(
             found.pitch.abs_diff(125) <= REACH,
             "pitch {} in {:?}",
@@ -366,13 +417,29 @@ mod tests {
         holds(&found, &[30, 155, 280], 120);
     }
 
-    /// Where the holder does not say, the film the pass found has room for so
-    /// many frames of the format and no more
+    /// The film with pictures on it is so many pitches long, and that is the
+    /// count. Nothing else says it
     #[test]
-    fn the_film_says_how_many_frames_when_nothing_else_does() {
+    fn the_film_says_how_many_frames() {
         let film = Film::new(vec![30, 162, 294, 426], 120, Polarity::Negative);
-        let found = fit(&film, None, 120);
+        let found = fit(&film, 120);
         holds(&found, &[30, 162, 294, 426], 120);
+        assert_eq!(found.frames.len(), 4);
+    }
+
+    /// The holder's opening has an edge at each end, and a cut film has one
+    /// too. Each is a step across the sensor, which is what a picture looks
+    /// like here, but a few columns of it is not the format and so is not a
+    /// frame's picture. Counting from the first column of detail to the last
+    /// would take the whole opening and find a frame that was never there
+    #[test]
+    fn an_edge_at_the_end_of_the_pass_is_not_a_frame() {
+        let mut film = Film::new(vec![30, 162, 294], 120, Polarity::Negative);
+        film.feed = 700;
+        film.edges = vec![(20, 24), (540, 578)];
+        let found = fit(&film, 120);
+        assert_eq!(found.frames.len(), 3, "{:?}", found.frames);
+        holds(&found, &[30, 162, 294], 120);
     }
 
     /// A holder with nothing in it has no film in the pass to put a frame on
@@ -382,7 +449,7 @@ mod tests {
         let samples = film.render();
         let layout = film.layout();
         let image = Image::new(&layout, &samples).expect("the buffer is the layout's size");
-        assert!(find(&image, None, 120).is_none());
+        assert!(find(&image, 120).is_none());
     }
 
     /// The format is the frame the caller asked for and the picture is what

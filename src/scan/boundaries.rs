@@ -212,6 +212,10 @@ pub(crate) mod tests {
         pub(crate) gate: Option<(usize, usize)>,
         /// Columns of holder mask before the film starts
         pub(crate) mask: usize,
+        /// Stretches where the sensor sees a step rather than film: the edge
+        /// of the holder's opening, or the cut end of the strip. Every row of
+        /// such a column differs, the way a picture's does
+        pub(crate) edges: Vec<(usize, usize)>,
     }
 
     impl Strip {
@@ -226,6 +230,7 @@ pub(crate) mod tests {
                 blank: None,
                 gate: None,
                 mask: 0,
+                edges: Vec::new(),
             }
         }
 
@@ -240,6 +245,8 @@ pub(crate) mod tests {
                     .position(|&top| (top..top + self.length).contains(&x));
 
                 let (value, contrast) = match inside {
+                    // A step across the sensor, whatever the film beneath it
+                    _ if self.edges.iter().any(|&(a, b)| (a..b).contains(&x)) => (30000, 0.95),
                     _ if x < self.mask => (140, 0.10),
                     _ if self.gate.is_some_and(|(a, b)| (a..b).contains(&x)) => (65200, 0.0),
                     Some(n) if Some(n) == self.blank => (level.between, 0.0),

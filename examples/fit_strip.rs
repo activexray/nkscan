@@ -1,10 +1,11 @@
 //! Scratch: run `scan::strip::find` against saved thumbnails and draw the fit.
 //!
-//! The frame count and the format come from the file name where they are in
-//! it, so the whole `thumbnails/` corpus can be run in one loop.
+//! The format comes from the file name where it is in it, so the whole
+//! `thumbnails/` corpus can be run in one loop. The count in the name is what
+//! the fit is checked against, never an input to it.
 //!
 //! ```text
-//! cargo run --example fit_strip -- <thumbnail.tiff>... [--frames N] [--format f135] [-o dir]
+//! cargo run --example fit_strip -- <thumbnail.tiff>... [--format f135] [-o dir]
 //! ```
 
 use nkscan::{
@@ -26,19 +27,26 @@ fn resolution(decoder: &mut Decoder<impl std::io::Read + std::io::Seek>, tag: Ta
     }
 }
 
+/// The corpus names a format the way a photographer does, `--format` the way
+/// `FilmFormat` spells it, and `scripts/annotate.py` sends the latter
 fn format_of(name: &str) -> FilmFormat {
     match name {
-        n if n.contains("6x45") => FilmFormat::F645,
-        n if n.contains("6x6") || n.contains("holga") => FilmFormat::F66,
-        n if n.contains("6x7") => FilmFormat::F67,
-        n if n.contains("6x9") => FilmFormat::F69,
+        n if n.contains("6x45") || n == "f645" => FilmFormat::F645,
+        n if n.contains("6x6") || n.contains("holga") || n == "f66" => FilmFormat::F66,
+        n if n.contains("6x7") || n == "f67" => FilmFormat::F67,
+        n if n.contains("6x8") || n == "f68" => FilmFormat::F68,
+        n if n.contains("6x9") || n == "f69" => FilmFormat::F69,
+        "f135half" | "half" => FilmFormat::F135Half,
+        "ix240" => FilmFormat::IX240,
+        "f16" => FilmFormat::F16,
         _ => FilmFormat::F135,
     }
 }
 
-/// `..._6frames.tiff` says six
+/// `..._6frames.tiff` says six. The last such word in the name, so
+/// `..._mising_frames_4frames` is four
 fn frames_of(name: &str) -> Option<usize> {
-    let at = name.find("frames")?;
+    let at = name.rfind("frames")?;
     let digits: String = name[..at]
         .chars()
         .rev()
@@ -61,7 +69,6 @@ fn deinterleave3(chunky: &[u16]) -> Vec<Vec<u16>> {
 
 fn main() {
     let mut inputs = Vec::new();
-    let mut frames_arg = None;
     let mut format_arg = None;
     let mut out_dir = PathBuf::from(".");
 
@@ -69,10 +76,6 @@ fn main() {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--frames" => {
-                frames_arg = Some(args[i + 1].parse().unwrap());
-                i += 2;
-            }
             "--format" => {
                 format_arg = Some(format_of(&args[i + 1].to_ascii_lowercase()));
                 i += 2;
@@ -94,12 +97,8 @@ fn main() {
             .and_then(|s| s.to_str())
             .unwrap_or_default()
             .to_string();
-        // --frames 0 asks the fit to work the count out from the film
-        let frames = match frames_arg {
-            Some(0) => None,
-            Some(n) => Some(n),
-            None => frames_of(&name),
-        };
+        // What the name says, to check the fit against
+        let want = frames_of(&name);
         let format = format_arg.unwrap_or_else(|| format_of(&name));
 
         let file = std::fs::File::open(input).unwrap();
@@ -124,15 +123,19 @@ fn main() {
 
         let nominal = format.height_dots(dpi.round() as u16) as usize;
         let started = std::time::Instant::now();
-        let Some(found) = strip::find(&image, frames, nominal) else {
+        let Some(found) = strip::find(&image, nominal) else {
             eprintln!("{name}: no fit");
             continue;
         };
         let took = started.elapsed();
 
+        let verdict = match want {
+            Some(n) if n != found.frames.len() => " MISCOUNT",
+            _ => "",
+        };
         println!(
-            "{name}: {cols}x{rows} @{dpi:.0}dpi {format:?} want {frames:?} nominal {nominal}\n  \
-             {} frames pitch {} picture {} contrast {:.3} in {}ms",
+            "{name}: {cols}x{rows} @{dpi:.0}dpi {format:?} want {want:?} nominal {nominal}\n  \
+             {} frames{verdict} pitch {} picture {} contrast {:.3} in {}ms",
             found.frames.len(),
             found.pitch,
             found.frames[0].len(),

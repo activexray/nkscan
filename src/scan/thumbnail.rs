@@ -181,7 +181,7 @@ pub fn frames(
     let end = caps.address.y_axis.address_range.last;
     let (left, width) = opening(caps);
 
-    let Some(found) = strip::find(&image, None, (format / pitch) as usize) else {
+    let Some(found) = strip::find(&image, (format / pitch) as usize) else {
         info!("nothing on the strip to frame");
         return Ok(Boundary::default());
     };
@@ -250,7 +250,7 @@ pub fn frames_type2(
     let end = caps.address.y_axis.address_range.last;
     let range = caps.address.y_axis.boundary;
 
-    let Some(found) = strip::find(&image, None, pitch.columns(format)) else {
+    let Some(found) = strip::find(&image, pitch.columns(format)) else {
         info!("nothing on the strip to frame");
         return Ok((BoundaryType2::default(), format));
     };

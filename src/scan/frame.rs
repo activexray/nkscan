@@ -110,27 +110,14 @@ pub fn scan_frame_with(
         }
     };
 
-    // A whole frame can be put where the range takes all of it. The unit
-    // latches the film by the record at the detected top, and a top the
-    // detection placed early leaves the frame part-way out the end of the
-    // range, where no window can read it. Metering measured where the frame
-    // actually started, and registering the record that far on moves the
-    // frame to the top of the range. The line the record comes back for is
-    // below the one measured, by the fraction the computed pitch is short
-    // of the film's own, so the frame lands at the top rather than before it
+    // Metering measured where the film starts its picture, which says whether
+    // the range holds all of this frame
     let original = frame;
     let mut frame = frame;
     // Taken whether or not this rectangle is a whole frame: a reading that
     // belongs to one pass must not survive into the next
     let measured = session.take_picture_start();
-    let corrected = framing::whole_frame(session.capabilities(), frame)
-        .then_some(measured)
-        .flatten()
-        .filter(|at| *at > 0)
-        .map(|at| Rect {
-            top: frame.top + at,
-            ..frame
-        });
+    let corrected = framing::recentered(session.capabilities(), frame, measured);
     if let Some(rect) = corrected {
         framing::register(session, rect)?;
         debug!(
@@ -202,10 +189,16 @@ fn lines_of(
     if framing::Framing::choose(session.capabilities()) == framing::Framing::Perforation {
         if let Some(found) = polarity
             .zip(Image::new(&pass.layout, samples).ok())
-            .and_then(|(pol, image)| boundaries::locate(&image, expected, pol))
+            .map(|(pol, image)| boundaries::locate(&image, pol))
+            .filter(|found| !found.is_empty())
         {
-            session.note_gate_offset((found.start as u32) * pitch);
-            debug!(?found, "the frame in the pass");
+            // Only where the pass opened on film. A pass that opened inside
+            // the picture starts its picture at column 0 whatever the offset
+            // really was, and that would size every later pass short
+            if found.start > 0 {
+                session.note_gate_offset((found.start as u32) * pitch);
+            }
+            debug!(?found, "the picture in the pass");
             return found.start..found.end.min(pass.cols);
         }
         if let Some(offset) = session.gate_offset() {

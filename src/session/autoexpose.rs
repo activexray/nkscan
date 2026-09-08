@@ -224,9 +224,9 @@ impl Session {
     /// The columns of a metering pass that are the frame, where the unit
     /// positions the film itself
     ///
-    /// The frame's own edges are the answer, wherever the unit put it. Finding
-    /// them here also measures where a positioned pass starts its picture,
-    /// which sizes the passes of shorter rectangles later in the session
+    /// The film either side of the picture is the answer, wherever the unit
+    /// put it. This also measures where the picture starts, which places the
+    /// frame for the fine pass and sizes the passes of shorter rectangles
     fn positioned(
         &mut self,
         image: &Image<'_>,
@@ -239,11 +239,17 @@ impl Session {
         let pitch = layout.line_pitch.max(1);
         // The frame's own length, not the window's: the window is longer than
         // the frame, and how much longer is what this is measuring
-        let expected = (picture.extent / pitch) as usize;
-        let found = boundaries::locate(image, expected, picture.polarity)?;
-        self.note_gate_offset((found.start as u32) * pitch);
-        self.note_picture_start((found.start as u32) * pitch);
-        debug!(?found, "the frame in the metering pass");
-        Some(found)
+        let extent = (picture.extent / pitch) as usize;
+        let found = boundaries::locate(image, picture.polarity);
+        if let Some(start) = boundaries::start(&found, image.cols, extent) {
+            // A picture starting behind the pass leaves no film in front
+            // of the frame for a later rectangle to allow for
+            if start > 0 {
+                self.note_gate_offset(start as u32 * pitch);
+            }
+            self.note_picture_start(start * pitch as i32);
+            debug!(?found, start, "the picture in the metering pass");
+        }
+        (!found.is_empty()).then_some(found)
     }
 }

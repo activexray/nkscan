@@ -41,8 +41,7 @@ fn a_frame_scanned_twice_comes_back_in_the_same_place() {
     session.stage().expect("stage");
 
     let mut samples = Samples::default();
-    let discovery =
-        framing::discover(&mut session, None, Polarity::Negative, &mut samples).expect("discovery");
+    let discovery = framing::discover(&mut session, None, &mut samples).expect("discovery");
     let frame = *discovery
         .frames
         .get(3)

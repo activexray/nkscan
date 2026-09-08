@@ -251,7 +251,7 @@ class Session:
         r"""
         Take in whatever the adapter has waiting, answering whether anything came
         """
-    def discover_frames(self, format: typing.Optional[builtins.str] = None, positive: builtins.bool = False, progress: typing.Optional[typing.Any] = None) -> Discovery:
+    def discover_frames(self, format: typing.Optional[builtins.str] = None, progress: typing.Optional[typing.Any] = None) -> Discovery:
         r"""
         Find every frame on whatever is loaded
         
@@ -260,7 +260,8 @@ class Session:
         Only asked for by the two of four discovery mechanisms that need a
         thumbnail pass to find frames, and even there only where the loaded
         holder does not fix or narrow it by itself, so it can usually be left
-        `None`. `positive` is which way the loaded film reads.
+        `None`. Which way the film reads is not asked for: a frame is found by
+        the bare film between the frames, which reads flat either way.
         `Discovery.thumbnail`, where the mechanism took one, is what a caller
         wanting to nudge `Discovery.frames` by hand shows the operator: a
         rectangle handed to `scan_frame` needs no match in it, so a nudged one

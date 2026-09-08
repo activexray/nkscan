@@ -3,7 +3,6 @@
 //! Four mechanisms, picked from what the unit and the loaded adapter advertise.
 
 use super::{
-    boundaries::Polarity,
     pass::{Pass, Progress},
     thumbnail,
 };
@@ -186,6 +185,50 @@ pub(crate) fn whole_frame(caps: &Capabilities, frame: Rect) -> bool {
     frame.bottom.saturating_sub(frame.top) > caps.address.y_axis.boundary / 2
 }
 
+/// Film the range holds over and above `frame`
+///
+/// A whole frame is shorter than the range, and the difference is how far into
+/// the range the film can start with all of the frame still inside it
+pub(crate) fn slack(caps: &Capabilities, frame: Rect) -> u32 {
+    slack_of(caps, frame.bottom.saturating_sub(frame.top))
+}
+
+/// The same for a frame given as a length
+pub(crate) fn slack_of(caps: &Capabilities, extent: u32) -> u32 {
+    caps.address.y_axis.boundary.saturating_sub(extent)
+}
+
+/// Where to register `frame` again, when the metering pass found its picture
+/// `at` addresses into the range
+///
+/// The frame belongs in the middle of the slack. That is the one place with
+/// film at both ends, and the most room a frame placed early or late has to
+/// stay whole. The thumbnail places a frame within about a millimeter and on
+/// 135 the slack is little more than that, so the metering pass has to make up
+/// the rest. `at` is negative where the pass opened inside the picture. A
+/// correction shorter than one thumbnail line gives a table the unit reads the
+/// same way, so this makes none
+pub(crate) fn recentered(caps: &Capabilities, frame: Rect, at: Option<i32>) -> Option<Rect> {
+    if !whole_frame(caps, frame) {
+        return None;
+    }
+    let by = i64::from(at?) - i64::from(slack(caps, frame) / 2);
+    if by.unsigned_abs() < u64::from(thumbnail::line_pitch(caps)) {
+        return None;
+    }
+    // The whole rectangle moves: the same frame, elsewhere on the film. Never
+    // back past the start of the axis, which would clamp the two edges
+    // differently and change the frame's length
+    let by = by
+        .max(-i64::from(frame.top))
+        .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+    Some(Rect {
+        top: frame.top.saturating_add_signed(by),
+        bottom: frame.bottom.saturating_add_signed(by),
+        ..frame
+    })
+}
+
 /// The rectangle for a pass that includes all of `frame`
 ///
 /// Where a unit positions the film by its perforation table, the window does
@@ -267,8 +310,13 @@ pub fn register(session: &mut Session, frame: Rect) -> Result<(), Error> {
 /// that only the pass measures. Nikon Scan also reads the record from the
 /// table
 fn record(session: &mut Session, top: u32) -> Result<(usize, PerforationInformation), Error> {
-    let line = thumbnail::line_at(session.capabilities(), top);
     let perfs = session.read_perforations()?;
+    // The same ruler the table was built with, so a top lands on the line it
+    // was built from rather than a line the computed pitch put it short of
+    let caps = session.capabilities();
+    let line = thumbnail::LinePitch::measured(caps, &perfs)
+        .unwrap_or_else(|| thumbnail::LinePitch::computed(caps))
+        .line_at(caps, top);
     let perf = perfs.at(line).ok_or_else(|| Error::Unsupported {
         op: "frame registration",
         reason: format!(
@@ -291,23 +339,21 @@ pub struct Discovery {
 pub fn discover(
     session: &mut Session,
     format: Option<FilmFormat>,
-    polarity: Polarity,
     samples: &mut Samples,
 ) -> Result<Discovery, Error> {
-    discover_with(session, format, polarity, samples, |_| {
-        ControlFlow::Continue(())
-    })
+    discover_with(session, format, samples, |_| ControlFlow::Continue(()))
 }
 
 /// The same as [`discover`], letting `on` cancel a thumbnail pass by returning `Break`
 ///
 /// `format` is only needed by [`Framing::Thumbnail`] and [`Framing::Perforation`], and even
 /// there only where [`FilmFormat::resolve`] cannot work it out from the loaded holder.
+/// Which way the film reads does not come into it: a frame is found by the
+/// bare film between the frames, which reads flat whichever way round it is.
 /// `samples` is scratch, left holding the thumbnail where [`Discovery::thumbnail`] is `Some`
 pub fn discover_with(
     session: &mut Session,
     format: Option<FilmFormat>,
-    polarity: Polarity,
     samples: &mut Samples,
     on: impl FnMut(Progress) -> ControlFlow<()>,
 ) -> Result<Discovery, Error> {
@@ -341,8 +387,7 @@ pub fn discover_with(
             let length = format.height_dots(optical_dpi);
             info!(?format, length, "frame length");
 
-            let measured =
-                thumbnail::frames(session.capabilities(), &pass, samples, length, polarity)?;
+            let measured = thumbnail::frames(session.capabilities(), &pass, samples, length)?;
             // Nothing measured is nothing to tell the unit, and it refuses an
             // empty record. The caller gets the pass either way, which is the
             // only evidence of why the strip measured empty
@@ -384,14 +429,8 @@ pub fn discover_with(
             info!(?format, length, "frame length");
 
             let perfs = session.read_perforations()?;
-            let (measured, length) = thumbnail::frames_type2(
-                session.capabilities(),
-                &pass,
-                samples,
-                &perfs,
-                length,
-                polarity,
-            )?;
+            let (measured, length) =
+                thumbnail::frames_type2(session.capabilities(), &pass, samples, &perfs, length)?;
             if !measured.frames.is_empty() {
                 session.set_boundaries_type2(&measured)?;
             }
@@ -444,6 +483,66 @@ mod tests {
         let over = pass_rect(&perforated, frame, Some(166));
         assert_eq!(over.top, frame.top);
         assert_eq!(over.bottom - over.top, boundary);
+    }
+
+    /// The range is longer than the frame, so a picture that starts inside
+    /// that slack is already whole in the pass and keeps the film at both
+    /// ends. Only a picture past the slack has a tail the range cannot reach
+    #[test]
+    fn a_frame_the_range_holds_is_left_where_it_is() {
+        let mut perforated = caps();
+        perforated.features.data_types |= DataTypes::PERFORATION_READ;
+        let boundary = perforated.address.y_axis.boundary;
+        let frame = Rect {
+            top: 2236,
+            left: 518,
+            bottom: 2236 + 11964,
+            right: 518 + 8964,
+        };
+        // 83 dpi thumbnail lines of a 4000 dpi sensor, so 48 addresses a line
+        perforated.address.thumbnail_resolution = (83u16..=83u16).into();
+        let slack = slack(&perforated, frame) as i32;
+        assert_eq!(slack, (boundary - 11964) as i32);
+        assert_eq!(slack_of(&perforated, 11964) as i32, slack);
+
+        assert_eq!(recentered(&perforated, frame, None), None);
+        // Already in the middle, and inside the line that would move it
+        assert_eq!(recentered(&perforated, frame, Some(slack / 2)), None);
+        assert_eq!(recentered(&perforated, frame, Some(slack / 2 + 47)), None);
+
+        // Late in the range, so the frame moves on and its tail comes back
+        let late = recentered(&perforated, frame, Some(slack / 2 + 400)).expect("a correction");
+        assert_eq!(late.top, frame.top + 400);
+        assert_eq!(late.bottom - late.top, frame.bottom - frame.top);
+
+        // Early, so it moves back by as much
+        let early = recentered(&perforated, frame, Some(slack / 2 - 400)).expect("a correction");
+        assert_eq!(early.top, frame.top - 400);
+        assert_eq!(early.bottom - early.top, frame.bottom - frame.top);
+
+        // The pass opened inside the picture, which is measured back from the
+        // film behind it and comes out before the pass began
+        let clipped = recentered(&perforated, frame, Some(-300)).expect("a correction");
+        assert!(
+            clipped.top < frame.top,
+            "a picture measured behind the pass moves the frame back, not on"
+        );
+        assert_eq!(clipped.bottom - clipped.top, frame.bottom - frame.top);
+    }
+
+    /// A shorter rectangle is not a frame to put on the range
+    #[test]
+    fn a_crop_is_never_recentered() {
+        let mut perforated = caps();
+        perforated.features.data_types |= DataTypes::PERFORATION_READ;
+        let boundary = perforated.address.y_axis.boundary;
+        let crop = Rect {
+            top: 2236,
+            left: 518,
+            bottom: 2236 + boundary / 4,
+            right: 518 + 8964,
+        };
+        assert_eq!(recentered(&perforated, crop, Some(boundary as i32)), None);
     }
 
     /// A rectangle shorter than half the range - a half frame, a crop - adds

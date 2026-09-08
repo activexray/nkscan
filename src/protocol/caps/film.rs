@@ -41,34 +41,40 @@ pub enum FilmFormat {
 }
 
 impl FilmFormat {
-    /// Frame height along the feed, in tenths of a millimeter
+    /// Frame height along the feed, in dots of a 4000 dpi axis
     ///
-    /// Tenths because half of these are not whole millimeters
-    const fn height_tenths(self) -> u32 {
+    /// Address units, which the unit consumes and Nikon Scan's own numbers are
+    /// in: 6696 for 6x4.5, 8964 for 6x6, 13176 for 6x9. Each is a whole number
+    /// of the 12-dot line gap. The millimeter in the name cannot express them,
+    /// since 56.9 mm reaches 8961 of 6x6's 8964, so the dots are kept.
+    ///
+    /// 6x7 and 6x8 are the round millimeter and are not checked against Nikon
+    /// Scan. 6x9 may be the longest frame the holder takes, not the frame
+    const fn height_dots_4000(self) -> u32 {
         match self {
-            Self::IX240 => 302,
-            Self::F135 => 360,
-            Self::F135Half => 180,
-            Self::F16 => 200,
-            Self::F645 => 415,
-            Self::F66 => 560,
-            Self::F67 => 695,
-            Self::F68 => 760,
-            Self::F69 => 840,
-            Self::Custom(mm) => mm * 10,
+            Self::IX240 => 4756,
+            Self::F135 => 5670,
+            Self::F135Half => 2835,
+            Self::F16 => 3150,
+            Self::F645 => 6696,
+            Self::F66 => 8964,
+            Self::F67 => 10945,
+            Self::F68 => 11969,
+            Self::F69 => 13176,
+            // Whole millimeters, so 4000 dots to 25.4 of them
+            Self::Custom(mm) => mm * 40000 / 254,
         }
     }
 
     /// Frame height along the feed, in mm, rounded to the nearest
     pub const fn height_mm(self) -> u32 {
-        (self.height_tenths() + 5) / 10
+        (self.height_dots_4000() * 254 + 20000) / 40000
     }
 
     /// Frame height in scanner address units (dots at optical DPI)
     pub fn height_dots(self, dpi: u16) -> u32 {
-        // tenths of a mm × dpi / 25.4, rounded to nearest
-        let num = u64::from(self.height_tenths()) * u64::from(dpi);
-        ((num + 127) / 254) as u32
+        let num = u64::from(self.height_dots_4000()) * u64::from(dpi);
+        ((num + 2000) / 4000) as u32
     }
 
     /// The format a holder ID implies, where the holder fixes it
@@ -206,7 +212,7 @@ mod tests {
     fn known_heights() {
         assert_eq!(FilmFormat::F135.height_mm(), 36);
         assert_eq!(FilmFormat::F16.height_mm(), 20);
-        assert_eq!(FilmFormat::F66.height_mm(), 56);
+        assert_eq!(FilmFormat::F66.height_mm(), 57);
         assert_eq!(FilmFormat::F69.height_mm(), 84);
         assert_eq!(FilmFormat::Custom(100).height_mm(), 100);
     }
@@ -215,22 +221,25 @@ mod tests {
     /// a frame with a strip of the next one along its edge
     #[test]
     fn a_format_is_its_gate_rather_than_its_name() {
-        assert_eq!(FilmFormat::F645.height_tenths(), 415);
-        assert_eq!(FilmFormat::F67.height_tenths(), 695);
-        assert_eq!(FilmFormat::F68.height_tenths(), 760);
+        assert_eq!(FilmFormat::F645.height_dots_4000(), 6696);
+        assert_eq!(FilmFormat::F67.height_dots_4000(), 10945);
+        assert_eq!(FilmFormat::F68.height_dots_4000(), 11969);
         // Half frame is two frames in the space one full frame takes
         assert_eq!(
-            FilmFormat::F135Half.height_tenths() * 2,
-            FilmFormat::F135.height_tenths()
+            FilmFormat::F135Half.height_dots_4000() * 2,
+            FilmFormat::F135.height_dots_4000()
         );
     }
 
     #[test]
     fn dots_at_4000_dpi() {
-        assert_eq!(FilmFormat::F66.height_dots(4000), 8819);
-        assert_eq!(FilmFormat::F69.height_dots(4000), 13228);
-        // 41.5 mm rather than the 45 the name says, which is 551 dots of film
-        assert_eq!(FilmFormat::F645.height_dots(4000), 6535);
+        // Nikon Scan's own numbers, exactly
+        assert_eq!(FilmFormat::F66.height_dots(4000), 8964);
+        assert_eq!(FilmFormat::F69.height_dots(4000), 13176);
+        assert_eq!(FilmFormat::F645.height_dots(4000), 6696);
+        // And what a thumbnail of one is, which is what the frames are found in
+        assert_eq!(FilmFormat::F66.height_dots(83), 186);
+        assert_eq!(FilmFormat::F135.height_dots(97), 137);
     }
 
     #[test]

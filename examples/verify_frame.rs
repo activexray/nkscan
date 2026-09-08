@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut samples = Samples::default();
-    let discovery = framing::discover(&mut session, None, polarity, &mut samples)?;
+    let discovery = framing::discover(&mut session, None, &mut samples)?;
     println!(
         "detected {} frames: {:?}",
         discovery.frames.len(),

@@ -408,37 +408,31 @@ impl PySession {
     /// Only asked for by the two of four discovery mechanisms that need a
     /// thumbnail pass to find frames, and even there only where the loaded
     /// holder does not fix or narrow it by itself, so it can usually be left
-    /// `None`. `positive` is which way the loaded film reads.
+    /// `None`. Which way the film reads is not asked for: a frame is found by
+    /// the bare film between the frames, which reads flat either way.
     /// `Discovery.thumbnail`, where the mechanism took one, is what a caller
     /// wanting to nudge `Discovery.frames` by hand shows the operator: a
     /// rectangle handed to `scan_frame` needs no match in it, so a nudged one
     /// works the same as a detected one, just slower if the stage has to home
     /// first to reach it
-    #[pyo3(signature = (format=None, positive=false, progress=None))]
+    #[pyo3(signature = (format=None, progress=None))]
     fn discover_frames(
         &self,
         py: Python<'_>,
         format: Option<&str>,
-        positive: bool,
         progress: Option<Py<PyAny>>,
     ) -> PyResult<PyDiscovery> {
         let format = format
             .map(str::parse)
             .transpose()
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
-        let polarity = if positive {
-            Polarity::Positive
-        } else {
-            Polarity::Negative
-        };
 
         let (frames, thumbnail, ids, samples, shape) = py.detach(move || {
             self.with(|session| {
                 let mut samples = Samples::default();
-                let discovery =
-                    framing::discover_with(session, format, polarity, &mut samples, |p| {
-                        report(&progress, "discover", 0, p)
-                    })?;
+                let discovery = framing::discover_with(session, format, &mut samples, |p| {
+                    report(&progress, "discover", 0, p)
+                })?;
                 let frames: Vec<_> = discovery
                     .frames
                     .into_iter()

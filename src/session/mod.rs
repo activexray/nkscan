@@ -49,7 +49,7 @@ pub struct Session {
     gate_offset: Option<u32>,
     /// Where the last metering pass showed the frame starting, in window
     /// addresses, for the pass that is about to follow it
-    picture_start: Option<u32>,
+    picture_start: Option<i32>,
     /// CCD row response curves, read once in the preamble
     curves: Option<Arc<Curves>>,
     /// Whether we hold the unit, so [`Drop`] only releases what it took
@@ -382,13 +382,13 @@ impl Session {
     /// Taken rather than read because the reading belongs to the one pass
     /// that is about to follow it: the next pass latches the film somewhere
     /// else, and a stale reading would move the frame to the wrong place
-    pub fn take_picture_start(&mut self) -> Option<u32> {
+    pub fn take_picture_start(&mut self) -> Option<i32> {
         self.picture_start.take()
     }
 
     /// Note where a metering pass showed the frame starting, in window
     /// addresses
-    pub(crate) fn note_picture_start(&mut self, start: u32) {
+    pub(crate) fn note_picture_start(&mut self, start: i32) {
         self.picture_start = Some(start);
     }
 

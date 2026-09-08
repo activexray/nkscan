@@ -14,5 +14,6 @@ pub mod framing;
 pub mod meter;
 pub mod pass;
 pub mod profile;
+pub mod strip;
 pub mod thumbnail;
 pub mod window;

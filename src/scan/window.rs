@@ -577,25 +577,25 @@ pub(crate) mod tests {
         use crate::protocol::caps::film::FilmFormat;
 
         let mut caps = caps();
-        caps.address.y_axis.boundary = 13176;
+        caps.address.y_axis.boundary = 13152;
         caps.address.line_gap = 8;
         caps.address.lines = 3;
 
         let six_by_nine = FilmFormat::F69.height_dots(caps.address.y_axis.optical_dpi);
-        assert_eq!(six_by_nine, 13228);
+        assert_eq!(six_by_nine, 13176);
         assert!(
             whole_blocks(&caps, six_by_nine) > caps.address.y_axis.boundary,
             "the format has to overrun the axis for this to be the case under test"
         );
 
         let kept = reachable_blocks(&caps, six_by_nine);
-        assert_eq!(kept, 13176);
+        assert_eq!(kept, 13152);
         assert_eq!(kept % block(&caps), 0, "still whole blocks");
         framing::reachable(&caps, kept).expect("the stage can step to a trimmed frame");
     }
 
-    /// 56mm of 6x6 is 8819 dots at 4000 dpi, which the three-line readout
-    /// cannot tile: it takes blocks of the line gap times the CCD rows
+    /// An extent of 8819 dots, which the three-line readout cannot tile: it
+    /// takes blocks of the line gap times the CCD rows
     #[test]
     fn a_multi_line_window_is_whole_blocks_of_the_readout() {
         let frame = Rect {

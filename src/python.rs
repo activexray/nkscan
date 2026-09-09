@@ -19,7 +19,6 @@ use crate::{
     },
     scan::{
         autoexpose::Exposures,
-        boundaries::Polarity,
         frame::{self, Phase},
         framing::{self, Framing},
         meter::Metering,
@@ -315,13 +314,6 @@ pub struct PyScanResult {
     exposures: HashMap<String, u32>,
     /// Pixels dust removal rebuilt, where asked for
     cleaned: Option<usize>,
-    /// The columns of the arrays that are the frame that was asked for
-    ///
-    /// A unit that positions the film itself gets a pass longer than the frame,
-    /// so the arrays continue past the frame at each end. This is accurate to
-    /// about a tenth of a millimeter. To get the frame exactly, find its edges
-    /// in the arrays. On the other units this is the full width
-    frame_columns: (usize, usize),
 }
 
 fn channel_name(id: u8) -> String {
@@ -360,6 +352,17 @@ pub struct PyDiscovery {
     /// One array per channel, keyed the way `ScanResult.colors` is;
     /// `None` where the mechanism that found `frames` needed no thumbnail pass
     thumbnail: Option<HashMap<String, Py<PyArray2<u16>>>>,
+    /// Feed addresses one column of `thumbnail` spans
+    ///
+    /// This is what puts a rectangle drawn on the thumbnail onto the film, so
+    /// the rectangle previewed is the rectangle scanned. Do not compute it as
+    /// `optical_dpi / thumbnail_dpi`: the unit reports a thumbnail resolution
+    /// the film does not keep to, and an LS-50 reports 97 dpi against a 4000
+    /// dpi sensor, which gives 41 where the film moves about 41.9 - four
+    /// millimeters out by the sixth frame of a strip. Measured per pass, so
+    /// read it from each discovery rather than caching it. `None` where the
+    /// mechanism took no thumbnail
+    addresses_per_column: Option<f64>,
 }
 
 // ----- a session -----
@@ -458,7 +461,7 @@ impl PySession {
             .transpose()
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
-        let (frames, thumbnail, ids, samples, shape) = py.detach(move || {
+        let (frames, thumbnail, ids, samples, shape, pitch) = py.detach(move || {
             self.with(|session| {
                 let mut samples = Samples::default();
                 let discovery = framing::discover_with(session, format, &mut samples, |p| {
@@ -469,13 +472,14 @@ impl PySession {
                     .into_iter()
                     .map(|r| (r.top, r.left, r.bottom, r.right))
                     .collect();
+                let pitch = discovery.line_pitch.map(|p| p.addresses_per_column());
                 match discovery.thumbnail {
                     Some(pass) => {
                         let ids: Vec<u8> = pass.layout.colors().collect();
                         let shape = (pass.rows, pass.cols);
-                        Ok((frames, true, ids, samples.colors, shape))
+                        Ok((frames, true, ids, samples.colors, shape, pitch))
                     }
-                    None => Ok((frames, false, Vec::new(), Vec::new(), (0, 0))),
+                    None => Ok((frames, false, Vec::new(), Vec::new(), (0, 0), pitch)),
                 }
             })
         })?;
@@ -484,17 +488,22 @@ impl PySession {
             let (rows, cols) = shape;
             Python::attach(|py| colors_to_numpy(py, &ids, samples, rows, cols))
         });
-        Ok(PyDiscovery { frames, thumbnail })
+        Ok(PyDiscovery {
+            frames,
+            thumbnail,
+            addresses_per_column: pitch,
+        })
     }
 
     /// Focus, meter, take the pass over `frame`, and optionally clean it
     ///
     /// `frame` is `(top, left, bottom, right)`, one of `discover_frames`'s, or one of
-    /// them moved or cropped. `exposures`, keyed the way `ScanResult.exposures` is,
-    /// reuses an exposure already decided rather than metering this frame fresh.
-    /// `positive` is which way the loaded film reads, as in `discover_frames`:
-    /// where the unit positions the film itself it is what finds the frame in
-    /// the pass, so a scan of that kind wants it
+    /// them moved or cropped. The pass is that rectangle: on a unit that positions
+    /// the film by its own frame table the rectangle is registered with the unit
+    /// first, so a moved or cropped one reaches the film it asks for rather than
+    /// being read as an offset into the frame it fell under. `exposures`, keyed the
+    /// way `ScanResult.exposures` is, reuses an exposure already decided rather than
+    /// metering this frame fresh
     #[pyo3(signature = (
         frame,
         dpi=None,
@@ -503,7 +512,6 @@ impl PySession {
         infrared=false,
         clean=false,
         lock_white_balance=true,
-        positive=false,
         exposures=None,
         progress=None,
     ))]
@@ -518,7 +526,6 @@ impl PySession {
         infrared: bool,
         clean: bool,
         lock_white_balance: bool,
-        positive: bool,
         exposures: Option<HashMap<String, u32>>,
         progress: Option<Py<PyAny>>,
     ) -> PyResult<PyScanResult> {
@@ -529,12 +536,6 @@ impl PySession {
             bottom,
             right,
         };
-        let polarity = if positive {
-            Polarity::Positive
-        } else {
-            Polarity::Negative
-        };
-
         let locked = exposures.map(|by_name| {
             let mut e = Exposures::default();
             for (name, value) in by_name {
@@ -565,7 +566,6 @@ impl PySession {
                     exposures: locked.as_ref(),
                     lock_white_balance,
                     clean,
-                    polarity: Some(polarity),
                 };
                 let scanned = frame::scan_frame_with(
                     session,
@@ -599,7 +599,6 @@ impl PySession {
                         cols,
                         exposures,
                         cleaned: scanned.cleaned,
-                        frame_columns: (scanned.frame_lines.start, scanned.frame_lines.end),
                     })
                 })
             })

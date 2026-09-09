@@ -156,6 +156,20 @@ class Discovery:
         One array per channel, keyed the way `ScanResult.colors` is;
         `None` where the mechanism that found `frames` needed no thumbnail pass
         """
+    @property
+    def addresses_per_column(self) -> typing.Optional[builtins.float]:
+        r"""
+        Feed addresses one column of `thumbnail` spans
+        
+        This is what puts a rectangle drawn on the thumbnail onto the film, so
+        the rectangle previewed is the rectangle scanned. Do not compute it as
+        `optical_dpi / thumbnail_dpi`: the unit reports a thumbnail resolution
+        the film does not keep to, and an LS-50 reports 97 dpi against a 4000
+        dpi sensor, which gives 41 where the film moves about 41.9 - four
+        millimeters out by the sixth frame of a strip. Measured per pass, so
+        read it from each discovery rather than caching it. `None` where the
+        mechanism took no thumbnail
+        """
 
 class MediaError(ScannerError):
     r"""
@@ -199,16 +213,6 @@ class ScanResult:
     def cleaned(self) -> typing.Optional[builtins.int]:
         r"""
         Pixels dust removal rebuilt, where asked for
-        """
-    @property
-    def frame_columns(self) -> tuple[builtins.int, builtins.int]:
-        r"""
-        The columns of the arrays that are the frame that was asked for
-        
-        A unit that positions the film itself gets a pass longer than the frame,
-        so the arrays continue past the frame at each end. This is accurate to
-        about a tenth of a millimeter. To get the frame exactly, find its edges
-        in the arrays. On the other units this is the full width
         """
 
 class ScannerError(builtins.RuntimeError):
@@ -269,16 +273,17 @@ class Session:
         works the same as a detected one, just slower if the stage has to home
         first to reach it
         """
-    def scan_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], dpi: typing.Optional[builtins.int] = None, samples: builtins.int = 1, superfine: builtins.bool = False, infrared: builtins.bool = False, clean: builtins.bool = False, lock_white_balance: builtins.bool = True, positive: builtins.bool = False, exposures: typing.Optional[typing.Mapping[builtins.str, builtins.int]] = None, progress: typing.Optional[typing.Any] = None) -> ScanResult:
+    def scan_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], dpi: typing.Optional[builtins.int] = None, samples: builtins.int = 1, superfine: builtins.bool = False, infrared: builtins.bool = False, clean: builtins.bool = False, lock_white_balance: builtins.bool = True, exposures: typing.Optional[typing.Mapping[builtins.str, builtins.int]] = None, progress: typing.Optional[typing.Any] = None) -> ScanResult:
         r"""
         Focus, meter, take the pass over `frame`, and optionally clean it
         
         `frame` is `(top, left, bottom, right)`, one of `discover_frames`'s, or one of
-        them moved or cropped. `exposures`, keyed the way `ScanResult.exposures` is,
-        reuses an exposure already decided rather than metering this frame fresh.
-        `positive` is which way the loaded film reads, as in `discover_frames`:
-        where the unit positions the film itself it is what finds the frame in
-        the pass, so a scan of that kind wants it
+        them moved or cropped. The pass is that rectangle: on a unit that positions
+        the film by its own frame table the rectangle is registered with the unit
+        first, so a moved or cropped one reaches the film it asks for rather than
+        being read as an offset into the frame it fell under. `exposures`, keyed the
+        way `ScanResult.exposures` is, reuses an exposure already decided rather than
+        metering this frame fresh
         """
     def close(self) -> None:
         r"""

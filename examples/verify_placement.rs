@@ -17,7 +17,7 @@ use nkscan::{
         decode::{Image, Samples},
     },
     scan::{
-        boundaries::Polarity,
+        boundaries::{self, Polarity},
         frame::{self, Options},
         framing,
         pass::Pass,
@@ -73,7 +73,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             exposures: None,
             lock_white_balance: false,
             clean: false,
-            polarity: Some(Polarity::Negative),
         };
         let scanned = frame::scan_frame_with(
             &mut session,
@@ -83,9 +82,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &mut samples,
             |_, _| std::ops::ControlFlow::Continue(()),
         )?;
+        // The pass is the rectangle, so the picture should fill it: a run
+        // that starts above 0 or ends before the last column is the unit
+        // putting the film somewhere other than where the window asked
+        let picture = Image::new(&scanned.pass.layout, &samples)
+            .ok()
+            .map(|image| boundaries::locate(&image, Polarity::Negative));
         println!(
-            "frame {n} top {} pass {} x {} frame_lines {:?}",
-            frame.top, scanned.pass.rows, scanned.pass.cols, scanned.frame_lines
+            "frame {n} top {} pass {} x {} picture {:?}",
+            frame.top, scanned.pass.rows, scanned.pass.cols, picture
         );
         write(&dir.join(format!("frame_{n}")), &scanned.pass, &samples)?;
     }

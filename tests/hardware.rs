@@ -11,7 +11,7 @@ use nkscan::{
         decode::{Image, Samples},
     },
     scan::{
-        boundaries::Polarity,
+        boundaries::{self, Polarity},
         frame::{self, Options},
         framing::{self, Framing},
         window::Recipe,
@@ -23,11 +23,14 @@ use std::ops::ControlFlow;
 /// A rectangle scanned twice in one session comes back in the same place
 ///
 /// Needs a perforation-framed unit with a 35mm strip loaded. Such a unit
-/// positions the film by its own frame table, and a pass that corrects a
-/// frame's place has to put the measured table back: registering the
-/// correction replaces the entry the original top selects, so the second scan
-/// selects the entry below it and reads the wrong film. Before the fix the
-/// second pass came back 87 columns out with the frame's tail off the end.
+/// positions the film by its own frame table, and a pass that registered its
+/// rectangle has to put the measured table back: registering replaces the
+/// entry the original top selects, so the second scan selects the entry below
+/// it and reads the wrong film. Before the fix the second pass came back 87
+/// columns out with the frame's tail off the end.
+///
+/// The pass is the rectangle, so where the picture sits inside it is the same
+/// both times only if the film was positioned the same way both times.
 #[test]
 #[ignore = "needs a perforation-framed scanner with 35mm film loaded"]
 fn a_frame_scanned_twice_comes_back_in_the_same_place() {
@@ -60,10 +63,7 @@ fn a_frame_scanned_twice_comes_back_in_the_same_place() {
             &mut session,
             &recipe,
             frame,
-            Options {
-                polarity: Some(Polarity::Negative),
-                ..Options::default()
-            },
+            Options::default(),
             &mut samples,
             |_, _| ControlFlow::Continue(()),
         )
@@ -71,7 +71,7 @@ fn a_frame_scanned_twice_comes_back_in_the_same_place() {
         let image = Image::new(&scanned.pass.layout, &samples).expect("image");
         let plane = image.colors.first().expect("a color plane");
         let mean = plane.iter().map(|&s| f64::from(s)).sum::<f64>() / plane.len() as f64;
-        (scanned.frame_lines, mean)
+        (boundaries::locate(&image, Polarity::Negative), mean)
     };
 
     let (first, first_mean) = round();
@@ -80,7 +80,7 @@ fn a_frame_scanned_twice_comes_back_in_the_same_place() {
     let moved = first.start.abs_diff(second.start);
     assert!(
         moved <= 4,
-        "the frame moved {moved} columns between passes: {first:?} then {second:?}"
+        "the picture moved {moved} columns between passes: {first:?} then {second:?}"
     );
     // The same film either way, so the level cannot jump
     let ratio = first_mean.max(second_mean) / first_mean.min(second_mean);

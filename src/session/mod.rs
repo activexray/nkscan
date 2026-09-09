@@ -44,12 +44,6 @@ pub struct Session {
     /// The frame table that windowing uses
     frames: Option<FrameTable>,
     frame_type_2: bool,
-    /// The furthest into a pass a frame has started this session, in window
-    /// addresses, where the unit positions the film by its perforation table
-    gate_offset: Option<u32>,
-    /// Where the last metering pass showed the frame starting, in window
-    /// addresses, for the pass that is about to follow it
-    picture_start: Option<i32>,
     /// CCD row response curves, read once in the preamble
     curves: Option<Arc<Curves>>,
     /// Whether we hold the unit, so [`Drop`] only releases what it took
@@ -115,8 +109,6 @@ impl Session {
             reserved: false,
             frames: None,
             frame_type_2,
-            gate_offset: None,
-            picture_start: None,
             curves: None,
         };
         // INQUIRY answers while the unit is still initializing, so probing says
@@ -357,39 +349,6 @@ impl Session {
     /// Whether we use Framing Type2 or not
     pub fn uses_frame_type_2(&self) -> bool {
         self.frame_type_2
-    }
-
-    /// Where a frame has so far started in a pass this session
-    ///
-    /// A perforation-framed unit latches the film by the record at the frame's
-    /// own line, and where that leaves the picture in the pass is a fixed
-    /// property of the mechanism that no page reports. Every reading of it
-    /// this session takes carries the frame detection's own error with it, so
-    /// the furthest reading is the one to size a pass by: an overestimate
-    /// lengthens a pass, an underestimate clips the end of the frame out of it
-    pub fn gate_offset(&self) -> Option<u32> {
-        self.gate_offset
-    }
-
-    /// Note a reading of where a frame started in its pass, in window addresses
-    pub fn note_gate_offset(&mut self, start: u32) {
-        self.gate_offset = Some(self.gate_offset.unwrap_or(0).max(start));
-    }
-
-    /// Take where the last metering pass showed the frame starting, in window
-    /// addresses
-    ///
-    /// Taken rather than read because the reading belongs to the one pass
-    /// that is about to follow it: the next pass latches the film somewhere
-    /// else, and a stale reading would move the frame to the wrong place
-    pub fn take_picture_start(&mut self) -> Option<i32> {
-        self.picture_start.take()
-    }
-
-    /// Note where a metering pass showed the frame starting, in window
-    /// addresses
-    pub(crate) fn note_picture_start(&mut self, start: i32) {
-        self.picture_start = Some(start);
     }
 
     /// Re-read what the scanner says it can do

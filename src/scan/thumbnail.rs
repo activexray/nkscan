@@ -56,14 +56,14 @@ pub(crate) fn line_pitch(caps: &Capabilities) -> u32 {
 /// answer is not a whole number of addresses and a frame is over a hundred
 /// lines of it
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct LinePitch {
+pub struct LinePitch {
     addresses: u64,
     lines: u64,
 }
 
 impl LinePitch {
     /// What the pass asked for, which is [`line_pitch`]
-    pub(crate) fn computed(caps: &Capabilities) -> Self {
+    pub fn computed(caps: &Capabilities) -> Self {
         Self {
             addresses: u64::from(line_pitch(caps)),
             lines: 1,
@@ -85,7 +85,7 @@ impl LinePitch {
     /// last one that did. A table that measures nothing, or a pitch the pass
     /// could not have asked for, gives `None` and the caller keeps the
     /// computed one
-    pub(crate) fn measured(caps: &Capabilities, perfs: &PerfInformation) -> Option<Self> {
+    pub fn measured(caps: &Capabilities, perfs: &PerfInformation) -> Option<Self> {
         let quarters =
             |p: &PerforationInformation| u64::from(p.perf_number) * 4 + u64::from(p.perf_decimal);
 
@@ -125,8 +125,16 @@ impl LinePitch {
         (apart * 4 <= asked * lines).then_some(measured)
     }
 
+    /// Stage addresses one thumbnail column spans, as a fraction
+    ///
+    /// Kept exact as a ratio internally; this is for callers that map between
+    /// thumbnail columns and feed addresses themselves
+    pub fn addresses_per_column(&self) -> f64 {
+        self.addresses as f64 / self.lines.max(1) as f64
+    }
+
     /// The Y address of a thumbnail line
-    pub(crate) fn address_of(&self, line: u32) -> u32 {
+    pub fn address_of(&self, line: u32) -> u32 {
         (u64::from(line) * self.addresses / self.lines.max(1)) as u32
     }
 
@@ -134,13 +142,13 @@ impl LinePitch {
     ///
     /// A length rather than a position, so the axis origin does not come into
     /// it the way it does for [`Self::line_at`]
-    pub(crate) fn columns(&self, addresses: u32) -> usize {
+    pub fn columns(&self, addresses: u32) -> usize {
         let per = self.addresses.max(1);
         ((u64::from(addresses) * self.lines + per / 2) / per) as usize
     }
 
     /// The thumbnail line nearest a Y address
-    pub(crate) fn line_at(&self, caps: &Capabilities, y: u32) -> usize {
+    pub fn line_at(&self, caps: &Capabilities, y: u32) -> usize {
         let origin = caps.address.y_axis.address_range.start;
         let film = u64::from(y.saturating_sub(origin)) * self.lines.max(1);
         let addresses = self.addresses.max(1);
@@ -221,7 +229,7 @@ pub fn frames_type2(
     samples: &Samples,
     perf_info: &PerfInformation,
     length: u32,
-) -> Result<(BoundaryType2, u32), Error> {
+) -> Result<(BoundaryType2, u32, LinePitch), Error> {
     // Whole readout blocks, and trimmed rather than refused where the format
     // is taller than the axis reaches
     let format = window::reachable_blocks(caps, length);
@@ -248,11 +256,10 @@ pub fn frames_type2(
     };
     let origin = caps.address.y_axis.address_range.start;
     let end = caps.address.y_axis.address_range.last;
-    let range = caps.address.y_axis.boundary;
 
     let Some(found) = strip::find(&image, pitch.columns(format)) else {
         info!("nothing on the strip to frame");
-        return Ok((BoundaryType2::default(), format));
+        return Ok((BoundaryType2::default(), format, pitch));
     };
 
     // The table commonly falls short of the pass: the unit stops counting
@@ -269,18 +276,18 @@ pub fn frames_type2(
 
     // 2-11-9 moves the film so that an entry's top address is the first line
     // the pass reads. The record is how it gets there, so the two are one
-    // reading of one place and move together. The pass is the whole range, so
-    // the entry that puts the picture in the middle of it is half a range
-    // ahead of the middle of the picture. The format never enters into it
+    // reading of one place and move together. The pass is the rectangle, so
+    // the entry that opens the pass on the picture is half a format ahead of
+    // the middle of the picture
     let frames: Vec<FramePosition> = found
         .frames
         .iter()
         .map(|frame| pitch.address_of((frame.start + frame.len() / 2) as u32))
         .filter_map(|middle| {
             let top = (origin + middle)
-                .saturating_sub(range / 2)
+                .saturating_sub(format / 2)
                 .max(origin)
-                .min(end.saturating_sub(range));
+                .min(end.saturating_sub(format));
             let col = pitch.line_at(caps, top);
             let perf = perf_info.at(col);
             debug!(col, top, ?perf, "the pass over a frame");
@@ -306,7 +313,7 @@ pub fn frames_type2(
         debug!(frame = n + 1, ?frame, "frame position");
     }
 
-    Ok((BoundaryType2 { frames }, format))
+    Ok((BoundaryType2 { frames }, format, pitch))
 }
 
 /// Where the adapter's opening sits on the sensor, and how wide it is

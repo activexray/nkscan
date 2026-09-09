@@ -1,8 +1,5 @@
 use clap::{Parser, Subcommand};
-use nkscan::{
-    protocol::caps::film::FilmFormat,
-    scan::{boundaries::Polarity, profile},
-};
+use nkscan::{protocol::caps::film::FilmFormat, scan::profile};
 use profile::Film;
 use std::{path::PathBuf, str::FromStr, sync::LazyLock};
 use tracing_subscriber::filter::LevelFilter;
@@ -144,21 +141,6 @@ impl From<FilmType> for Film {
             FilmType::Negative => Film::Negative,
             FilmType::Kodachrome => Film::Kodachrome,
             FilmType::Mono => Film::MonochromeNegative,
-        }
-    }
-}
-
-/// Which way the film reads against the unexposed film between two frames,
-/// which is what finding the frames on a strip needs
-impl From<FilmType> for Polarity {
-    fn from(f: FilmType) -> Self {
-        match f {
-            // Both are reversal films, whose unexposed film develops to maximum
-            // density
-            FilmType::Positive | FilmType::Kodachrome => Polarity::Positive,
-            // Both develop to their base, which is the brightest film on a
-            // strip whether or not it carries an orange mask
-            FilmType::Negative | FilmType::Mono => Polarity::Negative,
         }
     }
 }

@@ -10,17 +10,12 @@ use crate::{
     },
     scan::{
         autoexpose::{AutoExposure, Exposures, prescan_windows},
-        boundaries::{self, Picture},
-        framing::Framing,
         pass::Progress,
         window::Recipe,
     },
     session::Session,
 };
-use std::{
-    ops::{ControlFlow, Range},
-    time::Duration,
-};
+use std::{ops::ControlFlow, time::Duration};
 use tracing::*;
 
 /// Long enough for a low-resolution pass over a whole frame
@@ -33,17 +28,15 @@ impl Session {
     /// the frame rather than off whatever the last pass left in the unit, and
     /// cover the channels `recipe` will scan. `lock_white_balance` keeps the
     /// channels in the ratio the unit calls neutral, which is what a scan that
-    /// has to stay comparable to the next one wants. `picture`, where the unit
-    /// positions the film itself, is what finds the frame in the metering pass
-    /// so the film in front of it stays out of the reading
+    /// has to stay comparable to the next one wants. The pass is the frame, so
+    /// every pixel of it is metered
     pub fn autoexpose_frame(
         &mut self,
         frame: Rect,
         recipe: &Recipe,
         lock_white_balance: bool,
-        picture: Option<Picture>,
     ) -> Result<Exposures, Error> {
-        self.autoexpose_frame_with(frame, recipe, lock_white_balance, picture, |_, _| {
+        self.autoexpose_frame_with(frame, recipe, lock_white_balance, |_, _| {
             ControlFlow::Continue(())
         })
     }
@@ -55,13 +48,12 @@ impl Session {
         frame: Rect,
         recipe: &Recipe,
         lock_white_balance: bool,
-        picture: Option<Picture>,
         on: impl FnMut(usize, Progress) -> ControlFlow<()>,
     ) -> Result<Exposures, Error> {
         let windows = recipe
             .metering(self.capabilities())
             .windows(self.capabilities(), frame)?;
-        self.autoexpose_with(&windows, lock_white_balance, picture, on)
+        self.autoexpose_with(&windows, lock_white_balance, on)
     }
 
     /// Meter `windows` and answer their new exposures
@@ -74,9 +66,11 @@ impl Session {
         windows: &[Window],
         lock_white_balance: bool,
     ) -> Result<Exposures, Error> {
-        self.autoexpose_with(windows, lock_white_balance, None, |_, _| {
-            ControlFlow::Continue(())
-        })
+        self.autoexpose_with(
+            windows,
+            lock_white_balance,
+            |_, _| ControlFlow::Continue(()),
+        )
     }
 
     /// The same as [`Self::autoexpose`], letting `on` cancel by returning `Break`
@@ -87,7 +81,6 @@ impl Session {
         &mut self,
         windows: &[Window],
         lock_white_balance: bool,
-        picture: Option<Picture>,
         mut on: impl FnMut(usize, Progress) -> ControlFlow<()>,
     ) -> Result<Exposures, Error> {
         let mechanism = AutoExposure::choose(self.capabilities(), lock_white_balance)?;
@@ -136,17 +129,10 @@ impl Session {
                     let image = Image::new(layout, &samples)?;
                     n += 1;
 
-                    // Where the frame actually is, where the unit positions
-                    // the film itself: metering the whole pass reads the film
-                    // in front of the picture, which is brighter than anything
-                    // in the picture on a negative
-                    let columns = picture.and_then(|p| self.positioned(&image, layout, p));
-
                     // Correct from what this pass measured, whether or not
                     // another one follows: the exposures the scan gets are the
                     // ones the last pass asked for, never the ones it ran at
-                    let next =
-                        metering.apply(self.capabilities(), &image, &windows, columns.clone())?;
+                    let next = metering.apply(self.capabilities(), &image, &windows, None)?;
                     for (w, exposure) in windows.iter_mut().zip(next) {
                         w.exposure = exposure;
                     }
@@ -155,7 +141,7 @@ impl Session {
                     // on target, so confirming it costs a pass to learn nothing.
                     // Only a clipped channel, whose correction is a retreat
                     // rather than a measurement, is worth another
-                    let measured = metering.measured(&image, &windows, columns);
+                    let measured = metering.measured(&image, &windows, None);
                     debug!(pass = n, measured, "metering pass");
                     if measured {
                         break;
@@ -219,37 +205,5 @@ impl Session {
             seeded.push(w);
         }
         Ok(seeded)
-    }
-
-    /// The columns of a metering pass that are the frame, where the unit
-    /// positions the film itself
-    ///
-    /// The film either side of the picture is the answer, wherever the unit
-    /// put it. This also measures where the picture starts, which places the
-    /// frame for the fine pass and sizes the passes of shorter rectangles
-    fn positioned(
-        &mut self,
-        image: &Image<'_>,
-        layout: &crate::protocol::image::Layout,
-        picture: Picture,
-    ) -> Option<Range<usize>> {
-        if Framing::choose(self.capabilities()) != Framing::Perforation {
-            return None;
-        }
-        let pitch = layout.line_pitch.max(1);
-        // The frame's own length, not the window's: the window is longer than
-        // the frame, and how much longer is what this is measuring
-        let extent = (picture.extent / pitch) as usize;
-        let found = boundaries::locate(image, picture.polarity);
-        if let Some(start) = boundaries::start(&found, image.cols, extent) {
-            // A picture starting behind the pass leaves no film in front
-            // of the frame for a later rectangle to allow for
-            if start > 0 {
-                self.note_gate_offset(start as u32 * pitch);
-            }
-            self.note_picture_start(start * pitch as i32);
-            debug!(?found, start, "the picture in the metering pass");
-        }
-        (!found.is_empty()).then_some(found)
     }
 }

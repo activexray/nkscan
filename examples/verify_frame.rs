@@ -12,7 +12,7 @@ use nkscan::{
     device,
     protocol::{caps::set_window::ColorInterleaving, decode::Samples},
     scan::{
-        boundaries::Polarity,
+        boundaries::{self, Polarity},
         frame::{self, Options},
         framing,
         pass::Pass,
@@ -61,7 +61,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         exposures: None,
         lock_white_balance: false,
         clean: false,
-        polarity: Some(polarity),
     };
     let scanned = frame::scan_frame_with(
         &mut session,
@@ -77,12 +76,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         scanned.exposures.iter().collect::<Vec<_>>()
     );
     write_pass(&out, &scanned.pass, &samples)?;
+    // The pass is the rectangle, so the picture should fill it
+    let picture = nkscan::protocol::decode::Image::new(&scanned.pass.layout, &samples)
+        .ok()
+        .map(|image| boundaries::locate(&image, polarity));
     println!(
-        "pass {} rows x {} cols, frame_lines {:?} ({} lines)",
-        scanned.pass.rows,
-        scanned.pass.cols,
-        scanned.frame_lines,
-        scanned.frame_lines.len()
+        "pass {} rows x {} cols, picture {:?}",
+        scanned.pass.rows, scanned.pass.cols, picture
     );
     Ok(())
 }

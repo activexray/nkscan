@@ -75,34 +75,16 @@ Color negative meters each channel separately, which takes the orange mask off b
 
 `scan_frame` defaults to `True` whatever the film, so pass this explicitly when scanning negatives. `caps.hardware_metering` is `False` on every unit seen, an LS-9000 included - metering happens here rather than in the scanner, which is what makes the setting matter at all.
 
-## A pass longer than the frame
-
-On a unit that positions the film itself, the pass comes back longer than the
-frame and the frame sits somewhere inside it. `ScanResult.frame_columns` is the
-`(start, end)` of the frame in that pass.
-
-Nothing is cropped for you, and that is deliberate: a camera gate is often wider
-than the film format, so cropping to the format clips the picture, and cropping
-to the picture gives a strip frames of different sizes. Keep the pass, and use
-`frame_columns` to draw the frame or to crop on your own terms:
-
-```python
-result = session.scan_frame(frame, positive=False)
-start, end = result.frame_columns
-cropped = {name: plane[:, start:end] for name, plane in result.colors.items()}
-```
-
-`positive` says which way the film reads, which is what finds the picture in the
-pass: bare film is the brightest thing a negative holds and the densest a slide
-holds. Pass `positive=True` for slide and Kodachrome. Getting it wrong costs the
-frame its place, so set it whenever `caps.framing == "perforation"`.
-
-`caps.framing` says whether any of this applies. Every other unit addresses the
-film with the window, so the pass is the frame and `frame_columns` spans it.
-
 ## Nudging frames by hand
 
-`discover_frames` returns the thumbnail it detected against, keyed the same way `ScanResult.colors` is:
+`scan_frame` scans the rectangle it is given. A rectangle moved along the feed, or
+cropped, is registered with the unit before the pass, so it reaches the film it
+asks for rather than being read as an offset into the frame it fell under. The
+pass is that rectangle at both ends, so there is nothing to crop afterwards.
+
+`discover_frames` returns the thumbnail it detected against, keyed the same way
+`ScanResult.colors` is, along with the mapping between a thumbnail column and a
+feed address:
 
 ```python
 discovery = session.discover_frames()  # or format="66" where the holder can't tell on its own
@@ -110,7 +92,28 @@ if discovery.thumbnail is not None:
     show_to_operator(discovery.thumbnail)  # dict[str, NDArray[uint16]]
 ```
 
-You can use that to write logic to move around the discovery.frames.
+Use `discovery.addresses_per_column` to go between the two, so the rectangle the
+operator sees is the rectangle that gets scanned:
+
+```python
+per = discovery.addresses_per_column          # e.g. 41.87 on an LS-50
+top, left, bottom, right = discovery.frames[3]
+
+# the frame's own columns of the thumbnail, to draw or slice a preview tile
+first, last = round(top / per), round(bottom / per)
+tile = {name: plane[:, first:last] for name, plane in discovery.thumbnail.items()}
+
+# and back, for a rectangle the operator dragged
+moved = (round(first * per), left, round(last * per), right)
+result = session.scan_frame(moved)
+```
+
+Do **not** compute that number as `optical_dpi / thumbnail_dpi`. The unit reports a
+thumbnail resolution the film does not keep to: an LS-50 reports 97 dpi against a
+4000 dpi sensor, which gives 41 addresses a column where the film moves about 41.9.
+That is 2.4 mm out by the fourth frame of a strip and 4 mm by the sixth. It is
+measured from each thumbnail pass, so read it from each `Discovery` rather than
+caching it.
 
 ## Progress and cancellation
 

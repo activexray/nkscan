@@ -51,16 +51,6 @@ pub enum Polarity {
     Negative,
 }
 
-/// A frame to be found in a pass the unit positioned
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Picture {
-    /// Which way the loaded film reads
-    pub polarity: Polarity,
-    /// The frame's own length along the feed, which a pass that clipped the
-    /// picture is measured back from
-    pub extent: u32,
-}
-
 /// The columns of a positioned pass that hold the picture
 ///
 /// The picture lies between the run of bare film before it and the run after
@@ -136,24 +126,6 @@ pub fn locate(image: &Image, polarity: Polarity) -> Range<usize> {
         x += 1;
     }
     start..end.max(start)
-}
-
-/// Where the picture starts, in columns, which is negative where the pass
-/// opened inside it
-///
-/// A pass that opens inside the picture is the one that most needs moving and
-/// the one with no film in front of it, so this measures from the film behind
-/// the picture instead, `extent` columns back. `found` is [`locate`]'s answer
-/// over a pass of `cols` columns. `None` where the pass shows no bare film,
-/// which places nothing
-pub fn start(found: &Range<usize>, cols: usize, extent: usize) -> Option<i32> {
-    if found.start > 0 {
-        return Some(found.start as i32);
-    }
-    match found.end < cols {
-        true => Some(found.end as i32 - extent as i32),
-        false => None,
-    }
 }
 
 #[cfg(test)]

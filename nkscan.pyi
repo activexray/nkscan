@@ -19,6 +19,7 @@ __all__ = [
     "TransientError",
     "TransportError",
     "UnsupportedError",
+    "init_logging",
     "list_devices",
 ]
 
@@ -303,6 +304,18 @@ class UnsupportedError(ScannerError):
     This unit or adapter cannot do that. Carries `.op` and `.reason`
     """
     ...
+
+def init_logging(level: typing.Optional[builtins.str] = None) -> None:
+    r"""
+    Send the crate's `tracing` diagnostics to stderr.
+    
+    The extension installs no subscriber on its own, so without calling this the
+    `debug!`/`trace!`/`warn!` calls throughout `session`, `scan`, `transport`, and
+    `protocol` go nowhere when `nkscan` is used as a library. `level` sets the
+    default (`"info"` if omitted); `RUST_LOG` always overrides it and can target
+    individual modules the way it does for the CLI, e.g. `nkscan::cdb=trace`.
+    Safe to call more than once — later calls are no-ops.
+    """
 
 def list_devices() -> builtins.list[Device]:
     r"""

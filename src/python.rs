@@ -32,7 +32,13 @@ use crate::{
 use numpy::{IntoPyArray, PyArray2, PyArrayMethods};
 use pyo3::{exceptions::PyRuntimeError, prelude::*};
 use pyo3_stub_gen::{create_exception, define_stub_info_gatherer, derive::*};
-use std::{collections::HashMap, ops::ControlFlow, sync::Mutex};
+use std::{
+    collections::HashMap,
+    io::{IsTerminal, stderr},
+    ops::ControlFlow,
+    sync::Mutex,
+};
+use tracing_subscriber::EnvFilter;
 
 // ----- errors -----
 
@@ -132,6 +138,31 @@ impl PyDevice {
 #[pyfunction]
 fn list_devices() -> Vec<PyDevice> {
     device::list().into_iter().map(PyDevice).collect()
+}
+
+// ----- logging -----
+
+/// Send the crate's `tracing` diagnostics to stderr.
+///
+/// The extension installs no subscriber on its own, so without calling this the
+/// `debug!`/`trace!`/`warn!` calls throughout `session`, `scan`, `transport`, and
+/// `protocol` go nowhere when `nkscan` is used as a library. `level` sets the
+/// default (`"info"` if omitted); `RUST_LOG` always overrides it and can target
+/// individual modules the way it does for the CLI, e.g. `nkscan::cdb=trace`.
+/// Safe to call more than once — later calls are no-ops.
+#[gen_stub_pyfunction]
+#[pyfunction]
+#[pyo3(signature = (level=None))]
+fn init_logging(level: Option<&str>) {
+    let level = level.unwrap_or("info");
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new(format!("{level},nusb=warn"))),
+        )
+        .with_target(false)
+        .with_ansi(stderr().is_terminal())
+        .try_init();
 }
 
 // ----- capabilities -----
@@ -630,6 +661,7 @@ fn nkscan_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyScanResult>()?;
     m.add_class::<PyDiscovery>()?;
     m.add_function(wrap_pyfunction!(list_devices, m)?)?;
+    m.add_function(wrap_pyfunction!(init_logging, m)?)?;
 
     let py = m.py();
     m.add("ScannerError", py.get_type::<ScannerError>())?;

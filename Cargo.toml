@@ -1,6 +1,6 @@
 [package]
 name = "nkscan"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "A platform-agnostic, performant driver for Nikon film scanners"
@@ -58,7 +58,12 @@ cli = [
   "dep:moxcms",
   "dep:ctrlc",
 ]
-python = ["dep:pyo3", "dep:numpy", "dep:pyo3-stub-gen"]
+python = [
+  "dep:pyo3",
+  "dep:numpy",
+  "dep:pyo3-stub-gen",
+  "dep:tracing-subscriber",
+]
 
 [lib]
 name = "nkscan"

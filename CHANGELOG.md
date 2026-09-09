@@ -5,10 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.11.0]
 
 ### Added
 
+- `init_logging(level=None)` in Python, wiring `tracing` output to stderr. `RUST_LOG` overrides `level`, as for the CLI.
 - A frame moved along the feed, or a crop, can be scanned on a perforation-framed unit: it is registered with the unit first, so the film moves to it rather than being read as an offset into the frame it fell in.
 - `Scanned::frame_lines`, and `ScanResult.frame_columns` in Python as a `(start, end)` tuple. Both say which columns of a pass hold the frame, on a unit whose pass is longer than the frame.
 - `Options::polarity` and `scan_frame(positive=...)` in Python. A perforation-framed unit hands back a pass longer than the frame, and which way the film reads is what finds the picture inside it.
@@ -16,11 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Frames are found by the bare film between them rather than by their edges. Bare film has no picture on it, so it looks the same whichever way the film reads. Every frame on a strip gets one length and one spacing. `scan::strip` replaces `boundaries::detect`.
+- How many frames a strip holds comes out of the fit rather than from the caller: the film with pictures on it is so many pitches long, and the pitch is what is being searched. A frame nobody exposed is still counted where the film either side of it is; one at the end of the strip is not, since nothing in the pass tells it from the bare film past the last frame.
 - **Breaking:** Python `discover_frames` no longer takes `positive`. The signature is now `discover_frames(format=None, progress=None)`, so a call that passed `positive` positionally now passes it as `progress`, where it is silently ignored. Frames are found without it.
 - **Breaking:** Python `scan_frame` takes `positive` between `lock_white_balance` and `exposures`, so a call that passed `exposures` positionally now raises `TypeError`. Pass `exposures` by keyword.
 - **Breaking:** `framing::discover` and `discover_with` no longer take the film's polarity, and `boundaries::detect` and `Detected` are gone.
 - **Breaking:** `boundaries::locate` takes no expected length and returns the picture rather than an `Option`. It returns a range starting at column 0 when the pass began part way into the picture, which tells the caller the frame was clipped.
 - **Breaking:** `Scanned` has a new `frame_lines` field and `Options` a new `polarity` field.
+- **Breaking:** `thumbnail::frames` and `frames_type2` no longer take the film's polarity, as `framing::discover` no longer does.
+- **Breaking:** `Metering::apply`, `measured` and `measure` take a range of the pass's feed lines to measure over, `None` for all of them. That is how a pass longer than the frame keeps the film in front of the picture out of the reading.
+- **Breaking:** `Session::autoexpose_frame`, `autoexpose_frame_with` and `autoexpose_with` take an `Option<boundaries::Picture>`, which finds the frame in a metering pass on a unit that positions the film itself. `None` everywhere else.
+- **Breaking:** `Layout::bytes_per_line` is every reading of the line, not one of them. `Layout::bytes_per_reading` is the one, and `readings` and `even_readings` describe how a line is split.
 - A pass on a perforation-framed unit takes more than the frame, and the CLI writes all of it and names the frame's columns. Cropping to the format would clip a camera whose gate is wider than it, and cropping to the picture would give the strip frames of different sizes.
 - `Capabilities.max_samples` in Python answers the SET WINDOW page, so a unit that reads a line once reports 1 and a multi-sample control can be hidden.
 
@@ -36,10 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--samples` above 1 on a unit with no multi-read mode is refused before the stage moves, with `multisampling is not supported`. An LS-50 reported mode bits after the thumbnail and the focus.
 - The thumbnail line is measured against the unit's own perforation table, 2-11-8, rather than computed from the resolution the unit reports. An LS-50 reports 97 dpi, so a line was taken as 41 addresses where the film moves 42.0.
 - A frame on a perforation-framed unit is centered in its pass. The pass used to start on the first line of the picture, leaving no film before it to find the frame's leading edge against.
-- The correction that moves a frame onto the scannable range aims at the middle of that range, moves the whole rectangle, and moves in either direction. Moving the top without the bottom made the frame shorter by however far it moved.
+- The correction that moves a frame onto the scannable range aims at the middle of that range, moves the whole rectangle, and moves in either direction. Moving the top without the bottom made the frame shorter by however far it moved. It stays on the axis at both ends, and a place the unit will not take leaves the frame where it was rather than failing the pass.
+- The edge of the holder's opening, and the cut end of a strip, no longer stretch the film a fit is measured over. Each is a step across the sensor and reads exactly like a picture, so taking the first and last column of any detail took in the whole opening: a 6x4.5 strip of three came back as four, and a 6x6 strip of two as three.
 - Metering on a perforation-framed unit measured the film in front of the frame, which cost up to a third of a stop on a dense negative.
-- `DataType::Boundary2` reads back: the transfer length is the valid data plus the record's own header, and `from_bytes` wanted a parameter length a byte shorter than `to_bytes` writes.
-- The frame table is put back after a pass that corrected a frame's place, so scanning one frame twice no longer moves the film about 4 mm.
+- `DataType::Boundary2` reads back: the transfer length is the valid data plus the record's own header, and `from_bytes` wanted a parameter length a byte shorter than `to_bytes` writes. The probe read that sizes a record now asks for the data header and the record's own header together, for `Boundary`, `Boundary2`, `Perforation` and `Setup` alike, since the unit reports the record's header only when the read covers it.
+- The frame table is put back after any pass that wrote one, not only after a pass that corrected a frame's place. A crop, and a frame nudged by hand, are registered with the unit before the pass and were never corrected afterwards, so the pass's own table stayed in the unit and the next frame scanned against it read the wrong film.
 - Multi-sampling on a unit that attaches invalid bytes to a line. It attaches them to each reading, not to the line, so `--samples 2` at 4000 dpi asked for 2.2 MB less than the unit sends and then stopped answering.
 - The USB transport no longer errors out of a scan when the unit pads the status phase's closing packet to a whole packet size, the same padding already tolerated on a data phase's last packet.
 

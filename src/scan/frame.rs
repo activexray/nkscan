@@ -41,11 +41,8 @@ pub struct Options<'a> {
 
 /// What one frame's scan produced
 pub struct Scanned {
-    /// The pass over the rectangle that was asked for
-    ///
-    /// The pass is that rectangle: the window is set to it, and on a unit that
-    /// positions the film by its own table the rectangle is registered with the
-    /// unit first so the window reaches it
+    /// The pass over the rectangle that was asked for, which is that rectangle
+    /// at both ends
     pub pass: Pass,
     /// What the frame was exposed at
     pub exposures: Exposures,
@@ -76,41 +73,46 @@ pub fn scan_frame_with(
     mut on: impl FnMut(Phase, Progress) -> ControlFlow<()>,
 ) -> Result<Scanned, Error> {
     // Where the unit positions the film by its own frame table, the window's Y
-    // picks a table entry and reads as an offset into that frame rather than as
-    // an address, so the rectangle has to be in the table before the window can
-    // reach it. A table written for this pass comes back off the unit afterwards
+    // selects a table entry and is an offset into that frame, not an address.
+    // The rectangle must be in the table before the window can reach it
     let registered = framing::register(session, frame)?;
-    session.focus_frame(frame, Focus::default())?;
 
-    let exposures = match options.exposures {
-        Some(locked) => locked.clone(),
-        None => {
-            let lock = options.lock_white_balance;
-            session
-                .autoexpose_frame_with(frame, recipe, lock, |pass, p| on(Phase::Meter(pass), p))?
-        }
-    };
+    let taken = (|| {
+        session.focus_frame(frame, Focus::default())?;
 
-    let mut windows = recipe.windows(session.capabilities(), frame)?;
-    exposures.apply(&mut windows);
+        let exposures = match options.exposures {
+            Some(locked) => locked.clone(),
+            None => {
+                let lock = options.lock_white_balance;
+                session.autoexpose_frame_with(frame, recipe, lock, |pass, p| {
+                    on(Phase::Meter(pass), p)
+                })?
+            }
+        };
 
-    let pass = session.scan_pass_with(&windows, SCAN_TIMEOUT, samples, |p| on(Phase::Scan, p))?;
+        let mut windows = recipe.windows(session.capabilities(), frame)?;
+        exposures.apply(&mut windows);
 
-    // The table goes back to what it measured, so the next rectangle of this
-    // session starts from the measured table rather than this one's place.
-    // Written rather than registered: `register` starts from the measured
-    // table, and would find the entry it wants already in it, so it would do
-    // nothing and leave this pass's table in the unit
+        let pass =
+            session.scan_pass_with(&windows, SCAN_TIMEOUT, samples, |p| on(Phase::Scan, p))?;
+        Ok::<_, Error>((pass, exposures))
+    })();
+
+    // Put the measured table back, whether or not the pass got that far, so the
+    // next rectangle of this session starts from it. Written and not
+    // registered: `register` starts from the measured table, finds the entry it
+    // wants already there, and leaves this pass's table in the unit
     if registered
         && let Some(measured) = session.frames_type2().cloned()
         && let Err(e) = session.set_boundaries_type2_for_pass(&measured)
     {
         warn!(
             %e,
-            "could not put the measured frame table back, so a later rectangle may position against this one"
+            "could not put the measured frame table back, so a later rectangle can position against this one"
         );
     }
 
+    let (pass, exposures) = taken?;
     samples.to_full_scale(pass.layout.bits_per_sample);
 
     let cleaned = options

@@ -1,24 +1,22 @@
 //! Finding the frames of a strip in its thumbnail
 //!
-//! A camera exposes the same window each time, and a transport advances by the
-//! same amount each time. The frames are therefore all one size and one
-//! distance apart, and the fit is two numbers: where the first gap is, and the
-//! pitch.
+//! A camera exposes the same window each time and a transport advances by the
+//! same amount each time. The frames are thus all one size and one distance
+//! apart. The fit is two numbers: the first gap and the pitch.
 //!
 //! The film between two frames holds no picture, so it reads the same all the
-//! way down the sensor. A picture does not. This finds the gaps by that, and
-//! the frames are what lies between them. The level is never used, so which
-//! way the film reads does not matter.
+//! way down the sensor. A picture does not. The gaps are found by that
+//! difference, and the frames are the columns between them. The level is not
+//! used, so the polarity of the film does not change the result.
 //!
-//! The count falls out of the fit. The film that holds a picture is so many
-//! pitches long, and the pitch is what is being searched, so each candidate
-//! pitch says how many frames it would take to cover that film. A frame
-//! nobody exposed is still counted where the film either side of it is, since
-//! the fit spans it; one at the end of the strip is not, because nothing in
-//! the pass distinguishes it from the bare film past the last frame.
+//! The count comes from the fit. The film with pictures on it is so many
+//! pitches long, and the pitch is what is searched. An unexposed frame is
+//! counted, because the fit spans it. An unexposed frame at the end of the
+//! strip is not, because it reads the same as the bare film past the last
+//! frame.
 //!
-//! The format bounds the pitch search. It is not the answer: a camera gate is
-//! not the rectangle the caller scans.
+//! The format bounds the pitch search. It is not the answer, because a camera
+//! gate is not the rectangle the caller scans.
 
 use crate::protocol::decode::Image;
 use std::ops::{Range, RangeInclusive};
@@ -43,9 +41,9 @@ const BARE: f32 = 0.10;
 /// a share of the way to what a picture reads
 const TOLERANCE: f32 = 0.15;
 
-/// The longest flat stretch that lies inside one picture rather than between
-/// two, as a share of the format. A picture is not busy end to end - a sky, a
-/// wall, a wash of shadow - and those parts of it read as flat as film
+/// The longest flat stretch that is inside one picture and not between two, as
+/// a share of the format. A picture is not busy end to end, and a sky or a
+/// shadow reads as flat as film
 const CLOSE: f32 = 0.70;
 
 /// The pitch to search, in twentieths of the format. A short wind leaves the
@@ -58,18 +56,17 @@ const PICTURE: usize = 8;
 /// The least of the format a run of picture must span to be a frame's, as a
 /// share of it
 ///
-/// The edge of the holder's opening, and the cut end of the strip, put a step
-/// across the sensor: every row of those columns differs, which is exactly
-/// what a picture looks like here. They span a few columns against the format
-/// or more that a frame's picture runs, so a short run is one of those and
-/// says nothing about where the film with pictures on it begins or ends
+/// The edge of the holder's opening and the cut end of the strip each put a
+/// step across the sensor, which reads the same as a picture. Each spans a few
+/// columns, and a frame's picture spans the format or more. A short run is
+/// thus an edge and does not bound the film with pictures on it
 const RUN: f32 = 0.50;
 
 /// The frames of a strip, in columns of the thumbnail
 #[derive(Debug, Clone, PartialEq)]
 pub struct Strip {
     /// The picture of each frame, between the gaps either side. Not the
-    /// rectangle a scan of it takes: see [`Strip::scans`]
+    /// rectangle a scan of it takes: the format is usually longer
     pub frames: Vec<Range<usize>>,
     /// Columns from one gap to the next
     pub pitch: usize,
@@ -80,8 +77,7 @@ pub struct Strip {
 /// How much picture each column holds
 ///
 /// The spread of a column down the sensor axis. Film between two frames reads
-/// the same all the way down, whether it is clear, dense or holder. A picture
-/// does not
+/// the same all the way down, at any density. A picture does not
 fn detail(image: &Image) -> Vec<f32> {
     let band = TRIM..image.rows.saturating_sub(TRIM);
     let mut out = vec![0.0; image.cols];
@@ -120,8 +116,8 @@ fn detail(image: &Image) -> Vec<f32> {
     out
 }
 
-/// The detail of a pass, with running totals so a stretch of it costs the same
-/// to read however long it is
+/// The detail of a pass, with running totals, so a stretch of it costs the
+/// same to read at any length
 struct Detail {
     at: Vec<f32>,
     upto: Vec<f32>,
@@ -148,16 +144,16 @@ impl Detail {
 
     /// The columns that hold a picture
     ///
-    /// A pass runs from the holder, over the film, and out past the end of it.
-    /// Only the film with pictures on it holds frames, and how long that is
-    /// says how many frames a proposed pitch would take.
+    /// A pass runs from the holder, over the film, and past the end of it.
+    /// Only the film with pictures on it holds frames, and its length says how
+    /// many frames a proposed pitch takes.
     ///
-    /// Three things separate it from the rest of the pass, and `length` - the
-    /// format - is the ruler for two of them. Bare film reads flat, so a
-    /// column within [`TOLERANCE`] of the flattest in the pass is not picture.
-    /// A flat stretch shorter than [`CLOSE`] of the format is inside one
-    /// picture rather than between two. And a run of picture shorter than
-    /// [`RUN`] of the format is an edge rather than a frame's
+    /// Three tests separate that film from the rest of the pass, and `length`,
+    /// the format, is the ruler for two of them. A column within [`TOLERANCE`]
+    /// of the flattest in the pass is bare film and not picture. A flat
+    /// stretch shorter than [`CLOSE`] of the format is inside one picture and
+    /// not between two. A run of picture shorter than [`RUN`] of the format is
+    /// an edge and not a frame
     fn film(&self, length: usize) -> Range<usize> {
         let mut sorted = self.at.clone();
         sorted.sort_by(f32::total_cmp);
@@ -212,8 +208,8 @@ fn picture(first: usize, pitch: usize, k: usize) -> Range<usize> {
 
 /// Detail in the pictures less detail in the gaps
 ///
-/// Both terms are needed. Gaps alone would put every frame on the holder,
-/// which is as empty. Pictures alone would slide the fit onto the busiest film
+/// Both terms are necessary. Gaps alone put every frame on the holder, which
+/// is as empty. Pictures alone move the fit onto the busiest film
 fn score(detail: &Detail, first: usize, pitch: usize, frames: usize) -> f32 {
     let mut gaps = 0.0;
     for k in 0..=frames {
@@ -228,7 +224,7 @@ fn score(detail: &Detail, first: usize, pitch: usize, frames: usize) -> f32 {
 
 /// Fit the frames of a strip to its thumbnail
 ///
-/// `length` is the frame the caller scans, in columns, which bounds the pitch
+/// `length` is the frame the caller scans, in columns. It bounds the pitch
 /// search. `None` where the pass holds no frames
 pub fn find(image: &Image, length: usize) -> Option<Strip> {
     if length == 0 || image.cols == 0 {
@@ -242,17 +238,16 @@ pub fn find(image: &Image, length: usize) -> Option<Strip> {
     let least = PICTURE + 2 * REACH + 2;
     let mut best: Option<(f32, usize, usize, usize)> = None;
     for pitch in (length * PITCH.start() / 20).max(least)..=(length * PITCH.end() / 20).max(least) {
-        // The film runs from the first frame's picture to the last one's, so
-        // it is that many pitches long bar the gap the last frame has no
-        // picture over. Nearest rather than rounded either way: that gap is a
-        // fraction of a pitch, and so is however far the level put the ends of
-        // the run inside or outside the pictures themselves
+        // The film runs from the first picture to the last, so it is that many
+        // pitches long less the one gap that has no picture after it. Rounded
+        // to the nearest: that gap is a fraction of a pitch, and so is the
+        // distance the level puts the ends of the run inside the pictures
         let frames = (film.len() + pitch / 2) / pitch;
         if frames == 0 {
             continue;
         }
-        // A frame either side of the picture, since the outermost frames may
-        // be blank and hold no picture to be found by
+        // A frame either side of the picture, because the outermost frames can
+        // be unexposed and hold no picture
         let from = film.start.saturating_sub(pitch);
         let to = (film.end + pitch).min(cols.saturating_sub(1));
         // A fit that runs off the film is not a fit on this strip
@@ -277,33 +272,128 @@ pub fn find(image: &Image, length: usize) -> Option<Strip> {
     })
 }
 
-impl Strip {
-    /// The rectangles to scan, `extent` columns each
-    ///
-    /// The format is usually longer than the picture, because it has to hold
-    /// any picture of that format whole. Centering it on the picture spreads
-    /// the difference over both ends
-    pub fn scans(&self, extent: usize, cols: usize) -> Vec<Range<usize>> {
-        self.frames
-            .iter()
-            .map(|frame| {
-                let middle = frame.start + frame.len() / 2;
-                let start = middle
-                    .saturating_sub(extent / 2)
-                    .min(cols.saturating_sub(extent));
-                start..(start + extent).min(cols)
-            })
-            .collect()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        protocol::decode::Samples,
-        scan::boundaries::{Polarity, tests::Strip as Film},
-    };
+    use crate::protocol::{decode::Samples, image::Layout};
+
+    /// Rows of the rendered sensor
+    const SENSOR: usize = 64;
+
+    /// Which way the rendered film reads. The fit does not use the level, so
+    /// this only proves that
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Polarity {
+        /// Slide film, where unexposed film is the densest on the strip
+        Positive,
+        /// Negative film, where unexposed film is the brightest on the strip
+        Negative,
+    }
+
+    /// What a strip of film reads at
+    struct Levels {
+        /// The film between two frames, which is unexposed
+        between: u16,
+        /// What a picture averages
+        picture: u16,
+    }
+
+    fn levels(polarity: Polarity) -> Levels {
+        match polarity {
+            // Unexposed slide is maximum density, just above the holder
+            Polarity::Positive => Levels {
+                between: 700,
+                picture: 9000,
+            },
+            // Unexposed negative is base plus mask, the brightest film there is
+            Polarity::Negative => Levels {
+                between: 30000,
+                picture: 8000,
+            },
+        }
+    }
+
+    /// One column of a thumbnail, down the sensor. `contrast` is what tells a
+    /// picture from film with nothing on it
+    fn column(plane: &mut [u16], feed: usize, x: usize, level: u16, contrast: f32) {
+        for y in 0..SENSOR {
+            // Nothing periodic with the frame, so no run of columns is alike
+            let swing = ((y * 7 + x * 3) % 11) as f32 / 11.0 - 0.5;
+            let v = f32::from(level) * (1.0 + contrast * swing);
+            plane[y * feed + x] = v.clamp(0.0, f32::from(u16::MAX)) as u16;
+        }
+    }
+
+    /// A thumbnail of a strip
+    ///
+    /// `frames` gives each start, all `length` long. `flat` names one whose
+    /// picture has no variation, `blank` one never exposed
+    struct Film {
+        feed: usize,
+        length: usize,
+        polarity: Polarity,
+        frames: Vec<usize>,
+        flat: Option<usize>,
+        blank: Option<usize>,
+        /// Columns of bare backlight past the end of the film
+        gate: Option<(usize, usize)>,
+        /// Columns of holder mask before the film starts
+        mask: usize,
+        /// Stretches where the sensor sees a step and not film: the edge of the
+        /// holder's opening, or the cut end of the strip. Every row of such a
+        /// column differs, the way a picture's does
+        edges: Vec<(usize, usize)>,
+    }
+
+    impl Film {
+        fn new(frames: Vec<usize>, length: usize, polarity: Polarity) -> Self {
+            let feed = frames.iter().max().unwrap_or(&0) + length + 60;
+            Self {
+                feed,
+                length,
+                polarity,
+                frames,
+                flat: None,
+                blank: None,
+                gate: None,
+                mask: 0,
+                edges: Vec::new(),
+            }
+        }
+
+        fn render(&self) -> Samples {
+            let level = levels(self.polarity);
+            let mut colors = vec![vec![0u16; SENSOR * self.feed]; 3];
+
+            for x in 0..self.feed {
+                let inside = self
+                    .frames
+                    .iter()
+                    .position(|&top| (top..top + self.length).contains(&x));
+
+                let (value, contrast) = match inside {
+                    // A step across the sensor, whatever the film beneath it
+                    _ if self.edges.iter().any(|&(a, b)| (a..b).contains(&x)) => (30000, 0.95),
+                    _ if x < self.mask => (140, 0.10),
+                    _ if self.gate.is_some_and(|(a, b)| (a..b).contains(&x)) => (65200, 0.0),
+                    Some(n) if Some(n) == self.blank => (level.between, 0.0),
+                    Some(n) if Some(n) == self.flat => (level.picture, 0.0),
+                    // A picture, which is never the same twice down the sensor
+                    Some(_) => (level.picture, 0.55),
+                    None => (level.between, 0.0),
+                };
+                for plane in &mut colors {
+                    column(plane, self.feed, x, value, contrast);
+                }
+            }
+            Samples { colors, ir: None }
+        }
+
+        /// The layout [`Self::render`]'s samples are read back through
+        fn layout(&self) -> Layout {
+            Layout::single_line(SENSOR as u32, self.feed as u32, vec![1, 2, 3])
+        }
+    }
 
     /// Fit a rendered strip
     fn fit(film: &Film, length: usize) -> Strip {
@@ -450,19 +540,5 @@ mod tests {
         let layout = film.layout();
         let image = Image::new(&layout, &samples).expect("the buffer is the layout's size");
         assert!(find(&image, 120).is_none());
-    }
-
-    /// The format is the frame the caller asked for and the picture is what
-    /// the camera left, and a scan takes the first centered on the second
-    #[test]
-    fn a_scan_is_the_format_over_the_middle_of_the_picture() {
-        let found = Strip {
-            frames: vec![10..110, 130..230],
-            pitch: 120,
-            contrast: 1.0,
-        };
-        assert_eq!(found.scans(60, 400), vec![30..90, 150..210]);
-        // Never off the end of the pass, whatever the fit said
-        assert_eq!(found.scans(60, 200), vec![30..90, 140..200]);
     }
 }

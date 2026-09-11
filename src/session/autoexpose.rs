@@ -132,7 +132,7 @@ impl Session {
                     // Correct from what this pass measured, whether or not
                     // another one follows: the exposures the scan gets are the
                     // ones the last pass asked for, never the ones it ran at
-                    let next = metering.apply(self.capabilities(), &image, &windows, None)?;
+                    let next = metering.apply(self.capabilities(), &image, &windows)?;
                     for (w, exposure) in windows.iter_mut().zip(next) {
                         w.exposure = exposure;
                     }
@@ -141,7 +141,7 @@ impl Session {
                     // on target, so confirming it costs a pass to learn nothing.
                     // Only a clipped channel, whose correction is a retreat
                     // rather than a measurement, is worth another
-                    let measured = metering.measured(&image, &windows, None);
+                    let measured = metering.measured(&image, &windows);
                     debug!(pass = n, measured, "metering pass");
                     if measured {
                         break;
@@ -153,7 +153,7 @@ impl Session {
                 }
 
                 let layout = layout.expect("the loop runs at least once");
-                let measured = metering.measure(&Image::new(&layout, &samples)?, &windows, None);
+                let measured = metering.measure(&Image::new(&layout, &samples)?, &windows);
                 // `setup` is a diagnostic - nothing below reads it - and it is
                 // the one command in a pass the unit can be slow about: a whole
                 // PROBE_TIMEOUT per channel on some holders, which reads as the

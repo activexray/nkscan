@@ -59,10 +59,6 @@ Arguments:
 Options:
       --basename <BASENAME>
           Where to write, as a path prefix. Each frame becomes <basename>_<n>.tiff, and its infrared mask <basename>_<n>_IR.tiff
-
-          On a unit that positions the film by its perforations, a pass takes
-          more film than the frame and all of it is written; the log line for
-          each frame names the columns the frame itself occupies
           
           [default: scan]
 

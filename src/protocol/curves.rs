@@ -72,11 +72,6 @@ impl Curves {
             None => sample,
         }
     }
-
-    /// How many rows the tables cover
-    pub fn rows(&self) -> usize {
-        self.rows.len()
-    }
 }
 
 /// One row's table: where `from` reads a value, what `onto` reads at the same

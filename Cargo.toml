@@ -95,14 +95,6 @@ name = "stub_gen"
 path = "src/bin/stub_gen.rs"
 required-features = ["python"]
 
-[[example]]
-name = "verify_frame"
-required-features = ["cli"]
-
-[[example]]
-name = "verify_placement"
-required-features = ["cli"]
-
 [dev-dependencies]
 divan = "0.1.21"
 tiff = "0.11"

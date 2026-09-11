@@ -12,7 +12,7 @@ use crate::{
             other::HostCooperation,
             set_window::{ColorInterleaving, ScanKind},
         },
-        data::{Truncation, width_code},
+        data::{Position, Truncation, width_code},
         window::{Channel, Window, validate_set},
     },
 };
@@ -20,6 +20,9 @@ use crate::{
 /// The measurement unit divisor 2-10 treats as its second case. Any other is
 /// the unit's maximum resolution, which is its first
 const COARSE_DIVISOR: u16 = 1200;
+
+/// The position bits that say bytes 15 to 18 hold the infrared reading's count
+const INFRARED_BYTES: Position = Position::INFRARED_FIRST.union(Position::INFRARED_LAST);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {
@@ -58,6 +61,9 @@ pub struct Layout {
     pub granule: usize,
     /// Invalid bytes attached to every scan line, at start and end per 2-11-5-3
     pub truncated_bytes_line: (u32, u32),
+    /// Invalid bytes attached to the reading that carries the channels the
+    /// unit reads one time. Bytes 15 to 18 of 2-11-5-3
+    pub truncated_bytes_once: (u32, u32),
     /// Invalid lines attached to every image, so total lines before the first and after the last line per 2-11-5-3
     pub truncated_lines_frame: (u32, u32),
     /// Whether the handshake raised [`MultiLineRegistration`](crate::protocol::sense::Coop::MultiLineRegistration),
@@ -87,6 +93,7 @@ impl Layout {
             registration_gap: 0,
             granule: 1,
             truncated_bytes_line: (0, 0),
+            truncated_bytes_once: (0, 0),
             truncated_lines_frame: (0, 0),
             multiline_registered: false,
         }
@@ -235,6 +242,7 @@ impl Layout {
         let channels: Vec<u8> = windows.iter().map(|w| w.id).collect();
 
         let mut truncated_bytes_line = (0, 0);
+        let mut truncated_bytes_once = (0, 0);
         let mut truncated_lines_frame = (0, 0);
 
         if let Some(t) = truncated_by_driver {
@@ -242,6 +250,16 @@ impl Layout {
                 u32::from(t.per_color.first) + u32::from(t.all_colors.first),
                 u32::from(t.per_color.last) + u32::from(t.all_colors.last),
             );
+
+            // The unit pads every reading to a whole packet, so the reading
+            // that includes infrared has a count of its own. 2-11-5-3
+            truncated_bytes_once = match t.position.intersects(INFRARED_BYTES) {
+                true => (
+                    u32::from(t.per_color.first) + u32::from(t.infrared_reading.first),
+                    u32::from(t.per_color.last) + u32::from(t.infrared_reading.last),
+                ),
+                false => truncated_bytes_line,
+            };
 
             truncated_lines_frame = (u32::from(t.lines.first), u32::from(t.lines.last));
         }
@@ -266,6 +284,7 @@ impl Layout {
             // Measured off the line the rest of these describe
             granule: 1,
             truncated_bytes_line,
+            truncated_bytes_once,
             truncated_lines_frame,
             // Nothing here has heard the handshake; the session sets this once it has
             multiline_registered: false,
@@ -300,16 +319,23 @@ impl Layout {
     /// 2-7 raises TRUNCATED BY DRIVER when the data of one line is not a
     /// multiple of 512 bytes, the size of a bulk packet. The unit attaches the
     /// invalid bytes to each reading of the line, and 2-11-5-2 counts each
-    /// reading as a line of its own. A reading is thus the unit that 2-11-3
-    /// reads and the stream repeats. Some channels are read one time only. The
-    /// unit sends these in the first reading, where the decoder expects them
+    /// reading as a line of its own. A reading is thus what 2-11-3 reads and
+    /// what the stream repeats. The unit reads some channels one time only and
+    /// sends them in the first reading, where the decoder expects them
     pub fn bytes_per_reading(&self, reading: u32) -> u32 {
         let colors = self.colors().count() as u32;
         let once = self.channels.len() as u32 - colors;
         let readouts = colors + if reading == 0 { once } else { 0 };
-        self.pixels * u32::from(self.bytes_per_sample) * readouts
-            + self.truncated_bytes_line.0
-            + self.truncated_bytes_line.1
+        let (first, last) = self.truncated_bytes(reading);
+        self.pixels * u32::from(self.bytes_per_sample) * readouts + first + last
+    }
+
+    /// Invalid bytes attached to one reading of a line, at each end
+    pub fn truncated_bytes(&self, reading: u32) -> (u32, u32) {
+        match reading == 0 && !self.even_readings() {
+            true => self.truncated_bytes_once,
+            false => self.truncated_bytes_line,
+        }
     }
 
     /// True if all the readings of a line have the same length. A channel the
@@ -664,18 +690,26 @@ mod tests {
 
     /// The unit reads infrared one time whatever the colors get, so infrared
     /// makes the first reading of a line longer than the others
+    ///
+    /// The pass that stopped an LS-5000 on `--samples 2 --ir`: the unit pads
+    /// the reading of four channels by 184 and the reading of three by 394,
+    /// and each one is then a whole number of 512-byte packets
     #[test]
     fn a_channel_read_once_rides_with_the_first_reading() {
         let truncation = Truncation {
-            position: Position::ALL_LAST,
+            position: Position::ALL_LAST | Position::INFRARED_LAST,
             all_colors: Edges {
                 first: 0,
                 last: 394,
             },
+            infrared_reading: Edges {
+                first: 0,
+                last: 184,
+            },
             ..Default::default()
         };
-        let mut windows = rgb(4000, (3945, 5658));
-        windows.push(window(9, 4000, (3945, 5658)));
+        let mut windows = rgb(4000, (3945, 5670));
+        windows.push(window(9, 4000, (3945, 5670)));
         for w in &mut windows {
             w.multiple_reading = 1;
             w.composition = Composition::MultilevelRGB;
@@ -684,11 +718,60 @@ mod tests {
         let l = Layout::new(&caps(0x03, 1, 1), &windows, 4000, Some(&truncation)).unwrap();
 
         assert!(!l.even_readings());
-        assert_eq!(l.bytes_per_reading(0), 3945 * 2 * 4 + 394);
-        assert_eq!(l.bytes_per_reading(1), 3945 * 2 * 3 + 394);
-        assert_eq!(l.bytes_per_line(), 3945 * 2 * 7 + 394 * 2);
+        assert_eq!(l.bytes_per_reading(0), 31744);
+        assert_eq!(l.bytes_per_reading(1), 24064);
+        assert_eq!(l.bytes_per_line(), 55808);
+        assert_eq!(l.total_bytes(), 316_431_360);
         // Readings of different lengths leave the whole line as the only unit
         assert_eq!(l.granule, l.bytes_per_line() as usize);
+    }
+
+    /// Without the infrared bytes every reading takes the count of all colors
+    #[test]
+    fn a_reading_of_colors_alone_takes_the_count_of_all_colors() {
+        let truncation = Truncation {
+            position: Position::ALL_LAST,
+            all_colors: Edges {
+                first: 0,
+                last: 394,
+            },
+            ..Default::default()
+        };
+        let mut windows = rgb(4000, (3945, 5670));
+        windows.push(window(9, 4000, (3945, 5670)));
+        for w in &mut windows {
+            w.multiple_reading = 1;
+            w.composition = Composition::MultilevelRGB;
+        }
+
+        let l = Layout::new(&caps(0x03, 1, 1), &windows, 4000, Some(&truncation)).unwrap();
+
+        assert_eq!(l.bytes_per_reading(0), 3945 * 2 * 4 + 394);
+        assert_eq!(l.bytes_per_reading(1), 3945 * 2 * 3 + 394);
+    }
+
+    /// One reading of every channel takes the count of all colors, which is
+    /// what the unit reports for the metering pass of a scan with infrared
+    #[test]
+    fn one_reading_of_every_channel_takes_the_count_of_all_colors() {
+        let truncation = Truncation {
+            position: Position::ALL_LAST,
+            all_colors: Edges {
+                first: 0,
+                last: 312,
+            },
+            ..Default::default()
+        };
+        let mut windows = rgb(4000, (281, 5669));
+        windows.push(window(9, 4000, (281, 5669)));
+        for w in &mut windows {
+            w.composition = Composition::MultilevelRGB;
+        }
+
+        let l = Layout::new(&caps(0x03, 1, 1), &windows, 4000, Some(&truncation)).unwrap();
+
+        assert_eq!(l.bytes_per_reading(0), 2560);
+        assert_eq!(l.bytes_per_line(), 2560);
     }
 
     #[test]
@@ -770,6 +853,7 @@ mod readouts {
             registration_gap: 1,
             granule: 1,
             truncated_bytes_line: (0, 0),
+            truncated_bytes_once: (0, 0),
             truncated_lines_frame: (0, 0),
             multiline_registered: false,
         }

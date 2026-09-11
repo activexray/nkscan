@@ -182,10 +182,20 @@ fn main() {
                 }
             }
         }
-        for scan in found.scans(nominal, w) {
+        // The rectangle a scan takes is the format over the middle of the
+        // picture, as `thumbnail::frames` puts it
+        for frame in &found.frames {
+            let middle = frame.start + frame.len() / 2;
+            let start = middle
+                .saturating_sub(nominal / 2)
+                .min(w.saturating_sub(nominal));
             for y in (0..h).filter(|y| y % 8 < 4) {
-                set(scan.start, y, [65535, 65535, 65535]);
-                set(scan.end.saturating_sub(1), y, [65535, 65535, 65535]);
+                set(start, y, [65535, 65535, 65535]);
+                set(
+                    (start + nominal).min(w).saturating_sub(1),
+                    y,
+                    [65535, 65535, 65535],
+                );
             }
         }
 

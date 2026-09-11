@@ -176,21 +176,19 @@ pub fn frames(caps: &Capabilities) -> Result<Boundary, Error> {
     Ok(Boundary { frames })
 }
 
-/// Register `frame` with the unit before a pass over it, where the unit
-/// positions the film by its table rather than by the window
+/// Put `frame` in the unit's frame table before a pass over it
 ///
-/// The unit reads a rectangle that is not in the table as an offset into the
-/// frame that contains its top, and gives black data after the end of that
-/// frame. An entry with the perforation record of the rectangle's own thumbnail
-/// line moves the film to the rectangle instead. The unit accepts a table only
-/// as a whole, so this starts from the table the session knows, and reads the
-/// unit's table if the session knows none. A top already in the table is left
-/// alone.
+/// Only for a unit that positions the film by that table. Such a unit reads a
+/// rectangle that is not in the table as an offset into the frame that holds
+/// its top, and sends black data past the end of that frame. An entry carrying
+/// the perforation record of the rectangle's own thumbnail line moves the film
+/// to the rectangle. The unit accepts the table only as a whole, so this
+/// starts from the table the session knows, or from the unit's table if the
+/// session knows none. A top already in the table is left alone.
 ///
-/// Answers whether a table was written, which is what the caller has to undo:
-/// the session keeps the measured table, not this one, and the next rectangle
-/// must start from the measured table because an entry is replaced and not
-/// added
+/// Answers whether a table was written. The caller must put the measured table
+/// back, because [`BoundaryType2::register`] replaces an entry and does not add
+/// one
 pub fn register(session: &mut Session, frame: Rect) -> Result<bool, Error> {
     if Framing::choose(session.capabilities()) != Framing::Perforation {
         return Ok(false);
@@ -224,11 +222,10 @@ pub fn register(session: &mut Session, frame: Rect) -> Result<bool, Error> {
 
 /// The perforation record that puts the top of a frame at `top`
 ///
-/// The record read at the frame's own line. Do not calculate one: the pattern
-/// phases have different lengths, 24, 28, 12, 28 and 14 pulses in one
-/// perforation of a measured strip, so arithmetic on a record uses a length
-/// that only the pass measures. Nikon Scan also reads the record from the
-/// table
+/// The record the last pass read at the frame's own line. Do not calculate
+/// one: the phases of the pattern have different pulse counts, so arithmetic
+/// on a record needs a length that only the pass measures. Nikon Scan also
+/// takes the record from the table
 fn record(session: &mut Session, top: u32) -> Result<(usize, PerforationInformation), Error> {
     let perfs = session.read_perforations()?;
     // The same ruler the table was built with, so a top lands on the line it
@@ -255,13 +252,10 @@ pub struct Discovery {
     pub thumbnail: Option<Pass>,
     /// How a column of [`thumbnail`](Self::thumbnail) maps to a feed address
     ///
-    /// The unit reports a thumbnail resolution the film does not keep to, so
-    /// `optical_dpi / thumbnail_dpi` is not this: an LS-50 reports 97 dpi
-    /// against a 4000 dpi sensor, which computes 41 addresses a column where
-    /// the film moves about 41.9. Over a strip of six that is four millimeters
-    /// by the last frame. Use this to put a rectangle drawn on the thumbnail
-    /// onto the film, so the rectangle previewed is the rectangle scanned.
-    /// `None` where the mechanism took no thumbnail
+    /// Use this to put a rectangle drawn on the thumbnail onto the film. Do
+    /// not compute it as `optical_dpi / thumbnail_dpi`: the film does not keep
+    /// to the thumbnail resolution the unit reports. `None` where the
+    /// mechanism took no thumbnail
     pub line_pitch: Option<thumbnail::LinePitch>,
 }
 
@@ -278,8 +272,8 @@ pub fn discover(
 ///
 /// `format` is only needed by [`Framing::Thumbnail`] and [`Framing::Perforation`], and even
 /// there only where [`FilmFormat::resolve`] cannot work it out from the loaded holder.
-/// Which way the film reads does not come into it: a frame is found by the
-/// bare film between the frames, which reads flat whichever way round it is.
+/// The polarity of the film is not asked for: a frame is found by the bare
+/// film between two frames, which reads flat at any polarity.
 /// `samples` is scratch, left holding the thumbnail where [`Discovery::thumbnail`] is `Some`
 pub fn discover_with(
     session: &mut Session,

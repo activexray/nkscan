@@ -31,16 +31,14 @@ const PERFORATION_MM_E4: u64 = 47_498;
 /// Ten-thousandths of a millimeter in an inch, to turn that into addresses
 const INCH_MM_E4: u64 = 254_000;
 
-/// The film a perforation-framed strip must move to make a measurement worth
-/// having: fewer perforations than this and the quarter a record is rounded to
-/// is a large part of what is being measured
+/// The least film a measurement needs, in quarter perforations. Below this the
+/// quarter that a record is rounded to is a large part of the measurement
 const MEASURED_QUARTERS: u64 = 16;
 
 /// Stage addresses one thumbnail column spans
 ///
-/// The pass asks for the thumbnail resolution, and a thumbnail pitch is the
-/// optical resolution over what was asked, rounded down, so this is the pass's
-/// own `line_pitch` without the pass in hand
+/// The optical resolution over the resolution the pass asks for, rounded down,
+/// which is the pass's own `line_pitch` computed without the pass
 pub(crate) fn line_pitch(caps: &Capabilities) -> u32 {
     let optical =
         u32::from(caps.address.y_axis.optical_dpi).max(u32::from(caps.address.x_axis.optical_dpi));
@@ -52,9 +50,8 @@ pub(crate) fn line_pitch(caps: &Capabilities) -> u32 {
 
 /// How far the film moves between two thumbnail lines
 ///
-/// Kept as the film it measured over the lines it took to move, because the
-/// answer is not a whole number of addresses and a frame is over a hundred
-/// lines of it
+/// Held as the film measured over the lines it moved in, because the answer is
+/// not a whole number of addresses and a frame spans over a hundred lines
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LinePitch {
     addresses: u64,
@@ -72,19 +69,16 @@ impl LinePitch {
 
     /// What the film did, measured off the perforation table
     ///
-    /// The unit reports a thumbnail resolution the film does not keep to: an
-    /// LS-50 reports 97 dpi, so the pass asks for 41 addresses a line and the
-    /// film moves about 41.8. Over the 137 lines of a 135 frame that is a
-    /// millimeter, which is most of the room a frame has in the gate.
+    /// The film does not keep to the thumbnail resolution the unit reports,
+    /// and the error accumulates over a frame. 2-11-8's table is the ruler
+    /// that settles it: each record is one line's absolute position in
+    /// perforations and quarters of one, and a 135 perforation is 4.7498 mm.
     ///
-    /// 2-11-8's table is the ruler that settles it. Every record is one line's
-    /// absolute position, counted in perforations and quarters of one, and a
-    /// 135 perforation is 4.7498 mm. The count does not run the whole pass:
-    /// the unit has nothing to count before the first perforation and stops at
-    /// the last, so this measures between the first record that moved and the
-    /// last one that did. A table that measures nothing, or a pitch the pass
-    /// could not have asked for, gives `None` and the caller keeps the
-    /// computed one
+    /// The count does not run the whole pass. The unit counts nothing before
+    /// the first perforation and stops at the last, so this measures between
+    /// the first record that moved and the last one that moved. `None` where
+    /// the table measures nothing, or gives a pitch the pass could not have
+    /// asked for. The caller then keeps the computed pitch
     pub fn measured(caps: &Capabilities, perfs: &PerfInformation) -> Option<Self> {
         let quarters =
             |p: &PerforationInformation| u64::from(p.perf_number) * 4 + u64::from(p.perf_decimal);
@@ -127,8 +121,8 @@ impl LinePitch {
 
     /// Stage addresses one thumbnail column spans, as a fraction
     ///
-    /// Kept exact as a ratio internally; this is for callers that map between
-    /// thumbnail columns and feed addresses themselves
+    /// Held as a ratio internally. This is for a caller that maps between
+    /// thumbnail columns and feed addresses itself
     pub fn addresses_per_column(&self) -> f64 {
         self.addresses as f64 / self.lines.max(1) as f64
     }
@@ -154,6 +148,23 @@ impl LinePitch {
         let addresses = self.addresses.max(1);
         ((film + addresses / 2) / addresses) as usize
     }
+}
+
+/// The top of a frame of `format` centered on the middle of its picture
+///
+/// The format is the rectangle the caller scans. A camera gate is not that
+/// rectangle, so the format is put over the middle of the picture and the
+/// difference goes to both ends. `None` where the axis is shorter than the
+/// format
+fn top_of(caps: &Capabilities, middle: u32, format: u32) -> Option<u32> {
+    let origin = caps.address.y_axis.address_range.start;
+    let end = caps.address.y_axis.address_range.last;
+    let last = end.checked_sub(format)?;
+    Some(
+        middle
+            .saturating_sub(format / 2)
+            .clamp(origin.min(last), last),
+    )
 }
 
 /// Whether this unit and adapter will thumbnail at all
@@ -186,7 +197,6 @@ pub fn frames(
     // the Y axis does, so a column is an address
     let pitch = pass.layout.line_pitch.max(1);
     let origin = caps.address.y_axis.address_range.start;
-    let end = caps.address.y_axis.address_range.last;
     let (left, width) = opening(caps);
 
     let Some(found) = strip::find(&image, (format / pitch) as usize) else {
@@ -194,15 +204,12 @@ pub fn frames(
         return Ok(Boundary::default());
     };
 
-    // The window addresses the film here, so a frame is the format over the
-    // middle of the picture. Not the picture: a camera gate is not the
-    // rectangle the caller asked to scan
+    // The window addresses the film here, so the rectangle is the frame
     let frames: Vec<Rect> = found
         .frames
         .iter()
         .map(|frame| origin + (frame.start + frame.len() / 2) as u32 * pitch)
-        .map(|middle| middle.saturating_sub(format / 2).max(origin))
-        .filter(|top| top + format <= end)
+        .filter_map(|middle| top_of(caps, middle, format))
         .map(|top| Rect {
             top,
             left,
@@ -238,9 +245,9 @@ pub fn frames_type2(
     let image = Image::new(&pass.layout, samples)?;
 
     // A thumbnail column is one line pitch of film, and the pass starts where
-    // the Y axis does, so a column is an address. The pitch the pass asked for
-    // is not the one the film kept to, and the table this unit just measured
-    // says what it was
+    // the Y axis does, so a column is an address. The film does not keep to
+    // the pitch the pass asked for, and the table the unit just measured says
+    // what it did keep to
     let pitch = match LinePitch::measured(caps, perf_info) {
         Some(measured) => {
             debug!(
@@ -255,7 +262,6 @@ pub fn frames_type2(
         }
     };
     let origin = caps.address.y_axis.address_range.start;
-    let end = caps.address.y_axis.address_range.last;
 
     let Some(found) = strip::find(&image, pitch.columns(format)) else {
         info!("nothing on the strip to frame");
@@ -275,19 +281,14 @@ pub fn frames_type2(
     }
 
     // 2-11-9 moves the film so that an entry's top address is the first line
-    // the pass reads. The record is how it gets there, so the two are one
-    // reading of one place and move together. The pass is the rectangle, so
-    // the entry that opens the pass on the picture is half a format ahead of
-    // the middle of the picture
+    // the pass reads, and the record is how it gets there. The two are one
+    // reading of one place and move together
     let frames: Vec<FramePosition> = found
         .frames
         .iter()
-        .map(|frame| pitch.address_of((frame.start + frame.len() / 2) as u32))
-        .filter_map(|middle| {
-            let top = (origin + middle)
-                .saturating_sub(format / 2)
-                .max(origin)
-                .min(end.saturating_sub(format));
+        .map(|frame| origin + pitch.address_of((frame.start + frame.len() / 2) as u32))
+        .filter_map(|middle| top_of(caps, middle, format))
+        .filter_map(|top| {
             let col = pitch.line_at(caps, top);
             let perf = perf_info.at(col);
             debug!(col, top, ?perf, "the pass over a frame");

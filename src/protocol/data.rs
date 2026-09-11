@@ -64,11 +64,10 @@ pub enum DataType {
 impl DataType {
     /// Bytes of the record's own header, which 2-11-2 calls the header length
     ///
-    /// A read of the data header alone reports a length two bytes short of the
-    /// record for `Boundary2`, and the unit then refuses that length with
-    /// `05h-24h`. A read of the data header and this reports the whole record.
-    /// The unit accepts no length between the two: for a 52-byte table it takes
-    /// 6 and 10 bytes and refuses 7, 8, 12, 16, 20 and 24
+    /// The unit reports the record's header only when the read covers it. A
+    /// read of the data header alone reports a `Boundary2` two bytes short of
+    /// the record, and the unit then refuses that length with `05h-24h`. A
+    /// read of the data header and this reports the whole record
     pub const fn head(self) -> u32 {
         match self {
             Self::Boundary => Boundary::HEAD as u32,
@@ -537,13 +536,13 @@ impl BoundaryType2 {
     const BOUNDARY: usize = 8;
 
     /// Put `frame` in the slot its top falls in, so a SET WINDOW at that top
-    /// picks it
+    /// selects it
     ///
     /// The unit reads a window in the frame whose entry has the greatest top at
     /// or below the top of the window. A new top replaces that entry and is not
-    /// added to the table: a seventh entry on an LS-50 moved the film 1528
-    /// addresses from the requested position. A top before every entry replaces
-    /// the first entry. The order of the table does not change
+    /// added: an entry past the count the holder allows moves the film to the
+    /// wrong place. A top before every entry replaces the first entry. The
+    /// order of the table does not change
     pub fn register(&mut self, frame: FramePosition) {
         let slot = self
             .frames
@@ -559,14 +558,14 @@ impl BoundaryType2 {
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
         let head: &[u8; Self::HEAD] = b.get(..Self::HEAD)?.try_into().ok()?;
 
-        // Bytes 0-1: parameter length, which is total length - 1.
+        // Bytes 0-1: parameter length, two short of the record. A six-frame
+        // table of 52 bytes reports 50, in what the unit sends and in what it
+        // accepts alike
         let parameter_length = u16::from_be_bytes([head[0], head[1]]) as usize;
 
         // Byte 2: actual number of images.
         let count = usize::from(head[2]);
 
-        // Two short of the record, not one: a six-frame table of 52 bytes
-        // reports 50, both in what the unit sends and in what it accepts
         let total = parameter_length.checked_add(2)?;
 
         // The reserved byte is currently ignored.
@@ -867,6 +866,9 @@ pub struct Truncation {
     pub per_color: Edges,
     /// Bytes 11,12 then 13,14, measured from the origin of all colors
     pub all_colors: Edges,
+    /// Bytes 15,16 then 17,18, reserved in 2-11-5-3 and set for the reading
+    /// that includes infrared
+    pub infrared_reading: Edges,
     /// Bytes 19,20 then 21,22, counted in lines rather than bytes
     pub lines: Edges,
     /// Bytes 23,24 then 25,26, measured from one frame's origin
@@ -890,6 +892,9 @@ bitflags! {
         const COLOR_LAST  = 1 << 1;
         const ALL_FIRST   = 1 << 2;
         const ALL_LAST    = 1 << 3;
+        /// Reserved in 2-11-5-3, set for the reading that includes infrared
+        const INFRARED_FIRST = 1 << 4;
+        const INFRARED_LAST  = 1 << 5;
         const LINE_FIRST  = 1 << 6;
         const LINE_LAST   = 1 << 7;
         const FRAME_FIRST = 1 << 8;
@@ -912,6 +917,7 @@ impl Truncation {
             position: Position::from_bits_truncate(u16::from(b[5]) | u16::from(b[6]) << 8),
             per_color: edges(7),
             all_colors: edges(11),
+            infrared_reading: edges(15),
             lines: edges(19),
             frame: edges(23),
         })
@@ -1186,6 +1192,38 @@ mod tests {
             CooperativeAction::from_bytes(&b[..CooperativeAction::LENGTH]),
             Some(CooperativeAction::Unknown(0x06, _))
         ));
+    }
+
+    /// The record an LS-5000 returned for a multi-sampled pass with infrared,
+    /// payload only. Bit 5 and bytes 17,18 are reserved in 2-11-5-3 and the
+    /// unit sets them: the reading of three colors takes 394 bytes and the
+    /// reading that includes infrared takes 184
+    #[test]
+    fn a_multi_sampled_pass_with_infrared_counts_two_kinds_of_reading() {
+        let b = [
+            0x06, 0x09, 0x80, 0x06, 0x01, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+            0x8a, 0x00, 0x00, 0x00, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+
+        let CooperativeAction::Truncate(t) = CooperativeAction::from_bytes(&b).unwrap() else {
+            panic!("not a truncation record");
+        };
+        assert_eq!(t.position, Position::ALL_LAST | Position::INFRARED_LAST);
+        assert_eq!(t.per_color, Edges { first: 0, last: 0 });
+        assert_eq!(
+            t.all_colors,
+            Edges {
+                first: 0,
+                last: 394
+            }
+        );
+        assert_eq!(
+            t.infrared_reading,
+            Edges {
+                first: 0,
+                last: 184
+            }
+        );
     }
 
     /// The setup record an LS-9000 returned for one loaded image, payload only

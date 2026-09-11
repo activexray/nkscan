@@ -62,7 +62,7 @@ class Capabilities:
     def max_samples(self) -> builtins.int:
         r"""
         Most readings of one line a pass may ask for. 1 where the unit reads a
-        line once, so a multi-sample control has nothing to offer
+        line one time, so a multi-sample control can be hidden
         """
     @property
     def framing(self) -> builtins.str:
@@ -161,14 +161,12 @@ class Discovery:
         r"""
         Feed addresses one column of `thumbnail` spans
         
-        This is what puts a rectangle drawn on the thumbnail onto the film, so
-        the rectangle previewed is the rectangle scanned. Do not compute it as
-        `optical_dpi / thumbnail_dpi`: the unit reports a thumbnail resolution
-        the film does not keep to, and an LS-50 reports 97 dpi against a 4000
-        dpi sensor, which gives 41 where the film moves about 41.9 - four
-        millimeters out by the sixth frame of a strip. Measured per pass, so
-        read it from each discovery rather than caching it. `None` where the
-        mechanism took no thumbnail
+        Use this to put a rectangle drawn on the thumbnail onto the film, so the
+        rectangle previewed is the rectangle scanned. Do not compute it as
+        `optical_dpi / thumbnail_dpi`: the film does not keep to the thumbnail
+        resolution the unit reports, and the error accumulates along the strip.
+        Measured per pass, so read it from each discovery and do not cache it.
+        `None` where the mechanism took no thumbnail
         """
 
 class MediaError(ScannerError):
@@ -265,8 +263,8 @@ class Session:
         Only asked for by the two of four discovery mechanisms that need a
         thumbnail pass to find frames, and even there only where the loaded
         holder does not fix or narrow it by itself, so it can usually be left
-        `None`. Which way the film reads is not asked for: a frame is found by
-        the bare film between the frames, which reads flat either way.
+        `None`. The polarity of the film is not asked for: a frame is found by
+        the bare film between two frames, which reads flat at any polarity.
         `Discovery.thumbnail`, where the mechanism took one, is what a caller
         wanting to nudge `Discovery.frames` by hand shows the operator: a
         rectangle handed to `scan_frame` needs no match in it, so a nudged one
@@ -277,13 +275,12 @@ class Session:
         r"""
         Focus, meter, take the pass over `frame`, and optionally clean it
         
-        `frame` is `(top, left, bottom, right)`, one of `discover_frames`'s, or one of
-        them moved or cropped. The pass is that rectangle: on a unit that positions
-        the film by its own frame table the rectangle is registered with the unit
-        first, so a moved or cropped one reaches the film it asks for rather than
-        being read as an offset into the frame it fell under. `exposures`, keyed the
-        way `ScanResult.exposures` is, reuses an exposure already decided rather than
-        metering this frame fresh
+        `frame` is `(top, left, bottom, right)`, one of `discover_frames`'s, or one
+        of them moved or cropped. The pass is that rectangle at both ends. On a unit
+        that positions the film by its own frame table, the rectangle is put in that
+        table first, so a moved or cropped one reaches the film it asks for.
+        `exposures`, keyed the way `ScanResult.exposures` is, reuses an exposure
+        already decided rather than metering this frame fresh
         """
     def close(self) -> None:
         r"""
@@ -319,7 +316,7 @@ def init_logging(level: typing.Optional[builtins.str] = None) -> None:
     `protocol` go nowhere when `nkscan` is used as a library. `level` sets the
     default (`"info"` if omitted); `RUST_LOG` always overrides it and can target
     individual modules the way it does for the CLI, e.g. `nkscan::cdb=trace`.
-    Safe to call more than once — later calls are no-ops.
+    Safe to call more than once. Later calls are no-ops.
     """
 
 def list_devices() -> builtins.list[Device]:

@@ -482,7 +482,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// Likewise a reading count the byte cannot hold
     /// 2-10 byte 43: a unit that reads a line once refuses a window asking for
     /// more, so the recipe is refused before the stage moves to the frame
     #[test]
@@ -503,6 +502,7 @@ pub(crate) mod tests {
         );
     }
 
+    /// Likewise a reading count the byte cannot hold
     #[test]
     fn a_reading_count_past_the_nibble_is_refused() {
         let caps = caps();

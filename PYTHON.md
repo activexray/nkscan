@@ -77,10 +77,10 @@ Color negative meters each channel separately, which takes the orange mask off b
 
 ## Nudging frames by hand
 
-`scan_frame` scans the rectangle it is given. A rectangle moved along the feed, or
-cropped, is registered with the unit before the pass, so it reaches the film it
-asks for rather than being read as an offset into the frame it fell under. The
-pass is that rectangle at both ends, so there is nothing to crop afterwards.
+`scan_frame` scans the rectangle it is given. The pass is that rectangle at both
+ends, so there is nothing to crop afterwards. A rectangle moved along the feed, or
+cropped, is put in the unit's frame table before the pass, so it reaches the film
+it asks for.
 
 `discover_frames` returns the thumbnail it detected against, keyed the same way
 `ScanResult.colors` is, along with the mapping between a thumbnail column and a
@@ -108,12 +108,10 @@ moved = (round(first * per), left, round(last * per), right)
 result = session.scan_frame(moved)
 ```
 
-Do **not** compute that number as `optical_dpi / thumbnail_dpi`. The unit reports a
-thumbnail resolution the film does not keep to: an LS-50 reports 97 dpi against a
-4000 dpi sensor, which gives 41 addresses a column where the film moves about 41.9.
-That is 2.4 mm out by the fourth frame of a strip and 4 mm by the sixth. It is
-measured from each thumbnail pass, so read it from each `Discovery` rather than
-caching it.
+Do **not** compute that number as `optical_dpi / thumbnail_dpi`. The film does not
+keep to the thumbnail resolution the unit reports, and the error accumulates along
+the strip: on an LS-50 that is 4 mm by the sixth frame. It is measured from each
+thumbnail pass, so read it from each `Discovery` and do not cache it.
 
 ## Progress and cancellation
 

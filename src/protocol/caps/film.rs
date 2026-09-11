@@ -43,13 +43,12 @@ pub enum FilmFormat {
 impl FilmFormat {
     /// Frame height along the feed, in dots of a 4000 dpi axis
     ///
-    /// Address units, which the unit consumes and Nikon Scan's own numbers are
-    /// in: 6696 for 6x4.5, 8964 for 6x6, 13176 for 6x9. Each is a whole number
-    /// of the 12-dot line gap. The millimeter in the name cannot express them,
-    /// since 56.9 mm reaches 8961 of 6x6's 8964, so the dots are kept.
+    /// Address units, which is what the unit consumes and what Nikon Scan's own
+    /// numbers are in. A millimeter cannot express them: 6x6's 8964 dots are
+    /// 56.92 mm, and 56.9 mm reaches only 8961.
     ///
-    /// 6x7 and 6x8 are the round millimeter and are not checked against Nikon
-    /// Scan. 6x9 may be the longest frame the holder takes, not the frame
+    /// 6x7 and 6x8 are the round millimeter, not checked against Nikon Scan.
+    /// 6x9 can be the longest frame the holder takes and not the frame
     const fn height_dots_4000(self) -> u32 {
         match self {
             Self::IX240 => 4756,
@@ -64,11 +63,6 @@ impl FilmFormat {
             // Whole millimeters, so 4000 dots to 25.4 of them
             Self::Custom(mm) => mm * 40000 / 254,
         }
-    }
-
-    /// Frame height along the feed, in mm, rounded to the nearest
-    pub const fn height_mm(self) -> u32 {
-        (self.height_dots_4000() * 254 + 20000) / 40000
     }
 
     /// Frame height in scanner address units (dots at optical DPI)
@@ -207,15 +201,6 @@ impl fmt::Display for FilmFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn known_heights() {
-        assert_eq!(FilmFormat::F135.height_mm(), 36);
-        assert_eq!(FilmFormat::F16.height_mm(), 20);
-        assert_eq!(FilmFormat::F66.height_mm(), 57);
-        assert_eq!(FilmFormat::F69.height_mm(), 84);
-        assert_eq!(FilmFormat::Custom(100).height_mm(), 100);
-    }
 
     /// The names are nominal and the gates are not. Getting these wrong leaves
     /// a frame with a strip of the next one along its edge

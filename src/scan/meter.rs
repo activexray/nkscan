@@ -14,7 +14,6 @@ use crate::{
     protocol::{caps::Capabilities, decode::Image, window::Window},
     scan::profile::Film,
 };
-use std::ops::Range;
 
 /// How to meter a frame
 #[derive(Debug, Clone, Copy)]
@@ -69,15 +68,12 @@ impl Metering {
     /// New exposures for `windows`, from a pass taken with the old ones
     ///
     /// The result lines up with `windows`. A channel the pass tells us nothing
-    /// about keeps the exposure it had. `columns` restricts the measurement to
-    /// a range of the pass's feed lines, which is how a pass longer than the
-    /// frame avoids metering the film in front of the picture
+    /// about keeps the exposure it had.
     pub fn apply(
         &self,
         caps: &Capabilities,
         image: &Image,
         windows: &[Window],
-        columns: Option<Range<usize>>,
     ) -> Result<Vec<u32>, Error> {
         let carried = image.colors.len() + usize::from(!image.ir.is_empty());
         if carried != windows.len() {
@@ -98,7 +94,7 @@ impl Metering {
 
         // What each channel asks to be scaled by, before the lock has a say
         let steps: Vec<Option<f64>> = self
-            .measure(image, windows, columns.as_ref())
+            .measure(image, windows)
             .into_iter()
             .map(|level| level.and_then(|l| step(l, target, ceiling)))
             .collect();
@@ -144,14 +140,9 @@ impl Metering {
     /// further pass would add. A clipped channel says only that it is somewhere
     /// above: the retreat is a guess, so that one has to be measured again.
     /// A channel with nothing to measure has nothing to learn either
-    pub fn measured(
-        &self,
-        image: &Image,
-        windows: &[Window],
-        columns: Option<Range<usize>>,
-    ) -> bool {
+    pub fn measured(&self, image: &Image, windows: &[Window]) -> bool {
         let ceiling = ceiling(image.bits);
-        self.measure(image, windows, columns.as_ref())
+        self.measure(image, windows)
             .into_iter()
             .flatten()
             .all(|level| level < ceiling)
@@ -160,12 +151,7 @@ impl Metering {
     /// The high tail of each channel, in `windows` order
     ///
     /// What the exposures get decided from, so it is worth looking at alone
-    pub fn measure(
-        &self,
-        image: &Image,
-        windows: &[Window],
-        columns: Option<&Range<usize>>,
-    ) -> Vec<Option<u16>> {
+    pub fn measure(&self, image: &Image, windows: &[Window]) -> Vec<Option<u16>> {
         let mut color = 0usize;
         windows
             .iter()
@@ -177,7 +163,7 @@ impl Metering {
                 } else {
                     image.ir
                 };
-                tail(plane, image.cols, columns, self.percentile)
+                tail(plane, self.percentile)
             })
             .collect()
     }
@@ -205,34 +191,13 @@ fn step(level: u16, target: u16, ceiling: u16) -> Option<f64> {
 
 /// The `percentile` brightest sample of one plane, or `None` where it is empty
 ///
-/// Counted rather than sorted, so a plane is read once and never copied.
-/// `columns`, where given, restricts the count to a range of the plane's
-/// feed lines
-fn tail(
-    plane: &[u16],
-    stride: usize,
-    columns: Option<&Range<usize>>,
-    percentile: f32,
-) -> Option<u16> {
-    if stride == 0 {
-        return None;
-    }
-    let rows = plane.len() / stride;
-    let (from, to) = match columns {
-        None => (0, stride),
-        Some(range) => (range.start.min(stride), range.end.min(stride)),
-    };
-    if to <= from {
-        return None;
-    }
-
+/// Counted rather than sorted, so a plane is read once and never copied
+fn tail(plane: &[u16], percentile: f32) -> Option<u16> {
     let mut counts = vec![0u32; usize::from(u16::MAX) + 1];
     let mut total = 0usize;
-    for y in 0..rows {
-        for &sample in &plane[y * stride + from..y * stride + to] {
-            counts[usize::from(sample)] += 1;
-            total += 1;
-        }
+    for &sample in plane {
+        counts[usize::from(sample)] += 1;
+        total += 1;
     }
     if total == 0 {
         return None;
@@ -363,7 +328,7 @@ mod tests {
         let w = windows(&[1, 2, 3], 1000);
         // A third, a half and a quarter of full scale
         let (l, s) = decoded(&w, &[21845, 32767, 16383]);
-        let got = m.apply(&caps(), &image(&l, &s), &w, None).unwrap();
+        let got = m.apply(&caps(), &image(&l, &s), &w).unwrap();
         assert_eq!(got, vec![3000, 2000, 4000]);
     }
 
@@ -377,7 +342,7 @@ mod tests {
         };
         let w = windows(&[1, 2, 3], 1000);
         let (l, s) = decoded(&w, &[21845, 32767, 16383]);
-        let got = m.apply(&caps(), &image(&l, &s), &w, None).unwrap();
+        let got = m.apply(&caps(), &image(&l, &s), &w).unwrap();
         // Green asked for 2x and wants it least, so nothing overshoots
         assert_eq!(got, vec![2000, 2000, 2000]);
     }
@@ -391,7 +356,7 @@ mod tests {
         };
         let w = windows(&[1, 2, 3], 1000);
         let (l, s) = decoded(&w, &[65535, 32767, 32767]);
-        let got = m.apply(&caps(), &image(&l, &s), &w, None).unwrap();
+        let got = m.apply(&caps(), &image(&l, &s), &w).unwrap();
         assert_eq!(got, vec![500, 2000, 2000]);
     }
 
@@ -405,7 +370,7 @@ mod tests {
         };
         let w = windows(&[1, 2, 3, Channel::Infrared.id()], 1000);
         let (l, s) = decoded(&w, &[21845, 32767, 32767, 16383]);
-        let got = m.apply(&caps(), &image(&l, &s), &w, None).unwrap();
+        let got = m.apply(&caps(), &image(&l, &s), &w).unwrap();
         // The visible three lock to green's 2x; infrared takes its own 4x
         assert_eq!(got, vec![2000, 2000, 2000, 4000]);
     }
@@ -421,7 +386,7 @@ mod tests {
         let w = windows(&[1, 2, 3], 1000);
         let measured = |levels: &[u16]| {
             let (l, s) = decoded(&w, levels);
-            m.measured(&image(&l, &s), &w, None)
+            m.measured(&image(&l, &s), &w)
         };
 
         assert!(measured(&[65000, 65000, 65000]));
@@ -438,45 +403,7 @@ mod tests {
         let m = Metering::default();
         let w = windows(&[1, 2, 3], 1000);
         let (l, s) = decoded(&w, &[0, 32767, 32767]);
-        let got = m.apply(&caps(), &image(&l, &s), &w, None).unwrap();
+        let got = m.apply(&caps(), &image(&l, &s), &w).unwrap();
         assert_eq!(got[0], 1000);
-    }
-
-    /// A range of the pass's lines is how a pass longer than the frame keeps
-    /// the film in front of the picture out of the reading
-    #[test]
-    fn a_column_range_keeps_lines_out_of_the_measurement() {
-        let m = Metering {
-            target: 1.0,
-            ..Default::default()
-        };
-        let w = windows(&[1, 2, 3], 1000);
-
-        // One line at full scale, one below it, every channel
-        let mut raw = Vec::new();
-        for line in 0..LINES {
-            let level = match line {
-                0 => u16::MAX,
-                _ => 32767,
-            };
-            for _ in w.iter().filter(|w| w.channel().is_color()) {
-                for _ in 0..PIXELS {
-                    raw.extend_from_slice(&level.to_be_bytes());
-                }
-            }
-        }
-        let layout = Layout::new(&caps(), &w, 4000, None).unwrap();
-        let mut decoder = Decoder::new(&layout).unwrap();
-        let mut samples = Samples::default();
-        samples.resize_for(&decoder);
-        decoder.push(&raw, &mut samples).unwrap();
-        let image = Image::new(&layout, &samples).unwrap();
-        assert_eq!(image.cols, LINES as usize);
-
-        assert!(!m.measured(&image, &w, None), "the whole pass is clipped");
-        assert!(m.measured(&image, &w, Some(1..2)), "the second line is not");
-
-        let got = m.apply(&caps(), &image, &w, Some(1..2)).unwrap();
-        assert_eq!(got, vec![2000, 2000, 2000]);
     }
 }

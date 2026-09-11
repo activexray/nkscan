@@ -11,7 +11,6 @@ use nkscan::{
         decode::{Image, Samples},
     },
     scan::{
-        boundaries::{self, Polarity},
         frame::{self, Options},
         framing::{self, Framing},
         window::Recipe,
@@ -19,6 +18,38 @@ use nkscan::{
     session::Session,
 };
 use std::ops::ControlFlow;
+
+/// The mean of each column of the first color plane, down the feed
+fn profile(image: &Image) -> Vec<f64> {
+    let plane = image.colors.first().expect("a color plane");
+    (0..image.cols)
+        .map(|x| {
+            let sum: f64 = (0..image.rows)
+                .map(|y| f64::from(plane[y * image.cols + x]))
+                .sum();
+            sum / image.rows as f64
+        })
+        .collect()
+}
+
+/// The shift, in columns, that puts `b` over `a` best
+///
+/// The same film read twice aligns at 0. Film the unit positioned differently
+/// aligns somewhere else, or nowhere
+fn shift(a: &[f64], b: &[f64], most: usize) -> isize {
+    let cost = |by: isize| {
+        let (from, to) = (most as isize, a.len() as isize - most as isize);
+        let mut sum = 0.0;
+        for x in from..to {
+            let d = a[x as usize] - b[(x + by) as usize];
+            sum += d * d;
+        }
+        sum
+    };
+    (-(most as isize)..=most as isize)
+        .min_by(|&p, &q| cost(p).total_cmp(&cost(q)))
+        .expect("a shift")
+}
 
 /// A rectangle scanned twice in one session comes back in the same place
 ///
@@ -29,8 +60,8 @@ use std::ops::ControlFlow;
 /// it and reads the wrong film. Before the fix the second pass came back 87
 /// columns out with the frame's tail off the end.
 ///
-/// The pass is the rectangle, so where the picture sits inside it is the same
-/// both times only if the film was positioned the same way both times.
+/// The pass is the rectangle, so the two passes are the same film only if the
+/// unit positioned the film the same way both times.
 #[test]
 #[ignore = "needs a perforation-framed scanner with 35mm film loaded"]
 fn a_frame_scanned_twice_comes_back_in_the_same_place() {
@@ -69,23 +100,20 @@ fn a_frame_scanned_twice_comes_back_in_the_same_place() {
         )
         .expect("scan");
         let image = Image::new(&scanned.pass.layout, &samples).expect("image");
-        let plane = image.colors.first().expect("a color plane");
-        let mean = plane.iter().map(|&s| f64::from(s)).sum::<f64>() / plane.len() as f64;
-        (boundaries::locate(&image, Polarity::Negative), mean)
+        profile(&image)
     };
 
-    let (first, first_mean) = round();
-    let (second, second_mean) = round();
-
-    let moved = first.start.abs_diff(second.start);
-    assert!(
-        moved <= 4,
-        "the picture moved {moved} columns between passes: {first:?} then {second:?}"
+    let first = round();
+    let second = round();
+    assert_eq!(
+        first.len(),
+        second.len(),
+        "the passes are different lengths"
     );
-    // The same film either way, so the level cannot jump
-    let ratio = first_mean.max(second_mean) / first_mean.min(second_mean);
+
+    let moved = shift(&first, &second, 40);
     assert!(
-        ratio < 1.05,
-        "the passes read different film: {first_mean:.0} then {second_mean:.0}"
+        moved.abs() <= 4,
+        "the film moved {moved} columns between the two passes"
     );
 }

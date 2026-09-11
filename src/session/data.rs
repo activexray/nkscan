@@ -207,11 +207,11 @@ impl Session {
         Ok(())
     }
 
-    /// Send a table for one pass without adopting it as what the session knows
+    /// Send a table for one pass, without making it what the session knows
     ///
     /// [`framing::register`](crate::scan::framing::register) makes a table for
-    /// a rectangle that the measured table has no entry for. The session keeps
-    /// the measured table, because an entry is replaced and not added
+    /// a rectangle the measured table has no entry for. The session keeps the
+    /// measured table, because an entry is replaced and not added
     pub fn set_boundaries_type2_for_pass(
         &mut self,
         boundary: &data::BoundaryType2,

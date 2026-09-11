@@ -23,7 +23,6 @@ use crate::{
         curves::Curves,
         data::{CooperativeAction, FrameTable, Op, Operation},
         mode,
-        model::Model,
         sense::{Activity, Change, Coop, Fault, Intervention, Outcome, Refusal, interpret},
     },
     transport::{self, Completion, Data, Transport},
@@ -43,7 +42,6 @@ pub struct Session {
     divisor: u16,
     /// The frame table that windowing uses
     frames: Option<FrameTable>,
-    frame_type_2: bool,
     /// CCD row response curves, read once in the preamble
     curves: Option<Arc<Curves>>,
     /// Whether we hold the unit, so [`Drop`] only releases what it took
@@ -101,14 +99,12 @@ impl Session {
     pub fn open(mut transport: Box<dyn Transport>) -> Result<Self, Error> {
         let caps = probe::capabilities(transport.as_mut())?;
         let divisor = caps.address.x_axis.dpi_range.last;
-        let frame_type_2 = !matches!(caps.identity.model(), Some(Model::Ls8000 | Model::Ls9000));
         let mut session = Self {
             transport,
             caps,
             divisor,
             reserved: false,
             frames: None,
-            frame_type_2,
             curves: None,
         };
         // INQUIRY answers while the unit is still initializing, so probing says
@@ -344,11 +340,6 @@ impl Session {
     /// What the scanner says it can do
     pub fn capabilities(&self) -> &Capabilities {
         &self.caps
-    }
-
-    /// Whether we use Framing Type2 or not
-    pub fn uses_frame_type_2(&self) -> bool {
-        self.frame_type_2
     }
 
     /// Re-read what the scanner says it can do

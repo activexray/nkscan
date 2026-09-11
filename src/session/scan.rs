@@ -55,10 +55,6 @@ fn strip_truncation(buf: &mut Vec<u8>, state: &mut TruncationState, layout: &Lay
     // set each and the whole group is what a reading means here
     let rows = usize::from(layout.packed_rows);
 
-    let (first_bytes, last_bytes) = layout.truncated_bytes_line;
-    let first_bytes = first_bytes as usize * rows;
-    let last_bytes = last_bytes as usize * rows;
-
     let readings = layout.readings();
     let total_lines = layout.lines as usize;
     let first_line = layout.truncated_lines_frame.0 as usize;
@@ -71,6 +67,8 @@ fn strip_truncation(buf: &mut Vec<u8>, state: &mut TruncationState, layout: &Lay
         // The unit attaches its invalid bytes to each reading of a line, so
         // each reading is stripped separately
         let reading_bytes = (layout.bytes_per_reading(state.reading) as usize * rows).max(1);
+        let (first_bytes, last_bytes) = layout.truncated_bytes(state.reading);
+        let (first_bytes, last_bytes) = (first_bytes as usize * rows, last_bytes as usize * rows);
         let remaining_in_reading = reading_bytes.saturating_sub(state.offset_in_reading);
         let n = remaining_in_reading.min(buf.len() - read);
 
@@ -405,10 +403,14 @@ mod tests {
     /// 0xFF
     fn wire(l: &Layout) -> Vec<u8> {
         let mut wire = Vec::new();
+        let mut n = 0u8;
         for r in 0..l.readings() {
-            let valid = l.bytes_per_reading(r) as usize - 3;
-            wire.extend((0..valid).map(|i| (r as usize * valid + i) as u8));
-            wire.extend([0xFF; 3]);
+            let pad = l.truncated_bytes(r).1 as usize;
+            for _ in 0..l.bytes_per_reading(r) as usize - pad {
+                wire.push(n);
+                n = n.wrapping_add(1);
+            }
+            wire.extend(vec![0xFF; pad]);
         }
         wire
     }
@@ -441,6 +443,24 @@ mod tests {
         }
 
         assert_eq!(out, (0..48).collect::<Vec<u8>>());
+    }
+
+    /// The unit attaches its own count to the reading that includes infrared
+    #[test]
+    fn a_reading_with_infrared_strips_the_count_of_its_own() {
+        let l = Layout {
+            lines: 2,
+            readings_per_line: 2,
+            truncated_bytes_line: (0, 3),
+            truncated_bytes_once: (0, 5),
+            ..Layout::single_line(4, 2, vec![9, 1, 2, 3])
+        };
+        let mut buf = wire(&l);
+        assert_eq!(buf.len(), 37 + 27);
+
+        strip_truncation(&mut buf, &mut TruncationState::new(), &l);
+
+        assert_eq!(buf, (0..56).collect::<Vec<u8>>());
     }
 
     /// A pass that reads a line one time strips the line as a whole

@@ -312,9 +312,9 @@ impl UsbTransport {
     /// Read the closing packet of a phase, where the unit fills it out to a
     /// whole number of packets instead of ending it short
     ///
-    /// Whatever `out` asks for is what the phase has left, so a
-    /// [`Chunk::TooMuch`] here is that padding, not the pipe out of step -
-    /// unlike a read that has more of the phase still to come after it
+    /// `out` asks for what the phase has left, so a [`Chunk::TooMuch`] here is
+    /// that padding. A read with more of the phase to come after it is the
+    /// pipe out of step
     fn read_last(&mut self, out: &mut [u8], timeout: Duration) -> Result<usize, Error> {
         match self.read_in(out, timeout)? {
             Chunk::Got(n) => Ok(n),

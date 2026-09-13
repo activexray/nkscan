@@ -19,14 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** `Session::autoexpose_frame`, `autoexpose_frame_with` and `autoexpose_with` no longer take a picture to find in the pass. The pass is the frame, so metering reads every pixel of it.
 - **Breaking:** `thumbnail::frames` and `frames_type2` both answer the `LinePitch` they placed the frames with. `Discovery::line_pitch` reports that pitch rather than computing one again.
 - A detected frame's top is the picture centered in the film format, not the picture centered in the scannable range. The two mechanisms that measure a thumbnail now agree on what a frame is.
-- Frames are found by the bare film between them, not by their edges. Bare film holds no picture, so it reads the same at any polarity. Every frame on a strip gets one length and one spacing. `scan::strip` replaces `boundaries::detect`.
+- Frames are found by the bare film between them, not by their edges, so the film's polarity does not change the answer. Every frame on a strip gets one length and one spacing.
 - How many frames a strip holds comes from the fit, not from the caller. An unexposed frame is counted where the film either side of it is. One at the end of the strip is not, because it reads the same as the bare film past the last frame.
 - **Breaking:** Python `discover_frames` no longer takes `positive`. The signature is `discover_frames(format=None, progress=None)`, so a call that passed `positive` positionally now passes it as `progress`, where it is ignored.
-- **Breaking:** `framing::discover` and `discover_with` no longer take the film's polarity, and `boundaries::detect` and `Detected` are gone.
+- **Breaking:** `framing::discover` and `discover_with` no longer take the film's polarity.
 - **Breaking:** `thumbnail::frames` and `frames_type2` no longer take the film's polarity.
 - **Breaking:** `Layout::bytes_per_line` is every reading of the line, not one of them. `Layout::bytes_per_reading` is the one, and `readings` and `even_readings` describe how a line is split.
 - **Breaking:** `Metering::apply`, `measured` and `measure` no longer take a range of columns. The pass is the frame, so there is nothing in it to leave out.
-- **Breaking:** `scan::boundaries` is gone, along with `boundaries::locate` and `Polarity`. `scan::strip` finds the frames, and nothing reads a level any more.
+- **Breaking:** `scan::boundaries` is gone, along with `detect`, `Detected`, `locate` and `Polarity`. `scan::strip` finds the frames, and nothing reads a level any more.
 - **Breaking:** `FilmFormat::height_mm` is gone. `height_dots` is what the unit takes.
 - **Breaking:** `Session::uses_frame_type_2`, `Curves::rows` and `Channel::visible_index` are gone. Nothing called them, and the first keyed off the model name where `framing::Framing::choose` reads the advertised capabilities.
 - `Capabilities.max_samples` in Python answers the SET WINDOW page, so a unit that reads a line one time reports 1 and a multi-sample control can be hidden.

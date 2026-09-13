@@ -135,9 +135,12 @@ impl Session {
         Ok(boundary)
     }
 
-    /// The frame table as far as this session knows it
+    /// The frame table as far as this session knows it, 2-11-6
     ///
-    /// `None` until something has read or written one
+    /// `None` until something reads or writes a 2-11-6 table. A session that
+    /// holds a 2-11-9 table answers `None`, because only a 2-11-6 record gives
+    /// a frame a length. The stage and the autofocus need that length to say
+    /// whether an address is in a frame
     pub fn frames(&self) -> Option<&data::Boundary> {
         match self.frames.as_ref() {
             Some(FrameTable::Boundary(boundary)) => Some(boundary),
@@ -155,9 +158,11 @@ impl Session {
         Ok(boundary)
     }
 
-    /// The frame table as far as this session knows it
+    /// The frame table as far as this session knows it, 2-11-9
     ///
-    /// `None` until something has read or written one
+    /// `None` until something reads or writes a 2-11-9 table. A record gives a
+    /// top and a perforation reading but no length, thus the unit puts an
+    /// address in the frame whose top is the last one below the address
     pub fn frames_type2(&self) -> Option<&data::BoundaryType2> {
         match self.frames.as_ref() {
             Some(FrameTable::BoundaryType2(boundary)) => Some(boundary),

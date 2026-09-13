@@ -452,7 +452,10 @@ mod tests {
             read += want as u64;
             at = g.advance(at, want);
             // Wherever a READ stops is a reading boundary
-            assert!(at == 0 || (at - g.first) % g.rest == 0, "stopped at {at}");
+            assert!(
+                at == 0 || (at - g.first).is_multiple_of(g.rest),
+                "stopped at {at}"
+            );
             reads += 1;
         }
         assert_eq!(read, total);

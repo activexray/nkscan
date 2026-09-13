@@ -350,7 +350,8 @@ pub fn discover_with(
             let length = format.height_dots(optical_dpi);
             info!(?format, length, "frame length");
 
-            let measured = thumbnail::frames(session.capabilities(), &pass, samples, length)?;
+            let (measured, pitch) =
+                thumbnail::frames(session.capabilities(), &pass, samples, length)?;
             // Nothing measured is nothing to tell the unit, and it refuses an
             // empty record. The caller gets the pass either way, which is the
             // only evidence of why the strip measured empty
@@ -363,7 +364,7 @@ pub fn discover_with(
                 table: FrameTable::Boundary(measured),
                 frames: found,
                 thumbnail: Some(pass),
-                line_pitch: Some(thumbnail::LinePitch::computed(session.capabilities())),
+                line_pitch: Some(pitch),
             })
         }
         Framing::Address => {

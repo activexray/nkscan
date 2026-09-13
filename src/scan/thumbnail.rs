@@ -176,40 +176,62 @@ pub fn available(caps: &Capabilities) -> bool {
         && caps.address.thumbnail_resolution.start > 0
 }
 
+/// The top of each frame the pass holds, in Y addresses
+///
+/// The two frame tables measure the same film and differ only in the pitch. A
+/// unit with a perforation table measures the pitch. A unit without one
+/// computes the pitch. `None` where the strip holds no frame
+fn tops(
+    caps: &Capabilities,
+    image: &Image,
+    pitch: LinePitch,
+    format: u32,
+) -> Option<(Vec<u32>, strip::Strip)> {
+    let found = strip::find(image, pitch.columns(format))?;
+    let origin = caps.address.y_axis.address_range.start;
+    let tops = found
+        .frames
+        .iter()
+        .map(|frame| origin + pitch.address_of((frame.start + frame.len() / 2) as u32))
+        .filter_map(|middle| top_of(caps, middle, format))
+        .collect();
+    Some((tops, found))
+}
+
 /// The frame table a thumbnail measures, 2-11-6
 ///
 /// `length` is the frame's extent along the feed, the film format, which
 /// nothing advertises. Every rectangle comes out that long: the captures'
 /// measured tables move the tops about and leave the heights at the format.
 ///
-/// `polarity` is which way the loaded film reads, which the film type says.
+/// Also answers the pitch the rectangles were placed with, so a caller can put
+/// a rectangle drawn on the thumbnail onto the film
 pub fn frames(
     caps: &Capabilities,
     pass: &Pass,
     samples: &Samples,
     length: u32,
-) -> Result<Boundary, Error> {
+) -> Result<(Boundary, LinePitch), Error> {
     let format = window::reachable_blocks(caps, length);
     framing::reachable(caps, format)?;
     let image = Image::new(&pass.layout, samples)?;
 
-    // A thumbnail column is one line pitch of film, and the pass starts where
-    // the Y axis does, so a column is an address
-    let pitch = pass.layout.line_pitch.max(1);
-    let origin = caps.address.y_axis.address_range.start;
+    // This mechanism has no perforation table to measure the film against, so
+    // the pitch is the one the pass asked for
+    let pitch = LinePitch {
+        addresses: u64::from(pass.layout.line_pitch.max(1)),
+        lines: 1,
+    };
     let (left, width) = opening(caps);
 
-    let Some(found) = strip::find(&image, (format / pitch) as usize) else {
+    let Some((tops, found)) = tops(caps, &image, pitch, format) else {
         info!("nothing on the strip to frame");
-        return Ok(Boundary::default());
+        return Ok((Boundary::default(), pitch));
     };
 
     // The window addresses the film here, so the rectangle is the frame
-    let frames: Vec<Rect> = found
-        .frames
-        .iter()
-        .map(|frame| origin + (frame.start + frame.len() / 2) as u32 * pitch)
-        .filter_map(|middle| top_of(caps, middle, format))
+    let frames: Vec<Rect> = tops
+        .into_iter()
         .map(|top| Rect {
             top,
             left,
@@ -220,14 +242,14 @@ pub fn frames(
 
     info!(
         frames = frames.len(),
-        pitch = found.pitch as u32 * pitch,
+        pitch = pitch.address_of(found.pitch as u32),
         contrast = found.contrast,
         "measured the loaded strip"
     );
     for (n, rect) in frames.iter().enumerate() {
         debug!(frame = n + 1, ?rect, "frame rect");
     }
-    Ok(Boundary { frames })
+    Ok((Boundary { frames }, pitch))
 }
 
 pub fn frames_type2(
@@ -261,9 +283,7 @@ pub fn frames_type2(
             LinePitch::computed(caps)
         }
     };
-    let origin = caps.address.y_axis.address_range.start;
-
-    let Some(found) = strip::find(&image, pitch.columns(format)) else {
+    let Some((tops, found)) = tops(caps, &image, pitch, format) else {
         info!("nothing on the strip to frame");
         return Ok((BoundaryType2::default(), format, pitch));
     };
@@ -283,11 +303,8 @@ pub fn frames_type2(
     // 2-11-9 moves the film so that an entry's top address is the first line
     // the pass reads, and the record is how it gets there. The two are one
     // reading of one place and move together
-    let frames: Vec<FramePosition> = found
-        .frames
-        .iter()
-        .map(|frame| origin + pitch.address_of((frame.start + frame.len() / 2) as u32))
-        .filter_map(|middle| top_of(caps, middle, format))
+    let frames: Vec<FramePosition> = tops
+        .into_iter()
         .filter_map(|top| {
             let col = pitch.line_at(caps, top);
             let perf = perf_info.at(col);

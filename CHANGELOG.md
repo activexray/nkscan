@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Breaking:** `scan_frame` scans the rectangle it is given, and nothing re-places it. `framing::recentered`, `framing::pass_rect`, `Scanned::frame_lines`, `Options::polarity`, `boundaries::Picture`, `boundaries::start`, `Session::gate_offset` and `Session::take_picture_start` are gone, and Python's `scan_frame` no longer takes `positive` nor returns `ScanResult.frame_columns`.
 - **Breaking:** `Session::autoexpose_frame`, `autoexpose_frame_with` and `autoexpose_with` no longer take a picture to find in the pass. The pass is the frame, so metering reads every pixel of it.
-- **Breaking:** `thumbnail::frames_type2` also answers the `LinePitch` it measured.
+- **Breaking:** `thumbnail::frames` and `frames_type2` both answer the `LinePitch` they placed the frames with. `Discovery::line_pitch` reports that pitch rather than computing one again.
 - A detected frame's top is the picture centered in the film format, not the picture centered in the scannable range. The two mechanisms that measure a thumbnail now agree on what a frame is.
 - Frames are found by the bare film between them, not by their edges. Bare film holds no picture, so it reads the same at any polarity. Every frame on a strip gets one length and one spacing. `scan::strip` replaces `boundaries::detect`.
 - How many frames a strip holds comes from the fit, not from the caller. An unexposed frame is counted where the film either side of it is. One at the end of the strip is not, because it reads the same as the bare film past the last frame.

@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Breaking:** `scan_frame` scans the rectangle it is given, and nothing re-places it. `framing::recentered`, `framing::pass_rect`, `Scanned::frame_lines`, `Options::polarity`, `boundaries::Picture`, `boundaries::start`, `Session::gate_offset` and `Session::take_picture_start` are gone, and Python's `scan_frame` no longer takes `positive` nor returns `ScanResult.frame_columns`.
+- **Breaking:** `scan_frame` scans the rectangle it is given. `framing::recentered`, `framing::pass_rect`, `Scanned::frame_lines`, `Options::polarity`, `boundaries::Picture`, `boundaries::start`, `Session::gate_offset` and `Session::take_picture_start` are gone, and Python's `scan_frame` no longer takes `positive` nor returns `ScanResult.frame_columns`.
 - **Breaking:** `Session::autoexpose_frame`, `autoexpose_frame_with` and `autoexpose_with` no longer take a picture to find in the pass. The pass is the frame, so metering reads every pixel of it.
 - **Breaking:** `thumbnail::frames` and `frames_type2` both answer the `LinePitch` they placed the frames with. `Discovery::line_pitch` reports that pitch rather than computing one again.
 - A detected frame's top is the picture centered in the film format, not the picture centered in the scannable range. The two mechanisms that measure a thumbnail now agree on what a frame is.

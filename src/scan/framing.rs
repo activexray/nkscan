@@ -176,44 +176,6 @@ pub fn frames(caps: &Capabilities) -> Result<Boundary, Error> {
     Ok(Boundary { frames })
 }
 
-/// The distance the window adds to the top of a frame
-///
-/// Command 2-11-9 moves the film until the top of the frame is at the top of
-/// the scan range. The unit stops the film before that point. No capability
-/// page gives the distance. A Type2 entry has no length, thus the unit cannot
-/// put the frame in the center of the scan range.
-///
-/// The window does not move the film through the full distance the window asks
-/// for. The unit moved the film through 0.8 of that distance in each test. Thus
-/// one test gives the error but does not give the correction. Two tests give
-/// the correction: a distance of 0 put two frames 82 and 80 addresses too low,
-/// a distance of 161 put the same two frames 35 and 57 addresses too high, and
-/// a distance of 100 puts three frames within 25 addresses of the center
-const GATE_OFFSET: u32 = 100;
-
-/// Zero for a unit whose window gives an address on the film
-fn gate_offset(caps: &Capabilities) -> u32 {
-    match Framing::choose(caps) == Framing::Perforation {
-        true => GATE_OFFSET,
-        false => 0,
-    }
-}
-
-/// The rectangle the window must ask for to scan `frame`
-///
-/// This function does not limit the rectangle to the scan range. On this
-/// mechanism the Y value is a distance into the registered frame, and the
-/// frame is longer than the range the adapter opens. Thus the last addresses
-/// of a moved window can be black. A limit removes the full movement instead
-pub(crate) fn placed(caps: &Capabilities, frame: Rect) -> Rect {
-    let offset = gate_offset(caps);
-    Rect {
-        top: frame.top + offset,
-        bottom: frame.bottom + offset,
-        ..frame
-    }
-}
-
 /// Put `frame` in the unit's frame table before a pass over it
 ///
 /// Only for a unit that positions the film by that table. Such a unit reads a
@@ -439,33 +401,5 @@ mod tests {
         assert_eq!(found.len(), 25);
         assert_eq!(found[0].bottom - found[0].top, 4453);
         assert_eq!(found[24].top, 24 * 4453);
-    }
-
-    /// A unit whose window gives an address on the film needs no movement
-    #[test]
-    fn only_a_perforated_frame_is_moved_off_its_own_top() {
-        let frame = Rect {
-            top: 6161,
-            bottom: 6161 + 5959,
-            left: 518,
-            right: 518 + 8964,
-        };
-
-        let plain = caps();
-        assert_ne!(Framing::choose(&plain), Framing::Perforation);
-        assert_eq!(placed(&plain, frame), frame);
-
-        let mut perforated = caps();
-        perforated.features.data_types |= DataTypes::PERFORATION_READ;
-        perforated
-            .address
-            .coordinate_base
-            .remove(CoordinateBase::FRAME_RECTS);
-        assert_eq!(Framing::choose(&perforated), Framing::Perforation);
-
-        let moved = placed(&perforated, frame);
-        assert_eq!(moved.top, frame.top + GATE_OFFSET);
-        assert_eq!(moved.bottom - moved.top, frame.bottom - frame.top);
-        assert_eq!((moved.left, moved.right), (frame.left, frame.right));
     }
 }

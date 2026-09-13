@@ -19,8 +19,11 @@ use std::time::Duration;
 use tracing::*;
 
 impl Session {
-    /// Read image data into `buf`, continuing where the last read stopped
+    /// Read one transfer of image data into `buf`, continuing where the last
+    /// read stopped
     ///
+    /// `buf` is one READ, so the caller sizes it to a length the unit will
+    /// split on: [`image_chunks`](Session::image_chunks) is what does that.
     /// Answers how much arrived. Short of `buf` means the unit ran out, either
     /// by transferring less than asked or by answering `05h-2Ch` once the image
     /// is spent
@@ -41,72 +44,53 @@ impl Session {
         buf: &mut [u8],
         timeout: Duration,
     ) -> Result<usize, Error> {
-        let chunk = self.chunk_size(layout)?;
-        let code = DataType::Image.row().code;
-        let width = layout.width_code();
-        let len = buf.as_mut().len();
+        let want = buf.len();
+        let cmd = Read::new(
+            DataType::Image.row().code,
+            0,
+            layout.width_code(),
+            want as u32,
+        );
 
-        let mut done = 0;
-        while done < buf.len() {
-            let want = chunk.min(buf.len() - done);
+        trace!(cdb = ?cmd.cdb(), want, "executing image READ");
 
-            let cmd = Read::new(code, 0, width, want as u32);
-            let slice = &mut buf[done..done + want];
-
-            trace!(
-                cdb = ?cmd.cdb(),
-                want,
-                done,
-                left = len - done,
-                "executing image READ"
-            );
-
-            match self.run(&cmd.cdb(), Data::In(slice), timeout) {
-                Ok(completion) => {
-                    trace!(
-                        transferred = completion.transferred,
-                        want, "image READ completed"
-                    );
-
-                    done += completion.transferred;
-                    if completion.transferred < want {
-                        break;
-                    }
+        match self.run(&cmd.cdb(), Data::In(buf), timeout) {
+            Ok(completion) => {
+                trace!(
+                    transferred = completion.transferred,
+                    want, "image READ completed"
+                );
+                Ok(completion.transferred)
+            }
+            // 2-11-5: reading past the end of the image is how it says the
+            // image is spent, not a fault
+            Err(Error::Device(fault))
+                if matches!(*fault, Fault::Rejected(Refusal::OutOfSequence, _)) =>
+            {
+                debug!("end of stream reached");
+                Ok(0)
+            }
+            // 2-11: a transfer shorter than asked for comes back as CHECK
+            // CONDITION with ILI set and the shortfall in the information
+            // field. The data still arrived, so count it
+            Err(Error::Device(fault)) => match short(&fault) {
+                Some(missing) => {
+                    debug!(missing, "the unit had less than we asked for");
+                    Ok(want.saturating_sub(missing as usize))
                 }
-                // 2-11-5: reading past the end of the image is how it says the
-                // image is spent, not a fault
-                Err(Error::Device(fault))
-                    if matches!(*fault, Fault::Rejected(Refusal::OutOfSequence, _)) =>
-                {
-                    debug!(done, "end of stream reached");
-                    break;
-                }
-                // 2-11: a transfer shorter than asked for comes back as CHECK
-                // CONDITION with ILI set and the shortfall in the information
-                // field. The data still arrived, so count it and stop
-                Err(Error::Device(fault)) => match short(&fault) {
-                    Some(missing) => {
-                        done += want.saturating_sub(missing as usize);
-                        debug!(missing, "the unit had less than we asked for");
-                        break;
-                    }
-                    None => return Err(Error::Device(fault)),
-                },
-                Err(e) => {
-                    debug!(error = ?e, "image READ failed");
-                    return Err(e);
-                }
+                None => Err(Error::Device(fault)),
+            },
+            Err(e) => {
+                debug!(error = ?e, "image READ failed");
+                Err(e)
             }
         }
-        // Once a chunk, so hundreds of megabytes of scan is thousands of lines
-        trace!(bytes = done, "read image");
-        Ok(done)
     }
 
     /// Stream the image a chunk at a time, without a buffer the size of the scan
     ///
-    /// Each chunk is a whole number of [`Layout::granule`]s, so a decoder can
-    /// consume them without straddling a boundary the unit will not split on.
+    /// Each chunk ends where [`Layout::granules`] say the unit will split, so
+    /// no chunk straddles a boundary it will not.
     ///
     /// Dropping one closes the scan, whatever route the caller took out of it
     pub fn image_chunks<'a>(&'a mut self, layout: &Layout) -> Result<Chunks<'a>, Error> {
@@ -116,23 +100,27 @@ impl Session {
             layout: layout.clone(),
             chunk,
             remaining: layout.total_bytes(),
+            at: 0,
             spent: false,
             closed: false,
             surplus: 0,
         })
     }
 
-    /// How much to ask for in one READ
+    /// The most one READ may ask for
     ///
     /// Bounded by what the transport can carry and by `Address`'s general SCSI
-    /// buffer size, then rounded down to whole granules
+    /// buffer size. What a READ actually asks for inside that is
+    /// [`Granules::take`](crate::protocol::image::Granules::take)'s business,
+    /// since it is where in a line the stream has got to that says where the
+    /// next one may stop
     fn chunk_size(&self, layout: &Layout) -> Result<usize, Error> {
         let mut chunk = self.transport.max_transfer();
         if let Some(limit) = self.caps.address.scsi_buffer {
             chunk = chunk.min(usize::from(limit));
         }
 
-        let granule = layout.granule;
+        let granule = layout.granules.widest();
         if granule > chunk {
             return Err(Error::Unsupported {
                 op: "image read",
@@ -141,21 +129,8 @@ impl Session {
                 ),
             });
         }
-        Ok(chunk / granule * granule)
+        Ok(chunk)
     }
-}
-
-/// How much to ask for with `left` bytes of the pass still owed
-///
-/// A READ for anything but a whole number of granules is rounded up by the
-/// unit and the surplus arrives regardless, out of step with the phase
-/// protocol, so the rounding happens here where the buffer is sized for it.
-/// `left` is not a whole number of them, since a packed multi-line pass reads a
-/// whole group of CCD rows at a time and the line count need not divide by the
-/// rows in a group. `chunk` is one, and `granule` is at least 1, both from
-/// [`chunk_size`](Session::chunk_size)
-fn whole_granules(left: usize, granule: usize, chunk: usize) -> usize {
-    chunk.min(left).div_ceil(granule) * granule
 }
 
 /// How far a transfer fell short, when that is what the unit reported
@@ -176,9 +151,12 @@ fn short(fault: &Fault) -> Option<u32> {
 pub struct Chunks<'a> {
     session: &'a mut Session,
     layout: Layout,
-    /// Bytes in one chunk, bounded by what the transport can carry
+    /// The most one chunk can be, bounded by what the transport can carry
     chunk: usize,
     remaining: u64,
+    /// How far into a line the stream has got, which is what says where the
+    /// next READ may stop
+    at: usize,
     /// Nothing more will be handed out, which says nothing about whether the
     /// unit is finished with the scan
     spent: bool,
@@ -220,7 +198,10 @@ impl Chunks<'_> {
             return None;
         }
 
-        let want = whole_granules(self.remaining as usize, self.layout.granule, self.chunk);
+        let want = self
+            .layout
+            .granules
+            .take(self.at, self.remaining, self.chunk);
         buf.resize(want, 0);
         let layout = &self.layout;
 
@@ -239,6 +220,7 @@ impl Chunks<'_> {
                 None
             }
             Ok(got) => {
+                self.at = self.layout.granules.advance(self.at, got);
                 let rem = self.remaining as i64 - got as i64;
 
                 if rem < 0 {
@@ -280,11 +262,12 @@ impl Chunks<'_> {
             // reach for it either. Asking for a whole chunk against the 28 KiB
             // an interrupted pass had left is what hung an LS-50 hard enough to
             // need a power cycle
-            let want = match self.remaining {
-                0 if self.layout.multiline_registered => self.chunk,
+            let left = match self.remaining {
+                0 if self.layout.multiline_registered => self.chunk as u64,
                 0 => break,
-                left => whole_granules(left as usize, self.layout.granule, self.chunk),
+                left => left,
             };
+            let want = self.layout.granules.take(self.at, left, self.chunk);
             // A stage move's budget here is what turns a unit that has stopped
             // answering into three silent minutes. The pass is already running,
             // so a chunk is either on its way or it is never coming
@@ -295,6 +278,7 @@ impl Chunks<'_> {
             ) {
                 Ok(0) => break,
                 Ok(got) => {
+                    self.at = self.layout.granules.advance(self.at, got);
                     // Only what arrives past what the layout promised is
                     // surplus; the rest is the pass's own remainder
                     let owed = (got as u64).min(self.remaining);
@@ -391,33 +375,89 @@ impl Drop for Chunks<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::whole_granules;
+    use crate::protocol::image::Granules;
 
     /// A packed three-row pass over a line count that does not divide by three
     /// leaves a part-group at the end, and asking for it as it stands is what
     /// puts the phase protocol out of step
     #[test]
     fn the_last_chunk_is_a_whole_number_of_granules() {
-        let granule = 70_200;
-        let chunk = granule * 2;
-        assert_eq!(whole_granules(chunk, granule, chunk), chunk);
-        assert_eq!(whole_granules(granule + 1, granule, chunk), chunk);
-        assert_eq!(whole_granules(23_400, granule, chunk), granule);
-        assert_eq!(whole_granules(1, granule, chunk), granule);
+        let g = Granules::every(70_200);
+        let chunk = g.rest * 2;
+        assert_eq!(g.take(0, chunk as u64, chunk), chunk);
+        assert_eq!(g.take(0, g.rest as u64 + 1, chunk), chunk);
+        assert_eq!(g.take(0, 23_400, chunk), g.rest);
+        assert_eq!(g.take(0, 1, chunk), g.rest);
     }
 
     /// Rounding up never asks for more than one chunk
     #[test]
     fn rounding_stays_inside_a_chunk() {
-        let granule = 1024;
-        let chunk = granule * 4;
-        assert_eq!(whole_granules(chunk - 1, granule, chunk), chunk);
-        assert_eq!(whole_granules(u64::MAX as usize, granule, chunk), chunk);
+        let g = Granules::every(1024);
+        let chunk = g.rest * 4;
+        assert_eq!(g.take(0, chunk as u64 - 1, chunk), chunk);
+        assert_eq!(g.take(0, u64::MAX, chunk), chunk);
+        // A chunk that is not a whole number of them stops short of it
+        assert_eq!(g.take(0, u64::MAX, chunk + 1), chunk);
     }
 
     /// A unit that constrains nothing reads exactly what is left
     #[test]
     fn an_unconstrained_unit_reads_what_is_left() {
-        assert_eq!(whole_granules(7, 1, 4096), 7);
+        assert_eq!(Granules::NONE.take(0, 7, 4096), 7);
+    }
+
+    /// Issue 52: an LS-5000 reading two packed rows of four samples with
+    /// infrared riding in the first of them. The line is 207872 bytes, which no
+    /// transfer can carry, and every READ ends on a reading instead
+    #[test]
+    fn a_line_too_long_to_carry_is_read_a_reading_at_a_time() {
+        let g = Granules {
+            first: 31_744 * 2,
+            rest: 24_064 * 2,
+            line: 103_936 * 2,
+        };
+        let chunk = 131_072;
+
+        // The first reading of a line is the long one, and two of them together
+        // are all that fits
+        assert_eq!(g.take(0, g.line as u64, chunk), 63_488 + 48_128);
+        // Two more of the short ones finish the line off
+        assert_eq!(g.take(63_488 + 48_128, g.line as u64, chunk), 48_128 * 2);
+        assert_eq!(g.advance(63_488 + 48_128, 48_128 * 2), 0);
+
+        // The tail of a pass is rounded up to the reading it ends in
+        assert_eq!(g.take(0, 1, chunk), 63_488);
+        assert_eq!(g.take(63_488, 1, chunk), 48_128);
+    }
+
+    /// The whole of that pass, 5670 lines of it, walked the way `fill` walks it
+    ///
+    /// Every READ fits the transfer, starts and ends on a reading, and the last
+    /// one lands on the end of the pass rather than past it
+    #[test]
+    fn a_pass_of_uneven_readings_is_read_to_the_end() {
+        let g = Granules {
+            first: 31_744 * 2,
+            rest: 24_064 * 2,
+            line: 103_936 * 2,
+        };
+        let chunk = 131_072;
+        let total = 103_936u64 * 5670;
+
+        let (mut read, mut at, mut reads) = (0u64, 0, 0);
+        while read < total {
+            let want = g.take(at, total - read, chunk);
+            assert!((1..=chunk).contains(&want), "{want} bytes is no transfer");
+            read += want as u64;
+            at = g.advance(at, want);
+            // Wherever a READ stops is a reading boundary
+            assert!(at == 0 || (at - g.first) % g.rest == 0, "stopped at {at}");
+            reads += 1;
+        }
+        assert_eq!(read, total);
+        assert_eq!(at, 0);
+        // Two READs a line, 111616 bytes and then 96256
+        assert_eq!(reads, 5670);
     }
 }

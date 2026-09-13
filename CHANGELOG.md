@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** `FilmFormat::height_mm` is gone. `height_dots` is what the unit takes.
 - **Breaking:** `Session::uses_frame_type_2`, `Curves::rows` and `Channel::visible_index` are gone. Nothing called them, and the first keyed off the model name where `framing::Framing::choose` reads the advertised capabilities.
 - `Capabilities.max_samples` in Python answers the SET WINDOW page, so a unit that reads a line one time reports 1 and a multi-sample control can be hidden.
+- **Breaking:** `Layout::granule` is `Layout::granules`, a `Granules` carrying the length a line starts with and the length the rest of it repeats. `Session::read_image` and `read_image_within` take how far into a line the stream already is, since that is what says how long the next READ may be.
 
 ### Fixed
 
@@ -47,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The frame table is put back after any pass that wrote one, not only after a pass that corrected a frame's place, and whether the pass finished or failed. A crop, and a frame nudged by hand, left their own table in the unit and the next frame scanned against it read the wrong film.
 - Multi-sampling on a unit that attaches invalid bytes to a line. It attaches them to each reading, not to the line.
 - Multi-sampling with infrared. The reading that carries infrared has an invalid byte count of its own, in the reserved bytes 15 to 18 of the truncation record.
+- Multi-sampling more than twice with infrared. A READ ends on a reading of a line, not on the whole line, so four samples of an LS-5000's two packed rows no longer ask for a 207872-byte unit no transfer can carry.
 - The USB transport no longer errors out of a scan when the unit pads the status phase's closing packet to a whole packet size, the same padding already tolerated on a data phase's last packet.
 
 ## [0.10.0]

@@ -726,6 +726,7 @@ mod tests {
 #[cfg(test)]
 mod transposed {
     use super::*;
+    use crate::protocol::image::Granules;
 
     /// A three-line layout: `rows` sensor pixels by `stages` stage positions
     fn layout(rows: u32, stages: u32, gap: u32, channels: Vec<u8>, readings: u8) -> Layout {
@@ -743,7 +744,7 @@ mod transposed {
             ccd_lines: 3,
             packed_rows: 1,
             registration_gap: gap,
-            granule: 1,
+            granules: Granules::NONE,
             truncated_bytes_line: (0, 0),
             truncated_bytes_once: (0, 0),
             truncated_lines_frame: (0, 0),
@@ -871,7 +872,7 @@ mod transposed {
             ccd_lines: 1,
             packed_rows: 1,
             registration_gap: 1,
-            granule: 1,
+            granules: Granules::NONE,
             truncated_bytes_line: (0, 0),
             truncated_bytes_once: (0, 0),
             truncated_lines_frame: (0, 0),

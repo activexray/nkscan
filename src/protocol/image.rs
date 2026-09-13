@@ -56,9 +56,8 @@ pub struct Layout {
     pub packed_rows: u8,
     /// How far apart the CCD's lines land, in output lines. 2-11-5-3
     pub registration_gap: u32,
-    /// The transfer length every READ has to be a whole number of. 1 means the
-    /// unit constrains nothing
-    pub granule: usize,
+    /// Where a READ is allowed to stop
+    pub granules: Granules,
     /// Invalid bytes attached to every scan line, at start and end per 2-11-5-3
     pub truncated_bytes_line: (u32, u32),
     /// Invalid bytes attached to the reading that carries the channels the
@@ -69,6 +68,95 @@ pub struct Layout {
     /// Whether the handshake raised [`MultiLineRegistration`](crate::protocol::sense::Coop::MultiLineRegistration),
     /// which is the only thing that leaves seam bytes this layout's own count misses
     pub multiline_registered: bool,
+}
+
+/// The transfer lengths a READ is allowed to end on
+///
+/// The unit rounds a READ that ends anywhere else up to the next length it
+/// does split on, and the surplus arrives regardless, out of step with the
+/// phase protocol. A channel it reads one time rides with the first reading of
+/// a line and makes that reading longer than the others, so which length comes
+/// next depends on how far into a line the stream already is and one number
+/// cannot say it
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Granules {
+    /// The length a line starts with
+    pub first: usize,
+    /// The length the rest of the line repeats
+    pub rest: usize,
+    /// Bytes in the line the two of them make up, which is where `first` comes
+    /// round again. Always `first` plus a whole number of `rest`
+    pub line: usize,
+}
+
+impl Granules {
+    /// A stream the unit will split anywhere
+    pub const NONE: Self = Self::every(1);
+
+    /// One length, for as long as the stream lasts
+    pub const fn every(bytes: usize) -> Self {
+        Self {
+            first: bytes,
+            rest: bytes,
+            line: bytes,
+        }
+    }
+
+    /// True when every length is the same, so where the stream has got to
+    /// makes no difference
+    pub const fn uniform(&self) -> bool {
+        self.first == self.rest
+    }
+
+    /// The longest of them, which is what one transfer has to be able to carry
+    pub const fn widest(&self) -> usize {
+        match self.first > self.rest {
+            true => self.first,
+            false => self.rest,
+        }
+    }
+
+    /// Where `by` more bytes leaves a stream that is `at` bytes into a line
+    pub const fn advance(&self, at: usize, by: usize) -> usize {
+        (at + by) % self.line
+    }
+
+    /// How much to ask for `at` bytes into a line, with `left` bytes owed and
+    /// `budget` the most one transfer can carry
+    ///
+    /// Rounds up past `left`, since the unit sends the rest of a length
+    /// whatever the arithmetic asks for: `left` is not a whole number of them
+    /// where a packed multi-line pass reads a whole group of CCD rows at a time
+    /// and the line count does not divide by the rows in a group. Answers 0
+    /// only for a `budget` shorter than one length, which the session refuses
+    /// to read at all
+    pub fn take(&self, at: usize, left: u64, budget: usize) -> usize {
+        if self.uniform() {
+            let unit = self.rest;
+            let whole = budget / unit * unit;
+            return match left >= whole as u64 {
+                true => whole,
+                false => (left as usize).div_ceil(unit) * unit,
+            };
+        }
+
+        // A line whose first reading is longer than the rest divides by no
+        // single length, so add one reading at a time. A chunk holds a handful
+        // of them, so the loop is that many turns
+        let (mut taken, mut at) = (0, at);
+        while (taken as u64) < left {
+            let unit = match at {
+                0 => self.first,
+                _ => self.rest,
+            };
+            if taken + unit > budget {
+                break;
+            }
+            taken += unit;
+            at = self.advance(at, unit);
+        }
+        taken
+    }
 }
 
 impl Layout {
@@ -91,7 +179,7 @@ impl Layout {
             ccd_lines: 1,
             packed_rows: 1,
             registration_gap: 0,
-            granule: 1,
+            granules: Granules::NONE,
             truncated_bytes_line: (0, 0),
             truncated_bytes_once: (0, 0),
             truncated_lines_frame: (0, 0),
@@ -156,7 +244,7 @@ fn packed_rows(caps: &Capabilities, interleaving: ColorInterleaving) -> u8 {
     }
 }
 
-/// The transfer length every READ has to be a whole number of, `Address` byte 4
+/// The transfer lengths a READ has to end on, `Address` byte 4
 ///
 /// Bit 1 makes it a line across every color, bit 2 one line. Neither set means
 /// the unit constrains nothing, so any length will do
@@ -165,7 +253,7 @@ fn packed_rows(caps: &Capabilities, interleaving: ColorInterleaving) -> u8 {
 /// attaches to each one. A length that ends mid-line is rounded up to the next
 /// whole one and the surplus arrives regardless, out of step with the phase
 /// protocol
-fn read_granule(caps: &Capabilities, layout: &Layout, truncated: Option<&Truncation>) -> usize {
+fn read_granules(caps: &Capabilities, layout: &Layout, truncated: Option<&Truncation>) -> Granules {
     let transfer = caps.address.transfer;
 
     // Packed rows are one acquisition, so a READ must not end between them
@@ -174,15 +262,21 @@ fn read_granule(caps: &Capabilities, layout: &Layout, truncated: Option<&Truncat
 
     if transfer.contains(Transfer::READ_LINE_COLS) {
         // Each reading is one line across every color, so a READ can end
-        // between two readings of the same line. Readings of different lengths
-        // give no such unit, and the whole line stays the granule
+        // between two readings of the same line. A channel the unit reads one
+        // time rides with the first of them and makes it the longer one, which
+        // is the whole reason a line has two lengths rather than one
+        let reading = |r| (layout.bytes_per_reading(r) as usize * rows).max(1);
         return match layout.even_readings() {
-            true => (layout.bytes_per_reading(0) as usize * rows).max(1),
-            false => whole_line,
+            true => Granules::every(reading(0)),
+            false => Granules {
+                first: reading(0),
+                rest: reading(1),
+                line: whole_line,
+            },
         };
     }
     if !transfer.contains(Transfer::READ_LINE) {
-        return 1;
+        return Granules::NONE;
     }
 
     // What is attached across all colors sits at the ends of the whole line, so
@@ -194,9 +288,11 @@ fn read_granule(caps: &Capabilities, layout: &Layout, truncated: Option<&Truncat
         )
     });
     if all_colors > 0 {
-        return whole_line;
+        return Granules::every(whole_line);
     }
-    (layout.pixels as usize * usize::from(layout.bytes_per_sample) + per_color).max(1)
+    Granules::every(
+        (layout.pixels as usize * usize::from(layout.bytes_per_sample) + per_color).max(1),
+    )
 }
 
 impl Layout {
@@ -282,14 +378,14 @@ impl Layout {
             // two pitches are equal except in a preview, which halves only Y
             registration_gap: u32::from(caps.address.line_gap) / line_pitch,
             // Measured off the line the rest of these describe
-            granule: 1,
+            granules: Granules::NONE,
             truncated_bytes_line,
             truncated_bytes_once,
             truncated_lines_frame,
             // Nothing here has heard the handshake; the session sets this once it has
             multiline_registered: false,
         };
-        layout.granule = read_granule(caps, &layout, truncated_by_driver);
+        layout.granules = read_granules(caps, &layout, truncated_by_driver);
 
         Ok(layout)
     }
@@ -592,13 +688,13 @@ mod tests {
         let granule = |transfer| {
             Layout::new(&caps(transfer, 1, 2), &windows, 4000, None)
                 .unwrap()
-                .granule
+                .granules
         };
 
         // Bit 0 is microcode downloading, not a constraint on READ
-        assert_eq!(granule(0x01), 1);
-        assert_eq!(granule(0x03), line * 3);
-        assert_eq!(granule(0x05), line);
+        assert_eq!(granule(0x01), Granules::NONE);
+        assert_eq!(granule(0x03), Granules::every(line * 3));
+        assert_eq!(granule(0x05), Granules::every(line));
     }
 
     /// The thumbnail pass of an LS-5000: 96 pixels of three 16-bit colors with
@@ -625,9 +721,9 @@ mod tests {
 
         assert_eq!(l.pixels, 96);
         assert_eq!(l.bytes_per_line(), 1024);
-        assert_eq!(l.granule, 1024);
-        // What `Session::chunk_size` will make of it, against a 128 KiB transport
-        assert_eq!(128 * 1024 / l.granule * l.granule, 131072);
+        assert_eq!(l.granules, Granules::every(1024));
+        // What a 128 KiB transport will ask for, against the whole pass
+        assert_eq!(l.granules.take(0, l.total_bytes(), 128 * 1024), 131072);
     }
 
     /// One color's line is not a unit the stream repeats once anything is
@@ -638,7 +734,7 @@ mod tests {
         let granule = |t: &Truncation| {
             Layout::new(&caps(0x05, 1, 2), &windows, 4000, Some(t))
                 .unwrap()
-                .granule
+                .granules
         };
 
         let per_color = Truncation {
@@ -646,14 +742,14 @@ mod tests {
             per_color: Edges { first: 0, last: 16 },
             ..Default::default()
         };
-        assert_eq!(granule(&per_color), 10000 * 2 + 16);
+        assert_eq!(granule(&per_color), Granules::every(10000 * 2 + 16));
 
         let all_colors = Truncation {
             position: Position::ALL_LAST,
             all_colors: Edges { first: 0, last: 16 },
             ..Default::default()
         };
-        assert_eq!(granule(&all_colors), 10000 * 2 * 3 + 16);
+        assert_eq!(granule(&all_colors), Granules::every(10000 * 2 * 3 + 16));
     }
 
     /// The pass that stopped an LS-5000 in issue 52: 3945 pixels of three
@@ -684,8 +780,8 @@ mod tests {
 
         // A READ ends on a reading, so 16x multi-sampling is still inside a
         // 128 KiB transfer
-        assert_eq!(l.granule, 24064);
-        assert_eq!(128 * 1024 / l.granule * l.granule, 120_320);
+        assert_eq!(l.granules, Granules::every(24064));
+        assert_eq!(l.granules.take(0, l.total_bytes(), 128 * 1024), 120_320);
     }
 
     /// The unit reads infrared one time whatever the colors get, so infrared
@@ -722,8 +818,58 @@ mod tests {
         assert_eq!(l.bytes_per_reading(1), 24064);
         assert_eq!(l.bytes_per_line(), 55808);
         assert_eq!(l.total_bytes(), 316_431_360);
-        // Readings of different lengths leave the whole line as the only unit
-        assert_eq!(l.granule, l.bytes_per_line() as usize);
+        // Readings of different lengths, so a line has a length of its own
+        assert_eq!(
+            l.granules,
+            Granules {
+                first: 31744,
+                rest: 24064,
+                line: 55808,
+            }
+        );
+    }
+
+    /// Issue 52: the same unit on `--samples 4 --ir`, where the CCD's two rows
+    /// come packed into one line
+    ///
+    /// The line is then 207872 bytes and no transfer can carry one. Ending a
+    /// READ on a reading is what gets the pass read at all, and it is the
+    /// readings, not the line, that the unit pads to a whole 512-byte packet
+    #[test]
+    fn a_line_longer_than_a_transfer_is_still_read_a_reading_at_a_time() {
+        let truncation = Truncation {
+            position: Position::ALL_LAST | Position::INFRARED_LAST,
+            all_colors: Edges {
+                first: 0,
+                last: 394,
+            },
+            infrared_reading: Edges {
+                first: 0,
+                last: 184,
+            },
+            ..Default::default()
+        };
+        let mut windows = rgb(4000, (3945, 5670));
+        windows.push(window(9, 4000, (3945, 5670)));
+        for w in &mut windows {
+            w.multiple_reading = 3;
+            w.composition = Composition::MultilevelRGB;
+            w.color_interleaving = ColorInterleaving::MULTILINE_SIMULTANEOUS;
+        }
+
+        let l = Layout::new(&caps(0x03, 1, 2), &windows, 4000, Some(&truncation)).unwrap();
+
+        assert_eq!((l.readings(), l.packed_rows), (4, 2));
+        assert_eq!(
+            l.granules,
+            Granules {
+                first: 63488,
+                rest: 48128,
+                line: 207_872,
+            }
+        );
+        // What used to be refused as a single 207872-byte unit
+        assert_eq!(l.granules.take(0, l.total_bytes(), 128 * 1024), 111_616);
     }
 
     /// Without the infrared bytes every reading takes the count of all colors
@@ -851,7 +997,7 @@ mod readouts {
             ccd_lines: 3,
             packed_rows: 1,
             registration_gap: 1,
-            granule: 1,
+            granules: Granules::NONE,
             truncated_bytes_line: (0, 0),
             truncated_bytes_once: (0, 0),
             truncated_lines_frame: (0, 0),

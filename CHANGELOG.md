@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A unit that finds frames by perforations puts the picture in the center of the scan. The unit stops the film before the top of the scan range. Thus a window as long as the frame got 0.5 mm of clear film at the start and lost 0.5 mm of the picture at the end. The window now asks for a position 100 addresses lower.
 - A rectangle handed to `scan_frame` on a perforation-framed unit is scanned where it says. The metering pass used to re-place it onto whichever picture that pass saw, which put it back on the frame the operator had moved away from.
 - A frame is placed by the bare film either side of the picture, not by the strength of its edges. The old edge finder could move the film far enough for the picture to run off the start of the pass.
 - A pass reads its levels against its own full scale. A 14-bit unit put every level in the bottom quarter of a 16-bit range, so nothing in the pass looked like bare film.

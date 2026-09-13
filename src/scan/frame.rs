@@ -76,21 +76,25 @@ pub fn scan_frame_with(
     // selects a table entry and is an offset into that frame, not an address.
     // The rectangle must be in the table before the window can reach it
     let registered = framing::register(session, frame)?;
+    // The table contains an entry at the top of the frame. The unit stops the
+    // film before that address. Thus the window, the focus and the metering
+    // all use the lower rectangle that `placed` gives
+    let placed = framing::placed(session.capabilities(), frame);
 
     let taken = (|| {
-        session.focus_frame(frame, Focus::default())?;
+        session.focus_frame(placed, Focus::default())?;
 
         let exposures = match options.exposures {
             Some(locked) => locked.clone(),
             None => {
                 let lock = options.lock_white_balance;
-                session.autoexpose_frame_with(frame, recipe, lock, |pass, p| {
+                session.autoexpose_frame_with(placed, recipe, lock, |pass, p| {
                     on(Phase::Meter(pass), p)
                 })?
             }
         };
 
-        let mut windows = recipe.windows(session.capabilities(), frame)?;
+        let mut windows = recipe.windows(session.capabilities(), placed)?;
         exposures.apply(&mut windows);
 
         let pass =

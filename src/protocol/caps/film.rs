@@ -47,12 +47,17 @@ impl FilmFormat {
     /// numbers are in. A millimeter cannot express them: 6x6's 8964 dots are
     /// 56.92 mm, and 56.9 mm reaches only 8961.
     ///
-    /// 6x7 and 6x8 are the round millimeter, not checked against Nikon Scan.
-    /// 6x9 can be the longest frame the holder takes and not the frame
+    /// 135, 6x4.5, 6x6 and 6x9 are Nikon Scan's own, read off the scans in the
+    /// capture corpus. 135 is also an LS-50's published Y boundary, because the
+    /// gate of a strip feeder is one frame, and is longer than the 36 mm the
+    /// name gives.
+    ///
+    /// The rest are the round millimeter and are not checked against Nikon
+    /// Scan. 6x9 can be the longest frame the holder takes and not the frame
     const fn height_dots_4000(self) -> u32 {
         match self {
             Self::IX240 => 4756,
-            Self::F135 => 5670,
+            Self::F135 => 5959,
             Self::F135Half => 2835,
             Self::F16 => 3150,
             Self::F645 => 6696,
@@ -209,11 +214,8 @@ mod tests {
         assert_eq!(FilmFormat::F645.height_dots_4000(), 6696);
         assert_eq!(FilmFormat::F67.height_dots_4000(), 10945);
         assert_eq!(FilmFormat::F68.height_dots_4000(), 11969);
-        // Half frame is two frames in the space one full frame takes
-        assert_eq!(
-            FilmFormat::F135Half.height_dots_4000() * 2,
-            FilmFormat::F135.height_dots_4000()
-        );
+        // 135 is the gate an LS-50 publishes, not the 36 mm the name gives
+        assert_eq!(FilmFormat::F135.height_dots_4000(), 5959);
     }
 
     #[test]
@@ -224,7 +226,7 @@ mod tests {
         assert_eq!(FilmFormat::F645.height_dots(4000), 6696);
         // And what a thumbnail of one is, which is what the frames are found in
         assert_eq!(FilmFormat::F66.height_dots(83), 186);
-        assert_eq!(FilmFormat::F135.height_dots(97), 137);
+        assert_eq!(FilmFormat::F135.height_dots(97), 145);
     }
 
     #[test]

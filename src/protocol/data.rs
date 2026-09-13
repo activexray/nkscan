@@ -305,8 +305,12 @@ pub enum FrameTable {
 /// One frame's rectangle as `DataType::Boundary` carries it, 2-11-6
 ///
 /// Sub-scanning is Y and main-scanning is X, and this record puts them in that
-/// order, the reverse of `Frames`, which leads with the left edge. Inclusive of
-/// the lower right, so a 13860 line frame ends at 13859
+/// order, the reverse of `Frames`, which leads with the left edge.
+///
+/// `bottom` and `right` are one past the last line and the last column, so the
+/// extent is `bottom - top`. The record itself gives the last line and the last
+/// column, so a 13860 line frame ends at 13859 on the wire: `to_bytes` and
+/// `from_bytes` convert
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Rect {
     /// Bytes 4-7, upper left in the sub-scanning direction
@@ -340,8 +344,8 @@ impl FramePosition {
         Rect {
             top: self.top,
             left: x_start,
-            bottom: self.top + length - 1,
-            right: x_start + x_boundary - 1,
+            bottom: self.top + length,
+            right: x_start + x_boundary,
         }
     }
 
@@ -399,11 +403,13 @@ impl Boundary {
         for n in 0..count {
             let at = Self::HEAD + n * Self::RECT;
             let r = b.get(at..at + Self::RECT)?;
+            // One past the last line and the last column, which is what the
+            // record gives
             frames.push(Rect {
                 top: be32(r, 0),
                 left: be32(r, 4),
-                bottom: be32(r, 8),
-                right: be32(r, 12),
+                bottom: be32(r, 8) + 1,
+                right: be32(r, 12) + 1,
             });
         }
         Some(Self { frames })
@@ -438,7 +444,10 @@ impl Boundary {
         out.push(self.frames.len() as u8);
         out.push(0);
         for r in &self.frames {
-            for v in [r.top, r.left, r.bottom, r.right] {
+            // The record gives the last line and the last column, where a
+            // `Rect` gives one past each
+            let last = |v: u32| v.saturating_sub(1);
+            for v in [r.top, r.left, last(r.bottom), last(r.right)] {
                 out.extend_from_slice(&v.to_be_bytes());
             }
         }

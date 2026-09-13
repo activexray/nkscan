@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A pass reads its levels against its own full scale. A 14-bit unit put every level in the bottom quarter of a 16-bit range, so nothing in the pass looked like bare film.
 - A frame is scanned at the format the caller asked for, not at the length measured off the picture. That length also set how much film the pass took before the frame, so one short measurement both cropped the scan and moved the film.
 - The film formats carry Nikon Scan's own frame lengths in address units, not a rounded millimeter. 135 is 5959, which is the gate a strip feeder publishes as its Y boundary and 1.8 mm longer than the name: Nikon scans the whole gate and crops. A 4000 dpi scan of 35mm is 5959 x 3946, as Nikon Scan's is.
+- `Rect` is one past the last line and the last column throughout, and `Boundary::to_bytes` and `from_bytes` convert to the last line and last column the record gives. `FramePosition::rect` counted the record's way, so a perforation-framed scan came back one line and one column short.
 - A frame length is converted to thumbnail lines as a length, not as a position. On a unit whose Y range starts above zero the conversion subtracted that start.
 - `--samples` above 1 on a unit with no multi-read mode is refused before the stage moves, with `multisampling is not supported`.
 - The thumbnail line is measured against the unit's own perforation table, 2-11-8, not computed from the resolution the unit reports.

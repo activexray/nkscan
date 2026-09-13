@@ -46,18 +46,6 @@ impl Channel {
     pub const fn is_color(self) -> bool {
         !matches!(self, Self::Infrared)
     }
-
-    /// Where this sits in an R, G, B ordered reading, for the data types whose
-    /// qualifier names a component
-    pub const fn visible_index(self) -> Option<usize> {
-        match self {
-            Self::Red => Some(0),
-            // 2-11-3: the default qualifier is the green component
-            Self::Green | Self::Default => Some(1),
-            Self::Blue => Some(2),
-            _ => None,
-        }
-    }
 }
 
 impl From<u8> for Channel {

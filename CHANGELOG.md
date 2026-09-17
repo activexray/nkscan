@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `init_logging(level=None)` in Python, sending `tracing` output to stderr. `RUST_LOG` overrides `level`, as it does for the CLI.
 - A frame moved along the feed, or a crop, can be scanned on a perforation-framed unit. It is put in the unit's frame table first, so the film moves to it.
+- `Pass::columns` and `Pass::image`, the columns and the image a pass filled. `Image` gains `stride` and `Image::partial` for them.
 - `Discovery::line_pitch`, and `Discovery.addresses_per_column` in Python. Both map a thumbnail column to a feed address, so a rectangle drawn on the thumbnail is the rectangle that gets scanned. `thumbnail::LinePitch` is public for it.
 
 ### Changed
@@ -34,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A short pass is framed and written at the columns it filled. The zeros past them read flatter than film, so the fit took one for a gap and miscounted, and every file got a black band.
+- A fit's gaps have to read like one film, not just flat, so a sky inside a picture is no longer taken for a gap.
 - A rectangle handed to `scan_frame` on a perforation-framed unit is scanned where it says. The metering pass used to re-place it onto whichever picture that pass saw, which put it back on the frame the operator had moved away from.
 - A frame is placed by the bare film either side of the picture, not by the strength of its edges. The old edge finder could move the film far enough for the picture to run off the start of the pass.
 - A pass reads its levels against its own full scale. A 14-bit unit put every level in the bottom quarter of a 16-bit range, so nothing in the pass looked like bare film.

@@ -94,7 +94,11 @@ pub struct Image<'a> {
     /// One sample per pixel of infrared, empty where the pass carried none
     pub ir: &'a [u16],
     pub rows: usize,
+    /// Feed columns that hold data
     pub cols: usize,
+    /// Samples from one row of a plane to the next. A short pass fills fewer
+    /// columns than this
+    pub stride: usize,
     /// Valid bits in a sample, which can be fewer than 16
     pub bits: u8,
 }
@@ -102,6 +106,14 @@ pub struct Image<'a> {
 impl<'a> Image<'a> {
     /// Read `samples` as the image `layout` describes
     pub fn new(layout: &Layout, samples: &'a Samples) -> Result<Self, Error> {
+        // Clamped to the layout's width below, so this is all of it
+        Self::partial(layout, samples, usize::MAX)
+    }
+
+    /// The first `cols` columns of `samples`, for a pass that came back short
+    ///
+    /// The stride does not change, so this is a view and not a copy
+    pub fn partial(layout: &Layout, samples: &'a Samples, cols: usize) -> Result<Self, Error> {
         let decoder = Decoder::new(layout)?;
         if samples.colors.len() != decoder.colors() {
             return Err(bad(format!(
@@ -110,8 +122,8 @@ impl<'a> Image<'a> {
                 decoder.colors()
             )));
         }
-        let (rows, cols) = decoder.shape();
-        let plane_len = rows * cols;
+        let (rows, stride) = decoder.shape();
+        let plane_len = rows * stride;
         for (i, plane) in samples.colors.iter().enumerate() {
             if plane.len() < plane_len {
                 return Err(bad(format!(
@@ -132,7 +144,8 @@ impl<'a> Image<'a> {
             colors: samples.colors.iter().map(Vec::as_slice).collect(),
             ir,
             rows,
-            cols,
+            cols: cols.min(stride),
+            stride,
             bits: layout.bits_per_sample,
         })
     }
@@ -444,6 +457,14 @@ impl<'a> Decoder<'a> {
     /// Blocks emitted so far, of the [`Layout`]'s total
     pub fn decoded(&self) -> usize {
         self.done
+    }
+
+    /// Feed columns one block carries
+    ///
+    /// Blocks are emitted in order from column 0. This times
+    /// [`decoded`](Self::decoded) is where a short pass stopped
+    pub fn columns_per_block(&self) -> usize {
+        self.ordering.gap * self.ordering.ccd_lines
     }
 
     /// Whether every block the layout promised arrived

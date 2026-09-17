@@ -55,6 +55,17 @@ fn frames_of(name: &str) -> Option<usize> {
     digits.chars().rev().collect::<String>().parse().ok()
 }
 
+/// Columns the pass filled, which is what `Pass::image` hands detection
+///
+/// These files are written at the width the window asked for, and a short pass
+/// leaves the tail of that as zeros
+fn filled_columns(chunky: &[u16], cols: usize, rows: usize) -> usize {
+    (0..cols)
+        .rev()
+        .find(|&x| (0..rows).any(|y| chunky[(y * cols + x) * 3..][..3].iter().any(|&v| v != 0)))
+        .map_or(0, |x| x + 1)
+}
+
 fn deinterleave3(chunky: &[u16]) -> Vec<Vec<u16>> {
     let mut planes: Vec<Vec<u16>> = (0..3)
         .map(|_| Vec::with_capacity(chunky.len() / 3))
@@ -117,7 +128,8 @@ fn main() {
             colors,
             ir: &[],
             rows: rows as usize,
-            cols: cols as usize,
+            cols: filled_columns(&chunky, cols as usize, rows as usize),
+            stride: cols as usize,
             bits: 16,
         };
 
@@ -135,12 +147,13 @@ fn main() {
         };
         println!(
             "{name}: {cols}x{rows} @{dpi:.0}dpi {format:?} want {want:?} nominal {nominal}\n  \
-             {} frames{verdict} pitch {} picture {} contrast {:.3} in {}ms",
+             {} frames{verdict} pitch {} picture {} contrast {:.3} in {}ms filled {}",
             found.frames.len(),
             found.pitch,
             found.frames[0].len(),
             found.contrast,
-            took.as_millis()
+            took.as_millis(),
+            image.cols
         );
         let places: Vec<String> = found
             .frames

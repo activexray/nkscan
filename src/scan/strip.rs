@@ -6,8 +6,10 @@
 //!
 //! The film between two frames holds no picture, so it reads the same all the
 //! way down the sensor. A picture does not. The gaps are found by that
-//! difference, and the frames are the columns between them. The level is not
-//! used, so the polarity of the film does not change the result.
+//! difference, and the frames are the columns between them. A flat part of a
+//! picture reads the same way, so the gaps must also agree on one density.
+//! Only the gaps are compared, so the polarity of the film does not come into
+//! it.
 //!
 //! The count comes from the fit. The film with pictures on it is so many
 //! pitches long, and the pitch is what is searched. An unexposed frame is
@@ -53,6 +55,14 @@ const PITCH: RangeInclusive<usize> = 18..=31;
 /// The fewest columns of picture a frame may have
 const PICTURE: usize = 8;
 
+/// The share of columns at each end of the level range that sets its ends. One
+/// stray column must not set the scale
+const ENDS: f32 = 0.02;
+
+/// How much gaps of different densities count against a fit, against the
+/// detail terms
+const AGREEMENT: f32 = 2.0;
+
 /// The least of the format a run of picture must span to be a frame's, as a
 /// share of it
 ///
@@ -70,19 +80,21 @@ pub struct Strip {
     pub frames: Vec<Range<usize>>,
     /// Columns from one gap to the next
     pub pitch: usize,
-    /// Detail in the pictures less detail in the gaps
+    /// How well the fit reads as frames: detail in the pictures, less detail
+    /// in the gaps, less how much the gaps disagree
     pub contrast: f32,
 }
 
-/// How much picture each column holds
+/// How much picture each column holds, and how dark it is
 ///
-/// The spread of a column down the sensor axis. Film between two frames reads
-/// the same all the way down, at any density. A picture does not
-fn detail(image: &Image) -> Vec<f32> {
+/// The spread of a column down the sensor axis, and its mean. Both are scaled
+/// to the pass's own range
+fn signals(image: &Image) -> (Vec<f32>, Vec<f32>) {
     let band = TRIM..image.rows.saturating_sub(TRIM);
-    let mut out = vec![0.0; image.cols];
+    let mut detail = vec![0.0; image.cols];
+    let mut level = vec![0.0; image.cols];
     if band.len() < 2 || image.colors.is_empty() {
-        return out;
+        return (detail, level);
     }
     // The pass's own full scale. A pass read before anything stretched it does
     // not fill 16 bits
@@ -91,29 +103,42 @@ fn detail(image: &Image) -> Vec<f32> {
         _ => f32::from(u16::MAX),
     };
     let n = band.len() as f32;
+    let planes = image.colors.len() as f32;
 
-    for (x, out) in out.iter_mut().enumerate() {
-        let mut sum = 0.0;
+    for x in 0..image.cols {
+        let (mut spread, mut middle) = (0.0, 0.0);
         for plane in &image.colors {
-            let at = |y: usize| f32::from(plane[y * image.cols + x]) / full;
+            let at = |y: usize| f32::from(plane[y * image.stride + x]) / full;
             let mean = band.clone().map(at).sum::<f32>() / n;
             let var = band.clone().map(|y| (at(y) - mean).powi(2)).sum::<f32>() / n;
-            sum += var.sqrt();
+            spread += var.sqrt();
+            middle += mean;
         }
-        *out = sum / image.colors.len() as f32;
+        detail[x] = spread / planes;
+        level[x] = middle / planes;
     }
 
+    let quantile = |v: &[f32], q: f32| {
+        let mut sorted = v.to_vec();
+        sorted.sort_by(f32::total_cmp);
+        sorted[((sorted.len() as f32 * q) as usize).min(sorted.len() - 1)]
+    };
     // Against the pass's own picture, not full scale: a thumbnail of a flat
     // strip is not a thumbnail of nothing
-    let mut sorted = out.clone();
-    sorted.sort_by(f32::total_cmp);
-    let scale = sorted[(sorted.len() as f32 * SCALE) as usize % sorted.len()];
-    if scale > 0.0 {
-        for v in &mut out {
-            *v = (*v / scale).min(1.0);
+    let busiest = quantile(&detail, SCALE);
+    if busiest > 0.0 {
+        for v in &mut detail {
+            *v = (*v / busiest).min(1.0);
         }
     }
-    out
+    // The level only has to order the columns, so its own range is 0 to 1
+    let (lo, hi) = (quantile(&level, ENDS), quantile(&level, 1.0 - ENDS));
+    if hi > lo {
+        for v in &mut level {
+            *v = ((*v - lo) / (hi - lo)).clamp(0.0, 1.0);
+        }
+    }
+    (detail, level)
 }
 
 /// The detail of a pass, with running totals, so a stretch of it costs the
@@ -121,16 +146,35 @@ fn detail(image: &Image) -> Vec<f32> {
 struct Detail {
     at: Vec<f32>,
     upto: Vec<f32>,
+    /// How dark each column is. This tells a gap from a flat picture
+    level: Vec<f32>,
+    /// The flattest column within [`REACH`] of each
+    flattest: Vec<usize>,
 }
 
 impl Detail {
-    fn new(at: Vec<f32>) -> Self {
+    fn new(at: Vec<f32>, level: Vec<f32>) -> Self {
         let mut upto = Vec::with_capacity(at.len() + 1);
         upto.push(0.0);
         for v in &at {
             upto.push(upto[upto.len() - 1] + v);
         }
-        Self { at, upto }
+        // A fit asks for hundreds of thousands of gaps, so find them once
+        let flattest = (0..at.len())
+            .map(|x| {
+                let to = (x + REACH + 1).min(at.len());
+                let from = x.saturating_sub(REACH).min(to.saturating_sub(1));
+                (from..to)
+                    .min_by(|&a, &b| at[a].total_cmp(&at[b]))
+                    .unwrap_or(from)
+            })
+            .collect();
+        Self {
+            at,
+            upto,
+            level,
+            flattest,
+        }
     }
 
     /// The mean over a stretch of columns, 0 where there is none
@@ -191,12 +235,10 @@ impl Detail {
         }
     }
 
-    /// The lowest detail within [`REACH`] of `at`, which is the best a gap
+    /// The flattest column within [`REACH`] of `at`, which is the best a gap
     /// asked for there could be
-    fn gap(&self, at: usize) -> f32 {
-        let to = (at + REACH + 1).min(self.at.len());
-        let from = at.saturating_sub(REACH).min(to.saturating_sub(1));
-        self.at[from..to].iter().copied().fold(f32::MAX, f32::min)
+    fn gap(&self, at: usize) -> usize {
+        self.flattest[at.min(self.flattest.len() - 1)]
     }
 }
 
@@ -206,20 +248,47 @@ fn picture(first: usize, pitch: usize, k: usize) -> Range<usize> {
     (gap + REACH + 1)..(gap + pitch).saturating_sub(REACH)
 }
 
-/// Detail in the pictures less detail in the gaps
+/// Detail in the pictures, less detail in the gaps, less how much the gaps
+/// disagree
 ///
-/// Both terms are necessary. Gaps alone put every frame on the holder, which
-/// is as empty. Pictures alone move the fit onto the busiest film
-fn score(detail: &Detail, first: usize, pitch: usize, frames: usize) -> f32 {
+/// All three terms are necessary. Gaps alone put every frame on the holder,
+/// which is as empty. Pictures alone move the fit onto the busiest film. Both
+/// together still take a sky for a gap, because a sky is flatter than the
+/// grain between two frames. The third term rules a sky out: it is not the
+/// same density as the other gaps
+fn score(detail: &Detail, first: usize, pitch: usize, frames: usize, levels: &mut Vec<f32>) -> f32 {
     let mut gaps = 0.0;
+    levels.clear();
     for k in 0..=frames {
-        gaps += detail.gap(first + k * pitch);
+        let x = detail.gap(first + k * pitch);
+        gaps += detail.at[x];
+        levels.push(detail.level[x]);
     }
     let mut pictures = 0.0;
     for k in 0..frames {
         pictures += detail.mean(picture(first, pitch, k));
     }
-    pictures / frames as f32 - gaps / (frames + 1) as f32
+    let n = (frames + 1) as f32;
+    pictures / frames as f32 - gaps / n - AGREEMENT * disagreement(levels)
+}
+
+/// How much the gaps disagree about their density
+///
+/// Every gap on a strip is the same unexposed film. A fit that reads parts of
+/// pictures as gaps reads whatever those pictures are instead.
+///
+/// The median of how far each gap is from the median. One gap that landed on
+/// a frame edge or on the holder then does not answer for the rest
+fn disagreement(levels: &mut [f32]) -> f32 {
+    fn median(v: &mut [f32]) -> f32 {
+        *v.select_nth_unstable_by(v.len() / 2, |a, b| a.total_cmp(b))
+            .1
+    }
+    let middle = median(levels);
+    for l in levels.iter_mut() {
+        *l = (*l - middle).abs();
+    }
+    median(levels)
 }
 
 /// Fit the frames of a strip to its thumbnail
@@ -230,13 +299,15 @@ pub fn find(image: &Image, length: usize) -> Option<Strip> {
     if length == 0 || image.cols == 0 {
         return None;
     }
-    let detail = Detail::new(detail(image));
+    let (at, level) = signals(image);
+    let detail = Detail::new(at, level);
     let cols = image.cols;
     let film = detail.film(length);
     debug!(?film, cols, length, "the picture in the pass");
 
     let least = PICTURE + 2 * REACH + 2;
     let mut best: Option<(f32, usize, usize, usize)> = None;
+    let mut levels = Vec::new();
     for pitch in (length * PITCH.start() / 20).max(least)..=(length * PITCH.end() / 20).max(least) {
         // The film runs from the first picture to the last, so it is that many
         // pitches long less the one gap that has no picture after it. Rounded
@@ -255,7 +326,7 @@ pub fn find(image: &Image, length: usize) -> Option<Strip> {
             continue;
         };
         for first in from..=last {
-            let at = score(&detail, first, pitch, frames);
+            let at = score(&detail, first, pitch, frames, &mut levels);
             if best.is_none_or(|(had, ..)| at > had) {
                 best = Some((at, first, pitch, frames));
             }
@@ -530,6 +601,50 @@ mod tests {
         let found = fit(&film, 120);
         assert_eq!(found.frames.len(), 3, "{:?}", found.frames);
         holds(&found, &[30, 162, 294], 120);
+    }
+
+    /// Only the columns a pass filled are film. The rest of its buffer is
+    /// zeros, flatter than any film reads, and a fit that reaches into them is
+    /// handed a gap for nothing
+    #[test]
+    fn the_tail_of_a_short_pass_is_not_film() {
+        let film = Film::new(vec![30, 162, 294, 426], 120, Polarity::Negative);
+        // The same film in a buffer twice as wide, the rest never written
+        let (promised, rendered) = (film.feed * 2, film.render());
+        let mut colors = vec![vec![0u16; SENSOR * promised]; rendered.colors.len()];
+        for (out, src) in colors.iter_mut().zip(&rendered.colors) {
+            for y in 0..SENSOR {
+                out[y * promised..][..film.feed]
+                    .copy_from_slice(&src[y * film.feed..][..film.feed]);
+            }
+        }
+        let samples = Samples { colors, ir: None };
+        let layout = Layout::single_line(SENSOR as u32, promised as u32, vec![1, 2, 3]);
+
+        let delivered =
+            Image::partial(&layout, &samples, film.feed).expect("the buffer is the layout's size");
+        assert_eq!(delivered.cols, film.feed);
+        assert_eq!(delivered.stride, promised);
+        holds(
+            &find(&delivered, 120).expect("a strip with frames on it"),
+            &[30, 162, 294, 426],
+            120,
+        );
+    }
+
+    /// A fit whose gaps all read the same density is on the film between the
+    /// frames. One whose gaps are scattered across whatever the pictures
+    /// happen to be is not, however flat those pictures read
+    #[test]
+    fn gaps_that_disagree_about_the_film_score_worse() {
+        let mut alike = [0.80, 0.82, 0.79, 0.81];
+        let mut scattered = [0.10, 0.62, 0.31, 0.88];
+        assert!(disagreement(&mut alike) < disagreement(&mut scattered));
+
+        // A gap that landed on a frame edge or on the holder is one reading,
+        // and the rest of them still say what film this is
+        let mut one_stray = [0.80, 0.82, 0.00, 0.81];
+        assert!(disagreement(&mut one_stray) < disagreement(&mut scattered));
     }
 
     /// A holder with nothing in it has no film in the pass to put a frame on

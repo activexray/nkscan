@@ -252,6 +252,12 @@ impl Session {
             idle_ms = idle.as_millis(),
             "pass"
         );
+        if !decoder.complete() {
+            warn!(
+                blocks = decoder.decoded(),
+                "the unit gave less than the pass promised"
+            );
+        }
         let (rows, cols) = decoder.shape();
         Ok(Pass {
             layout: started.layout,

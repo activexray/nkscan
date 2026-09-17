@@ -227,7 +227,9 @@ where
     let file =
         BufWriter::new(File::create(path).with_context(|| format!("creating {}", path.display()))?);
     let mut tiff = TiffEncoder::new(file)?;
-    let mut image = tiff.new_image::<C>(pass.cols as u32, pass.rows as u32)?;
+    // Only what arrived. The tail of a short pass is zeros, not film
+    let (cols, stride) = (pass.columns(), pass.cols);
+    let mut image = tiff.new_image::<C>(cols as u32, pass.rows as u32)?;
 
     // 2-10 resolves both axes to the same pitch for a scan, so one number
     image.resolution(
@@ -242,7 +244,7 @@ where
     }
 
     // Already full scale: `to_full_scale` stretched the buffer after the pass
-    let at = |pixel: usize, plane: usize| planes[plane][pixel];
+    let at = |pixel: usize, plane: usize| planes[plane][(pixel / cols) * stride + pixel % cols];
 
     let per_pixel = source.per_pixel();
     let mut strip = Vec::new();
@@ -271,4 +273,64 @@ where
 
     debug!(path = %path.display(), samples = per_pixel, "wrote");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nkscan::protocol::image::Layout;
+    use tiff::decoder::{Decoder, DecodingResult};
+
+    /// A short pass leaves the rest of its buffer as it was allocated. Writing
+    /// that out would put a black band on the end of every file
+    #[test]
+    fn a_short_pass_writes_only_the_columns_that_arrived() {
+        let (rows, promised, filled) = (4usize, 8usize, 5usize);
+        let layout = Layout::single_line(rows as u32, promised as u32, vec![1, 2, 3]);
+        // Each sample says which column it came from, so the gather is checked
+        // and not just the width
+        let plane: Vec<u16> = (0..rows * promised)
+            .map(|i| match i % promised < filled {
+                true => (i % promised) as u16 + 1,
+                false => 0,
+            })
+            .collect();
+        let samples = Samples {
+            colors: vec![plane; 3],
+            ir: None,
+        };
+        let pass = Pass {
+            layout,
+            cooperation: Vec::new(),
+            complete: false,
+            blocks: filled,
+            rows,
+            cols: promised,
+        };
+        assert_eq!(pass.columns(), filled);
+
+        let dir = std::env::temp_dir().join(format!("nkscan-io-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a directory to write into");
+        let path = write_thumbnail(&dir.join("t"), 0, &samples, &pass).expect("a thumbnail");
+
+        let mut decoder = Decoder::new(std::io::BufReader::new(
+            File::open(&path).expect("the file it just wrote"),
+        ))
+        .expect("a TIFF");
+        assert_eq!(
+            decoder.dimensions().expect("dimensions"),
+            (filled as u32, rows as u32)
+        );
+
+        let DecodingResult::U16(read) = decoder.read_image().expect("samples") else {
+            panic!("not 16-bit samples")
+        };
+        // Every row is columns 1..=filled and none of the tail. The samples
+        // are already 16 bits, so `to_full_scale` leaves them alone
+        let want: Vec<u16> = (0..rows)
+            .flat_map(|_| (1..=filled as u16).flat_map(|x| [x; 3]))
+            .collect();
+        assert_eq!(read, want);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

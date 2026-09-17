@@ -7,7 +7,11 @@
 use crate::{
     error::Error,
     protocol::{
-        caps::set_window::ColorInterleaving, curves::Curves, data::CooperativeAction, image::Layout,
+        caps::set_window::ColorInterleaving,
+        curves::Curves,
+        data::CooperativeAction,
+        decode::{Decoder, Image, Samples},
+        image::Layout,
     },
 };
 
@@ -29,6 +33,29 @@ pub struct Pass {
     /// (its lines)
     pub rows: usize,
     pub cols: usize,
+}
+
+impl Pass {
+    /// Feed columns this pass filled
+    ///
+    /// The decoder writes its blocks in order from column 0. A short pass
+    /// fills the first columns and leaves the rest of the buffer as it was
+    /// allocated
+    pub fn columns(&self) -> usize {
+        match Decoder::new(&self.layout) {
+            Ok(decoder) => (self.blocks * decoder.columns_per_block()).min(self.cols),
+            // A layout nothing can decode is a pass nothing produced
+            Err(_) => self.cols,
+        }
+    }
+
+    /// The image this pass filled
+    ///
+    /// Zeros read flatter down the sensor than film does. Anything that
+    /// measures the pass has to stop where the data stops
+    pub fn image<'a>(&self, samples: &'a Samples) -> Result<Image<'a>, Error> {
+        Image::partial(&self.layout, samples, self.columns())
+    }
 }
 
 /// How far along a pass is, reported once per chunk

@@ -214,7 +214,7 @@ pub fn frames(
 ) -> Result<(Boundary, LinePitch), Error> {
     let format = window::reachable_blocks(caps, length);
     framing::reachable(caps, format)?;
-    let image = Image::new(&pass.layout, samples)?;
+    let image = pass.image(samples)?;
 
     // This mechanism has no perforation table to measure the film against, so
     // the pitch is the one the pass asked for
@@ -264,7 +264,7 @@ pub fn frames_type2(
     let format = window::reachable_blocks(caps, length);
     framing::reachable(caps, format)?;
 
-    let image = Image::new(&pass.layout, samples)?;
+    let image = pass.image(samples)?;
 
     // A thumbnail column is one line pitch of film, and the pass starts where
     // the Y axis does, so a column is an address. The film does not keep to

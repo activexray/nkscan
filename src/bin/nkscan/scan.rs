@@ -13,6 +13,7 @@ use nkscan::{
     protocol::{caps::set_window::ColorInterleaving, decode::Samples},
     scan::{
         autoexpose::Exposures,
+        focus::Focus,
         frame::{self, Phase},
         framing::{self, Framing},
         meter::Metering,
@@ -122,6 +123,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         ir,
         clean,
         no_eject,
+        bh_perf,
         thumbnail: save_thumbnail,
         format,
         film,
@@ -250,6 +252,24 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         if save_thumbnail && let Some(pass) = &discovery.thumbnail {
             let path = io::write_thumbnail(&basename, first, &samples, pass)?;
             info!("wrote {}", path.display());
+        }
+
+        // BH perforations: the first positioning op after a thumbnail pass
+        // faults on deeper frames, so reposition to an early one and let its
+        // completion clear the state. A focus cycle drives the film there
+        // through the unit's own machinery without reading the CCD
+        if bh_perf {
+            let first = frames.iter().min().copied().unwrap_or(1);
+            if first > 6 && !discovery.frames.is_empty() {
+                info!("BH perf workaround: priming with an early-frame reposition");
+                let early = discovery.frames[0];
+                session
+                    .focus_frame(early, Focus::default())
+                    .map_err(|e| anyhow!("priming reposition failed: {e}"))?;
+                if cancel::requested() {
+                    return Err(Error::Cancelled.into());
+                }
+            }
         }
 
         // Select all or the requested subset of the frames to scan

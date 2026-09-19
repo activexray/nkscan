@@ -346,7 +346,10 @@ pub fn find(image: &Image, length: usize) -> Option<Strip> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{decode::Samples, image::Layout};
+    use crate::{
+        protocol::{decode::Samples, image::Layout},
+        scan::pass::Pass,
+    };
 
     /// Rows of the rendered sensor
     const SENSOR: usize = 64;
@@ -603,13 +606,13 @@ mod tests {
         holds(&found, &[30, 162, 294], 120);
     }
 
-    /// Only the columns a pass filled are film. The rest of its buffer is
-    /// zeros, flatter than any film reads, and a fit that reaches into them is
-    /// handed a gap for nothing
+    /// Only the columns that hold film are film. The unit pads the rest of a
+    /// pass with zeros, which read flatter than any film, and a fit that
+    /// reaches into them is handed a gap for nothing
     #[test]
-    fn the_tail_of_a_short_pass_is_not_film() {
+    fn the_padded_tail_of_a_pass_is_not_film() {
         let film = Film::new(vec![30, 162, 294, 426], 120, Polarity::Negative);
-        // The same film in a buffer twice as wide, the rest never written
+        // The same film in a buffer twice as wide, the rest of it padding
         let (promised, rendered) = (film.feed * 2, film.render());
         let mut colors = vec![vec![0u16; SENSOR * promised]; rendered.colors.len()];
         for (out, src) in colors.iter_mut().zip(&rendered.colors) {
@@ -619,10 +622,19 @@ mod tests {
             }
         }
         let samples = Samples { colors, ir: None };
-        let layout = Layout::single_line(SENSOR as u32, promised as u32, vec![1, 2, 3]);
+        let pass = Pass {
+            layout: Layout::single_line(SENSOR as u32, promised as u32, vec![1, 2, 3]),
+            cooperation: Vec::new(),
+            // The unit padded rather than truncated, so nothing here is short
+            complete: true,
+            blocks: promised,
+            rows: SENSOR,
+            cols: promised,
+        };
 
-        let delivered =
-            Image::partial(&layout, &samples, film.feed).expect("the buffer is the layout's size");
+        let delivered = pass
+            .image(&samples)
+            .expect("the buffer is the layout's size");
         assert_eq!(delivered.cols, film.feed);
         assert_eq!(delivered.stride, promised);
         holds(

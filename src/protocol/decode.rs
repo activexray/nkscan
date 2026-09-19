@@ -82,6 +82,19 @@ fn full_scale_table(bits: u8) -> Option<Vec<u16>> {
     )
 }
 
+/// Feed columns that hold data, of the `cols` a buffer was allocated at
+///
+/// The unit pads a pass rather than truncating one, and a pass that stops
+/// early leaves the rest of the buffer as it was allocated. Either way the
+/// tail is zeros, and a column the sensor read is never zero in every row and
+/// every plane
+pub fn filled_columns(planes: &[&[u16]], rows: usize, cols: usize) -> usize {
+    (0..cols)
+        .rev()
+        .find(|&x| (0..rows).any(|y| planes.iter().any(|plane| plane[y * cols + x] != 0)))
+        .map_or(0, |x| x + 1)
+}
+
 /// A view of an unscrambled pass
 ///
 /// The samples are the [`Samples`] a [`Decoder`] filled, which the caller
@@ -457,14 +470,6 @@ impl<'a> Decoder<'a> {
     /// Blocks emitted so far, of the [`Layout`]'s total
     pub fn decoded(&self) -> usize {
         self.done
-    }
-
-    /// Feed columns one block carries
-    ///
-    /// Blocks are emitted in order from column 0. This times
-    /// [`decoded`](Self::decoded) is where a short pass stopped
-    pub fn columns_per_block(&self) -> usize {
-        self.ordering.gap * self.ordering.ccd_lines
     }
 
     /// Whether every block the layout promised arrived

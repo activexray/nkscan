@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `Pass::columns` and `Pass::image`, the columns and the image a pass filled. `Image` gains `stride` and `Image::partial` for them.
+- `Pass::image` and `decode::filled_columns`, the image and the columns a pass filled. `Image` gains `stride` and `Image::partial` for them.
 
 ### Fixed
 
-- A short pass is framed and written at the columns it filled. The zeros past them read flatter than film, so the fit took one for a gap and miscounted, and every file got a black band.
+- A pass is framed and written at the columns that hold film. The unit pads the rest with zeros, which read flatter than film, so the fit took one for a gap and miscounted, and every file got a black band.
 - A fit's gaps have to read like one film, not just flat, so a sky inside a picture is no longer taken for a gap.
 
 ## [0.11.0]

@@ -10,7 +10,7 @@ use crate::{
         caps::set_window::ColorInterleaving,
         curves::Curves,
         data::CooperativeAction,
-        decode::{Decoder, Image, Samples},
+        decode::{Image, Samples, filled_columns},
         image::Layout,
     },
 };
@@ -36,25 +36,15 @@ pub struct Pass {
 }
 
 impl Pass {
-    /// Feed columns this pass filled
-    ///
-    /// The decoder writes its blocks in order from column 0. A short pass
-    /// fills the first columns and leaves the rest of the buffer as it was
-    /// allocated
-    pub fn columns(&self) -> usize {
-        match Decoder::new(&self.layout) {
-            Ok(decoder) => (self.blocks * decoder.columns_per_block()).min(self.cols),
-            // A layout nothing can decode is a pass nothing produced
-            Err(_) => self.cols,
-        }
-    }
-
     /// The image this pass filled
     ///
-    /// Zeros read flatter down the sensor than film does. Anything that
-    /// measures the pass has to stop where the data stops
+    /// The tail of a short pass is padding, and zeros read flatter down the
+    /// sensor than film does. Anything that measures the pass has to stop
+    /// where the data stops
     pub fn image<'a>(&self, samples: &'a Samples) -> Result<Image<'a>, Error> {
-        Image::partial(&self.layout, samples, self.columns())
+        let planes: Vec<&[u16]> = samples.colors.iter().map(Vec::as_slice).collect();
+        let cols = filled_columns(&planes, self.rows, self.cols);
+        Image::partial(&self.layout, samples, cols)
     }
 }
 

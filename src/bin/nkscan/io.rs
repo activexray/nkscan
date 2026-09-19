@@ -10,7 +10,10 @@
 use crate::mono::{self, Luminance};
 use anyhow::{Context, Result, bail};
 use nkscan::{
-    protocol::{decode::Samples, window::Channel},
+    protocol::{
+        decode::{Samples, filled_columns},
+        window::Channel,
+    },
     scan::pass::Pass,
 };
 use std::{
@@ -227,8 +230,8 @@ where
     let file =
         BufWriter::new(File::create(path).with_context(|| format!("creating {}", path.display()))?);
     let mut tiff = TiffEncoder::new(file)?;
-    // Only what arrived. The tail of a short pass is zeros, not film
-    let (cols, stride) = (pass.columns(), pass.cols);
+    // Only what arrived. The tail of a short pass is padding, not film
+    let (cols, stride) = (filled_columns(planes, pass.rows, pass.cols), pass.cols);
     let mut image = tiff.new_image::<C>(cols as u32, pass.rows as u32)?;
 
     // 2-10 resolves both axes to the same pitch for a scan, so one number
@@ -281,10 +284,11 @@ mod tests {
     use nkscan::protocol::image::Layout;
     use tiff::decoder::{Decoder, DecodingResult};
 
-    /// A short pass leaves the rest of its buffer as it was allocated. Writing
-    /// that out would put a black band on the end of every file
+    /// The unit pads a pass that runs out of film rather than truncating it,
+    /// so the pass reports complete and its tail is zeros. Writing that out
+    /// would put a black band on the end of every file
     #[test]
-    fn a_short_pass_writes_only_the_columns_that_arrived() {
+    fn a_padded_pass_writes_only_the_columns_that_hold_film() {
         let (rows, promised, filled) = (4usize, 8usize, 5usize);
         let layout = Layout::single_line(rows as u32, promised as u32, vec![1, 2, 3]);
         // Each sample says which column it came from, so the gather is checked
@@ -302,12 +306,11 @@ mod tests {
         let pass = Pass {
             layout,
             cooperation: Vec::new(),
-            complete: false,
-            blocks: filled,
+            complete: true,
+            blocks: promised,
             rows,
             cols: promised,
         };
-        assert_eq!(pass.columns(), filled);
 
         let dir = std::env::temp_dir().join(format!("nkscan-io-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("a directory to write into");

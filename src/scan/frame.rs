@@ -72,12 +72,7 @@ pub fn scan_frame_with(
     samples: &mut Samples,
     mut on: impl FnMut(Phase, Progress) -> ControlFlow<()>,
 ) -> Result<Scanned, Error> {
-    // Where the unit positions the film by its own frame table, the window's Y
-    // selects a table entry and is an offset into that frame, not an address.
-    // The rectangle must be in the table before the window can reach it
-    let registered = framing::register(session, frame)?;
-
-    let taken = (|| {
+    let (pass, exposures) = at_frame(session, frame, |session| {
         session.focus_frame(frame, Focus::default())?;
 
         let exposures = match options.exposures {
@@ -95,10 +90,54 @@ pub fn scan_frame_with(
 
         let pass =
             session.scan_pass_with(&windows, SCAN_TIMEOUT, samples, |p| on(Phase::Scan, p))?;
-        Ok::<_, Error>((pass, exposures))
-    })();
+        Ok((pass, exposures))
+    })?;
+    samples.to_full_scale(pass.layout.bits_per_sample);
 
-    // Put the measured table back, whether or not the pass got that far, so the
+    let cleaned = options
+        .clean
+        .then(|| clean_frame(samples, &pass, session.capabilities().identity.model()))
+        .transpose()?;
+
+    Ok(Scanned {
+        pass,
+        exposures,
+        cleaned,
+    })
+}
+
+/// Meter `frame` without taking its pass
+///
+/// The exposures are the ones [`scan_frame_with`] meters for itself, so handing
+/// them to a later scan through [`Options::exposures`] exposes that frame the
+/// way this one would have been. `on` is told which metering pass is running,
+/// counting from one, and can cancel it by returning `Break`
+pub fn meter_frame_with(
+    session: &mut Session,
+    recipe: &Recipe,
+    frame: Rect,
+    lock_white_balance: bool,
+    on: impl FnMut(usize, Progress) -> ControlFlow<()>,
+) -> Result<Exposures, Error> {
+    at_frame(session, frame, |session| {
+        session.autoexpose_frame_with(frame, recipe, lock_white_balance, on)
+    })
+}
+
+/// Run `f` with `frame` reachable, and leave the unit's frame table as measured
+fn at_frame<T>(
+    session: &mut Session,
+    frame: Rect,
+    f: impl FnOnce(&mut Session) -> Result<T, Error>,
+) -> Result<T, Error> {
+    // Where the unit positions the film by its own frame table, the window's Y
+    // selects a table entry and is an offset into that frame, not an address.
+    // The rectangle must be in the table before the window can reach it
+    let registered = framing::register(session, frame)?;
+
+    let taken = f(session);
+
+    // Put the measured table back, whether or not `f` got that far, so the
     // next rectangle of this session starts from it. Written and not
     // registered: `register` starts from the measured table, finds the entry it
     // wants already there, and leaves this pass's table in the unit
@@ -112,17 +151,5 @@ pub fn scan_frame_with(
         );
     }
 
-    let (pass, exposures) = taken?;
-    samples.to_full_scale(pass.layout.bits_per_sample);
-
-    let cleaned = options
-        .clean
-        .then(|| clean_frame(samples, &pass, session.capabilities().identity.model()))
-        .transpose()?;
-
-    Ok(Scanned {
-        pass,
-        exposures,
-        cleaned,
-    })
+    taken
 }

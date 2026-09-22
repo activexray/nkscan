@@ -117,3 +117,51 @@ fn a_frame_scanned_twice_comes_back_in_the_same_place() {
         "the film moved {moved} columns between the two passes"
     );
 }
+
+/// A frame scanned at the exposures metered for it is scanned at those
+///
+/// Needs a scanner with film loaded. Metering on its own has to leave the unit
+/// where a scan expects it, and answer every channel the scan carries.
+#[test]
+#[ignore = "needs a scanner with film loaded"]
+fn a_frame_scans_at_the_exposures_metered_for_it() {
+    let devices = device::list();
+    let device = devices.first().expect("a scanner");
+    let mut session = Session::open(device.open().expect("open")).expect("session");
+    session.stage().expect("stage");
+
+    let mut samples = Samples::default();
+    let discovery = framing::discover(&mut session, None, &mut samples).expect("discovery");
+    let frame = *discovery
+        .frames
+        .get(1)
+        .or(discovery.frames.first())
+        .expect("a frame");
+
+    let recipe = Recipe {
+        dpi: 500,
+        samples: 1,
+        interleaving: ColorInterleaving::LINE_WITHOUT_DISTANCE,
+        infrared: false,
+    };
+
+    let metered = frame::meter_frame_with(&mut session, &recipe, frame, false, |_, _| {
+        ControlFlow::Continue(())
+    })
+    .expect("metering");
+    assert_eq!(metered.iter().count(), 3, "every color channel is metered");
+
+    let scanned = frame::scan_frame_with(
+        &mut session,
+        &recipe,
+        frame,
+        Options {
+            exposures: Some(&metered),
+            ..Options::default()
+        },
+        &mut samples,
+        |_, _| ControlFlow::Continue(()),
+    )
+    .expect("scan");
+    assert_eq!(scanned.exposures, metered);
+}

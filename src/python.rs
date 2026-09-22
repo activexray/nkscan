@@ -602,6 +602,55 @@ impl PySession {
         })
     }
 
+    /// Meter `frame` and answer the exposures `scan_frame` would scan it at
+    ///
+    /// The metering `scan_frame` runs when it is not handed `exposures`, without
+    /// the pass after it. Handing the result to `scan_frame` exposes any frame
+    /// the way this one would be. `infrared` meters for a scan that takes the
+    /// infrared plane or cleans, so the result carries that channel too.
+    /// `lock_white_balance` is `scan_frame`'s
+    #[pyo3(signature = (frame, infrared=false, lock_white_balance=true, progress=None))]
+    fn meter_frame(
+        &self,
+        py: Python<'_>,
+        frame: (u32, u32, u32, u32),
+        infrared: bool,
+        lock_white_balance: bool,
+        progress: Option<Py<PyAny>>,
+    ) -> PyResult<HashMap<String, u32>> {
+        let (top, left, bottom, right) = frame;
+        let frame = Rect {
+            top,
+            left,
+            bottom,
+            right,
+        };
+
+        py.detach(move || {
+            self.with(|session| {
+                // Metering takes its own resolution and reading mode from the
+                // recipe's `metering`, so only the channels matter here
+                let recipe = Recipe {
+                    dpi: session.capabilities().address.x_axis.optical_dpi,
+                    samples: 1,
+                    interleaving: ColorInterleaving::LINE_WITHOUT_DISTANCE,
+                    infrared,
+                };
+                let exposures = frame::meter_frame_with(
+                    session,
+                    &recipe,
+                    frame,
+                    lock_white_balance,
+                    |pass, p| report(&progress, "meter", pass, p),
+                )?;
+                Ok(exposures
+                    .iter()
+                    .map(|(c, e)| (channel_name(c.id()), e))
+                    .collect())
+            })
+        })
+    }
+
     /// Drop the hold on the scanner. A closed session refuses every other method
     fn close(&self) {
         *self.0.lock().expect("not poisoned") = None;

@@ -282,6 +282,16 @@ class Session:
         `exposures`, keyed the way `ScanResult.exposures` is, reuses an exposure
         already decided rather than metering this frame fresh
         """
+    def meter_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], infrared: builtins.bool = False, lock_white_balance: builtins.bool = True, progress: typing.Optional[typing.Any] = None) -> builtins.dict[builtins.str, builtins.int]:
+        r"""
+        Meter `frame` and answer the exposures `scan_frame` would scan it at
+        
+        The metering `scan_frame` runs when it is not handed `exposures`, without
+        the pass after it. Handing the result to `scan_frame` exposes any frame
+        the way this one would be. `infrared` meters for a scan that takes the
+        infrared plane or cleans, so the result carries that channel too.
+        `lock_white_balance` is `scan_frame`'s
+        """
     def close(self) -> None:
         r"""
         Drop the hold on the scanner. A closed session refuses every other method

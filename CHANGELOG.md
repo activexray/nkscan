@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `Pass::image` and `decode::filled_columns`, the image and the columns a pass filled. `Image` gains `stride` and `Image::partial` for them.
+- `frame::meter_frame_with`, and `Session.meter_frame` in Python, meter a frame without scanning it. The exposures go back into `scan_frame`, so a batch can meter one frame and expose the rest the same way.
 
 ### Fixed
 

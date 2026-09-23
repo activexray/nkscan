@@ -75,6 +75,14 @@ Color negative meters each channel separately, which takes the orange mask off b
 
 `scan_frame` defaults to `True` whatever the film, so pass this explicitly when scanning negatives. `caps.hardware_metering` is `False` on every unit seen, an LS-9000 included - metering happens here rather than in the scanner, which is what makes the setting matter at all.
 
+Every `scan_frame` meters its own frame unless it is handed `exposures`. To expose a batch the same way, meter one frame and pass its exposures to the rest. `meter_frame` meters without scanning; ask for `infrared` there if the scans take the infrared plane or clean:
+
+```python
+exposures = session.meter_frame(frames[1], infrared=True, lock_white_balance=lock)
+for frame in frames:
+    session.scan_frame(frame, infrared=True, exposures=exposures)
+```
+
 ## Nudging frames by hand
 
 `scan_frame` scans the rectangle it is given. The pass is that rectangle at both

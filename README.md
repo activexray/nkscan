@@ -29,6 +29,11 @@ Otherwise, clone the repo and `cargo build --release --features cli`.
 If you have nix installed, you can build with `nix build`.
 We have the package defined in the flake, so you can add this to your personal config, if you wish.
 
+### Python
+
+To use the library from Python, install it with `pip install nkscan`.
+Refer to [PYTHON.md](PYTHON.md) for the API and examples.
+
 ## Example
 
 Say I'm batch scanning 6x6 color negatives on my Coolscan 9000 (the only Nikon scanner attached to my computer).
@@ -63,7 +68,10 @@ Options:
           [default: scan]
 
       --unlock-wb
-          Autoexpose per channel. Better dynamic range, but no longer "calibrated"
+          Autoexpose per channel, taking the film's own cast off. The default for color negative, where that cast is the orange mask
+
+      --lock-wb
+          Autoexpose the channels as one, keeping the film's cast and the factory balance. The default for slide, Kodachrome and black and white
 
       --lock-ae
           Autoexpose the first frame and reuse that exposure across all frames
@@ -141,7 +149,7 @@ If you test with a ⚠️-marked scanner/adapter combo and it works, please send
 | Scanner \ Holder                    | SA-21  | IA-20/21  | MA-20/21   | SA-30  | SF-210/200  |
 |-------------------------------------|:------:|:---------:|:----------:|:------:|:-----------:|
 | Super Coolscan 5000 (LS-5000 ED)    |   ⚠️   |  ⚠️      |    ✅     |  ⚠️    |   ⚠️       |
-| Super Coolscan 4000 (LS-5000 ED)    |   ✅   |  ⚠️      |    ⚠️     |  ✅    |   ⚠️       |
+| Super Coolscan 4000 (LS-4000 ED)    |   ✅   |  ⚠️      |    ⚠️     |  ✅    |   ⚠️       |
 | Coolscan V (LS-50 ED)               |   ✅   |  ✅      |    ✅     |  ✅    |   ✅       |
 | Coolscan IV (LS-40 ED)              |   ✅   |  ⚠️      |    ⚠️     |  ⚠️    |   ⚠️       |
 

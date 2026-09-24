@@ -257,6 +257,10 @@ pub struct Discovery {
     /// to the thumbnail resolution the unit reports. `None` where the
     /// mechanism took no thumbnail
     pub line_pitch: Option<thumbnail::LinePitch>,
+    /// The [`contrast`](crate::scan::strip::Strip::contrast) of the frame fit
+    /// on the thumbnail. `None` if there is no thumbnail, or if the fit found
+    /// no frames
+    pub contrast: Option<f32>,
 }
 
 /// Find every frame on whatever is loaded, driving whatever pass the chosen mechanism needs
@@ -297,6 +301,7 @@ pub fn discover_with(
                 frames: found,
                 thumbnail: None,
                 line_pitch: None,
+                contrast: None,
             })
         }
         Framing::Thumbnail => {
@@ -312,7 +317,7 @@ pub fn discover_with(
             let length = format.height_dots(optical_dpi);
             info!(?format, length, "frame length");
 
-            let (measured, pitch) =
+            let (measured, pitch, contrast) =
                 thumbnail::frames(session.capabilities(), &pass, samples, length)?;
             // Nothing measured is nothing to tell the unit, and it refuses an
             // empty record. The caller gets the pass either way, which is the
@@ -327,6 +332,7 @@ pub fn discover_with(
                 frames: found,
                 thumbnail: Some(pass),
                 line_pitch: Some(pitch),
+                contrast,
             })
         }
         Framing::Address => {
@@ -337,6 +343,7 @@ pub fn discover_with(
                 frames: found,
                 thumbnail: None,
                 line_pitch: None,
+                contrast: None,
             })
         }
         Framing::Perforation => {
@@ -357,7 +364,7 @@ pub fn discover_with(
             info!(?format, length, "frame length");
 
             let perfs = session.read_perforations()?;
-            let (measured, length, line_pitch) =
+            let (measured, length, line_pitch, contrast) =
                 thumbnail::frames_type2(session.capabilities(), &pass, samples, &perfs, length)?;
             if !measured.frames.is_empty() {
                 session.set_boundaries_type2(&measured)?;
@@ -376,6 +383,7 @@ pub fn discover_with(
                 frames: found,
                 thumbnail: Some(pass),
                 line_pitch: Some(line_pitch),
+                contrast,
             })
         }
     }

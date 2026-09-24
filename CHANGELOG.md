@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Pass::image` and `decode::filled_columns`, the image and the columns a pass filled. `Image` gains `stride` and `Image::partial` for them.
 - `frame::meter_frame_with`, and `Session.meter_frame` in Python, meter a frame without scanning it. The exposures go back into `scan_frame`, so a batch can meter one frame and expose the rest the same way.
+- `frame::Options::focus` sets how `scan_frame` focuses. `frame::focus_frame` focuses without a scan. `Scanned` gives the focus result and the lens position. `Session::focus_position` reads the lens position.
+- `Discovery::contrast` gives the quality of the frame fit on the thumbnail.
+- `Recipe::new` sets the resolution and the CCD reading mode. The CLI and the Python bindings both use it.
+- `profile::Film` implements `FromStr`.
+- In Python: `scan_frame(focus=...)`, `Session.focus_frame`, `autofocus`, `focus_to`, `focus_position` and `nikon_profile`. `ScanResult` gains `complete`, `blocks`, `focused` and `focus_position`. `Discovery` gains `contrast`, `thumbnail_complete` and `thumbnail_blocks`.
+
+### Changed
+
+- **Breaking:** `thumbnail::frames` and `frames_type2` also return the contrast of the fit.
+- **Breaking:** `frame::Options` has a `focus` field. A struct literal must set it, or use `..Default::default()`.
 
 ### Fixed
 

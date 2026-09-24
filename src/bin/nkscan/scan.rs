@@ -13,6 +13,7 @@ use nkscan::{
     protocol::{caps::set_window::ColorInterleaving, decode::Samples},
     scan::{
         autoexpose::Exposures,
+        focus::Focus,
         frame::{self, Phase},
         framing::{self, Framing},
         meter::Metering,
@@ -143,15 +144,12 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         );
     }
     let caps = session.capabilities();
-    let dpi = dpi.unwrap_or(caps.address.x_axis.optical_dpi);
+    // The recipe for every frame. Cleaning needs the infrared channel, so
+    // --clean adds it even without --ir
+    let recipe = Recipe::new(caps, dpi, samples, superfine, ir || clean);
+    let dpi = recipe.dpi;
     let multiline_supported = caps.reads_lines_at_once();
     let multiline_at_dpi = caps.reads_lines_at_once_at(dpi);
-
-    let color_interleave = if !superfine && multiline_at_dpi {
-        ColorInterleaving::MULTILINE_SIMULTANEOUS
-    } else {
-        ColorInterleaving::LINE_WITHOUT_DISTANCE
-    };
 
     if superfine && !multiline_supported {
         warn!("this scanner has no multi-line scanning mode, so --superfine changes nothing");
@@ -164,19 +162,10 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
 
     debug!(
         ccd_lines = caps.address.lines,
-        ?color_interleave,
+        color_interleave = ?recipe.interleaving,
         "selected scan interleaving"
     );
 
-    // What every frame gets scanned with
-    // Checked before anything moves
-    let recipe = Recipe {
-        dpi,
-        samples,
-        interleaving: color_interleave,
-        // Cleaning reads the mask whether or not the operator wants it kept
-        infrared: ir || clean,
-    };
     // Everything the recipe asks for is checked against the pages here, before
     // the thumbnail pass and the stage move that would otherwise come first
     recipe.supported(session.capabilities())?;
@@ -291,6 +280,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
                 exposures: locked.as_ref(),
                 lock_white_balance: hold_white_balance,
                 clean,
+                focus: Focus::default(),
             };
             let scanned = frame::scan_frame_with(
                 session,

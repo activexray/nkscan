@@ -11,7 +11,7 @@ use crate::{
     protocol::{
         caps::{
             Capabilities as RustCapabilities,
-            set_window::{ColorInterleaving, ScanKind, ScanMode},
+            set_window::{ScanKind, ScanMode},
         },
         data::{Op, Rect},
         decode::Samples,
@@ -19,19 +19,24 @@ use crate::{
     },
     scan::{
         autoexpose::Exposures,
+        focus::{Focus, Focused},
         frame::{self, Phase},
         framing::{self, Framing},
         meter::Metering,
         pass::Progress,
-        profile::Film,
+        profile::{self, Film},
         window::{MAX_SAMPLES, Recipe},
     },
     session::Session as RustSession,
 };
 use numpy::{IntoPyArray, PyArray2, PyArrayMethods};
-use pyo3::{exceptions::PyRuntimeError, prelude::*};
+use pyo3::{
+    exceptions::{PyRuntimeError, PyValueError},
+    prelude::*,
+};
 use pyo3_stub_gen::{create_exception, define_stub_info_gatherer, derive::*};
 use std::{
+    borrow::Cow,
     collections::HashMap,
     io::{IsTerminal, stderr},
     ops::ControlFlow,
@@ -222,19 +227,52 @@ impl PyCapabilities {
     /// it lives here because this is where a caller already looks
     #[staticmethod]
     fn locks_white_balance(film: &str) -> PyResult<bool> {
-        let film = match film.to_ascii_lowercase().as_str() {
-            "positive" | "slide" => Film::Positive,
-            "negative" => Film::Negative,
-            "kodachrome" => Film::Kodachrome,
-            "mono" | "monochrome" | "monochromenegative" => Film::MonochromeNegative,
-            other => {
-                return Err(PyRuntimeError::new_err(format!(
-                    "unknown film type {other:?}"
-                )));
-            }
-        };
-        Ok(Metering::locks_white_balance(film))
+        Ok(Metering::locks_white_balance(film_from_name(film)?))
     }
+}
+
+/// Parse a film name. See `Film`'s `FromStr` for the names
+fn film_from_name(film: &str) -> PyResult<Film> {
+    film.parse().map_err(PyRuntimeError::new_err)
+}
+
+// ----- focus -----
+
+/// Parse the `focus` argument of `scan_frame` and `focus_frame`
+///
+/// - `None` or "auto": the unit focuses on the center of the frame.
+/// - `(x, y)`: the unit focuses on this point. Each value is a fraction of the
+///   frame size.
+/// - An int: the lens moves to this position. The position must be in
+///   `Capabilities.focus_range`.
+/// - "hold": the lens does not move.
+fn focus_from(focus: Option<&Bound<'_, PyAny>>) -> PyResult<Focus> {
+    let Some(focus) = focus else {
+        return Ok(Focus::default());
+    };
+    if let Ok(position) = focus.extract::<u16>() {
+        return Ok(Focus::At(position));
+    }
+    if let Ok(at) = focus.extract::<(f32, f32)>() {
+        return Ok(Focus::Auto { at, color: None });
+    }
+    match focus.extract::<String>() {
+        Ok(name) if name.eq_ignore_ascii_case("auto") => Ok(Focus::default()),
+        Ok(name) if name.eq_ignore_ascii_case("hold") => Ok(Focus::Hold),
+        _ => Err(PyValueError::new_err(format!(
+            "focus is \"auto\", \"hold\", a position, or an (x, y) point, not {focus}"
+        ))),
+    }
+}
+
+/// The name of a focus result, as `ScanResult.focused` gives it
+fn focused_name(focused: Focused) -> String {
+    match focused {
+        Focused::Yes => "focused",
+        Focused::NotReached => "not_reached",
+        Focused::Skipped => "skipped",
+    }
+    .to_string()
 }
 
 impl From<&RustCapabilities> for PyCapabilities {
@@ -314,6 +352,20 @@ pub struct PyScanResult {
     exposures: HashMap<String, u32>,
     /// Pixels dust removal rebuilt, where asked for
     cleaned: Option<usize>,
+    /// True if all blocks of the pass arrived. If this is false, the planes
+    /// contain data only for the blocks in `blocks`
+    complete: bool,
+    /// The number of blocks of the pass that arrived
+    blocks: usize,
+    /// The focus result:
+    ///
+    /// - "focused": the unit reached focus, or the lens moved to the position.
+    /// - "not_reached": autofocus did not reach focus. The scan continued at
+    ///   the last lens position.
+    /// - "skipped": `focus` was "hold", so the lens did not move.
+    focused: String,
+    /// The lens position during the pass. `None` if the unit does not report it
+    focus_position: Option<u16>,
 }
 
 fn channel_name(id: u8) -> String {
@@ -361,6 +413,17 @@ pub struct PyDiscovery {
     /// Measured per pass, so read it from each discovery and do not cache it.
     /// `None` where the mechanism took no thumbnail
     addresses_per_column: Option<f64>,
+    /// The quality of the frame fit on the thumbnail. A higher value means
+    /// more detail in the frames, less detail in the gaps, and more similar
+    /// gaps. Compare values only between strips on the same unit. `None` if
+    /// there is no thumbnail, or if the fit found no frames
+    contrast: Option<f32>,
+    /// True if all blocks of the thumbnail pass arrived. `None` if there is no
+    /// thumbnail
+    thumbnail_complete: Option<bool>,
+    /// The number of blocks of the thumbnail pass that arrived. `None` if there
+    /// is no thumbnail
+    thumbnail_blocks: Option<usize>,
 }
 
 // ----- a session -----
@@ -459,28 +522,49 @@ impl PySession {
             .transpose()
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
-        let (frames, thumbnail, ids, samples, shape, pitch) = py.detach(move || {
-            self.with(|session| {
-                let mut samples = Samples::default();
-                let discovery = framing::discover_with(session, format, &mut samples, |p| {
-                    report(&progress, "discover", 0, p)
-                })?;
-                let frames: Vec<_> = discovery
-                    .frames
-                    .into_iter()
-                    .map(|r| (r.top, r.left, r.bottom, r.right))
-                    .collect();
-                let pitch = discovery.line_pitch.map(|p| p.addresses_per_column());
-                match discovery.thumbnail {
-                    Some(pass) => {
-                        let ids: Vec<u8> = pass.layout.colors().collect();
-                        let shape = (pass.rows, pass.cols);
-                        Ok((frames, true, ids, samples.colors, shape, pitch))
+        let (frames, thumbnail, ids, samples, shape, pitch, contrast, arrived) =
+            py.detach(move || {
+                self.with(|session| {
+                    let mut samples = Samples::default();
+                    let discovery = framing::discover_with(session, format, &mut samples, |p| {
+                        report(&progress, "discover", 0, p)
+                    })?;
+                    let frames: Vec<_> = discovery
+                        .frames
+                        .into_iter()
+                        .map(|r| (r.top, r.left, r.bottom, r.right))
+                        .collect();
+                    let pitch = discovery.line_pitch.map(|p| p.addresses_per_column());
+                    let contrast = discovery.contrast;
+                    match discovery.thumbnail {
+                        Some(pass) => {
+                            let ids: Vec<u8> = pass.layout.colors().collect();
+                            let shape = (pass.rows, pass.cols);
+                            let arrived = Some((pass.complete, pass.blocks));
+                            Ok((
+                                frames,
+                                true,
+                                ids,
+                                samples.colors,
+                                shape,
+                                pitch,
+                                contrast,
+                                arrived,
+                            ))
+                        }
+                        None => Ok((
+                            frames,
+                            false,
+                            Vec::new(),
+                            Vec::new(),
+                            (0, 0),
+                            pitch,
+                            contrast,
+                            None,
+                        )),
                     }
-                    None => Ok((frames, false, Vec::new(), Vec::new(), (0, 0), pitch)),
-                }
-            })
-        })?;
+                })
+            })?;
 
         let thumbnail = thumbnail.then(|| {
             let (rows, cols) = shape;
@@ -490,6 +574,9 @@ impl PySession {
             frames,
             thumbnail,
             addresses_per_column: pitch,
+            contrast,
+            thumbnail_complete: arrived.map(|(complete, _)| complete),
+            thumbnail_blocks: arrived.map(|(_, blocks)| blocks),
         })
     }
 
@@ -500,7 +587,9 @@ impl PySession {
     /// that positions the film by its own frame table, the rectangle is put in that
     /// table first, so a moved or cropped one reaches the film it asks for.
     /// `exposures`, keyed the way `ScanResult.exposures` is, reuses an exposure
-    /// already decided rather than metering this frame fresh
+    /// already decided rather than metering this frame fresh. `focus` is the
+    /// same as for `focus_frame`. Use "hold" to scan at the focus that
+    /// `focus_frame` set
     #[pyo3(signature = (
         frame,
         dpi=None,
@@ -510,6 +599,7 @@ impl PySession {
         clean=false,
         lock_white_balance=true,
         exposures=None,
+        focus=None,
         progress=None,
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -524,15 +614,12 @@ impl PySession {
         clean: bool,
         lock_white_balance: bool,
         exposures: Option<HashMap<String, u32>>,
+        #[gen_stub(override_type(type_repr = "typing.Optional[typing.Union[builtins.int, tuple[builtins.float, builtins.float], typing.Literal['auto', 'hold']]]", imports = ("builtins", "typing")))]
+        focus: Option<Bound<'_, PyAny>>,
         progress: Option<Py<PyAny>>,
     ) -> PyResult<PyScanResult> {
-        let (top, left, bottom, right) = frame;
-        let frame = Rect {
-            top,
-            left,
-            bottom,
-            right,
-        };
+        let focus = focus_from(focus.as_ref())?;
+        let frame = rect(frame);
         let locked = exposures.map(|by_name| {
             let mut e = Exposures::default();
             for (name, value) in by_name {
@@ -543,19 +630,13 @@ impl PySession {
 
         py.detach(move || {
             self.with(|session| {
-                let caps = session.capabilities();
-                let dpi = dpi.unwrap_or(caps.address.x_axis.optical_dpi);
-                let interleaving = if superfine || !caps.reads_lines_at_once_at(dpi) {
-                    ColorInterleaving::LINE_WITHOUT_DISTANCE
-                } else {
-                    ColorInterleaving::MULTILINE_SIMULTANEOUS
-                };
-                let recipe = Recipe {
+                let recipe = Recipe::new(
+                    session.capabilities(),
                     dpi,
                     samples,
-                    interleaving,
-                    infrared: infrared || clean,
-                };
+                    superfine,
+                    infrared || clean,
+                );
                 recipe.supported(session.capabilities())?;
 
                 let mut buf = Samples::default();
@@ -563,6 +644,7 @@ impl PySession {
                     exposures: locked.as_ref(),
                     lock_white_balance,
                     clean,
+                    focus,
                 };
                 let scanned = frame::scan_frame_with(
                     session,
@@ -596,6 +678,10 @@ impl PySession {
                         cols,
                         exposures,
                         cleaned: scanned.cleaned,
+                        complete: scanned.pass.complete,
+                        blocks: scanned.pass.blocks,
+                        focused: focused_name(scanned.focused),
+                        focus_position: scanned.focus_position,
                     })
                 })
             })
@@ -618,24 +704,13 @@ impl PySession {
         lock_white_balance: bool,
         progress: Option<Py<PyAny>>,
     ) -> PyResult<HashMap<String, u32>> {
-        let (top, left, bottom, right) = frame;
-        let frame = Rect {
-            top,
-            left,
-            bottom,
-            right,
-        };
+        let frame = rect(frame);
 
         py.detach(move || {
             self.with(|session| {
                 // Metering takes its own resolution and reading mode from the
                 // recipe's `metering`, so only the channels matter here
-                let recipe = Recipe {
-                    dpi: session.capabilities().address.x_axis.optical_dpi,
-                    samples: 1,
-                    interleaving: ColorInterleaving::LINE_WITHOUT_DISTANCE,
-                    infrared,
-                };
+                let recipe = Recipe::new(session.capabilities(), None, 1, false, infrared);
                 let exposures = frame::meter_frame_with(
                     session,
                     &recipe,
@@ -649,6 +724,68 @@ impl PySession {
                     .collect())
             })
         })
+    }
+
+    /// Focus on `frame` without metering or scanning it
+    ///
+    /// Returns the focus result and the lens position, with the same values as
+    /// `ScanResult.focused` and `ScanResult.focus_position`.
+    ///
+    /// `focus` is one of:
+    ///
+    /// - `None` or "auto": the unit focuses on the center of the frame.
+    /// - `(x, y)`: the unit focuses on this point. Each value is a fraction of
+    ///   the frame size.
+    /// - An int: the lens moves to this position. The position must be in
+    ///   `Capabilities.focus_range`.
+    /// - "hold": the lens does not move.
+    ///
+    /// To scan at this focus, call `scan_frame` with `focus="hold"`
+    #[pyo3(signature = (frame, focus=None))]
+    fn focus_frame(
+        &self,
+        py: Python<'_>,
+        frame: (u32, u32, u32, u32),
+        #[gen_stub(override_type(type_repr = "typing.Optional[typing.Union[builtins.int, tuple[builtins.float, builtins.float], typing.Literal['auto', 'hold']]]", imports = ("builtins", "typing")))]
+        focus: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<(String, Option<u16>)> {
+        let focus = focus_from(focus.as_ref())?;
+        let frame = rect(frame);
+        let (focused, position) =
+            py.detach(move || self.with(|session| frame::focus_frame(session, frame, focus)))?;
+        Ok((focused_name(focused), position))
+    }
+
+    /// Autofocus on the point `(x, y)`, in frame addresses
+    ///
+    /// The point must be in one of the unit's frames. `color` selects the
+    /// channel to focus on. Not all units can focus on one channel. If the unit
+    /// does not reach focus, this raises `ScannerError`. `focus_frame` does not
+    /// raise in that case
+    #[pyo3(signature = (x, y, color=None))]
+    fn autofocus(&self, py: Python<'_>, x: u32, y: u32, color: Option<u8>) -> PyResult<()> {
+        py.detach(|| self.with(|s| s.autofocus(x, y, color)))
+    }
+
+    /// Move the lens to `position`. The position must be in
+    /// `Capabilities.focus_range`
+    fn focus_to(&self, py: Python<'_>, position: u16) -> PyResult<()> {
+        py.detach(|| self.with(|s| s.focus_to(position)))
+    }
+
+    /// The current lens position, in the units that `focus_to` uses
+    fn focus_position(&self, py: Python<'_>) -> PyResult<u16> {
+        py.detach(|| self.with(RustSession::focus_position))
+    }
+
+    /// Nikon's ICC profile for this unit and `film`, as the bytes of the .icc
+    /// file
+    ///
+    /// `film` is "positive", "slide", "negative", "kodachrome" or "mono".
+    /// Returns `None` if Nikon Scan has no profile for this unit and film
+    fn nikon_profile(&self, film: &str) -> PyResult<Option<Cow<'static, [u8]>>> {
+        let film = film_from_name(film)?;
+        self.with(|s| Ok(profile::nikon(&s.capabilities().identity, film).map(Cow::Borrowed)))
     }
 
     /// Drop the hold on the scanner. A closed session refuses every other method
@@ -681,6 +818,16 @@ fn report(on: &Option<Py<PyAny>>, phase: &str, pass: usize, p: Progress) -> Cont
             _ => ControlFlow::Continue(()),
         }
     })
+}
+
+/// Convert a frame argument, `(top, left, bottom, right)`, to a `Rect`
+fn rect((top, left, bottom, right): (u32, u32, u32, u32)) -> Rect {
+    Rect {
+        top,
+        left,
+        bottom,
+        right,
+    }
 }
 
 /// The channel a `scan_frame`/`ScanResult` name refers to

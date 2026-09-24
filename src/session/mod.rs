@@ -200,8 +200,7 @@ impl Session {
                 debug!(id = w.id, %e, "this window would not go back");
             }
         }
-        if let Ok(params) = self.get_parameter(Op::FocusMove) {
-            let at = params.first.min(u32::from(u16::MAX)) as u16;
+        if let Ok(at) = self.focus_position() {
             match self.focus_to(at) {
                 Ok(()) => debug!(at, "staged the focus"),
                 Err(e) => debug!(at, %e, "could not stage the focus"),

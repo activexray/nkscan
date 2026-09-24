@@ -38,6 +38,22 @@ pub enum Film {
     MonochromeNegative,
 }
 
+impl std::str::FromStr for Film {
+    type Err = String;
+
+    /// Parse "positive", "slide", "negative", "kodachrome" or "mono". Case
+    /// does not matter
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        match name.to_ascii_lowercase().as_str() {
+            "positive" | "slide" => Ok(Self::Positive),
+            "negative" => Ok(Self::Negative),
+            "kodachrome" => Ok(Self::Kodachrome),
+            "mono" | "monochrome" | "monochromenegative" => Ok(Self::MonochromeNegative),
+            other => Err(format!("unknown film type {other:?}")),
+        }
+    }
+}
+
 /// A profile is not quite per model: Nikon shipped one covering the LS-4000 and
 /// the LS-40, and the LS-50's profiles hold the same measurements as the
 /// LS-5000's, differing only in the description they carry

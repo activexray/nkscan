@@ -204,14 +204,18 @@ fn tops(
 /// nothing advertises. Every rectangle comes out that long: the captures'
 /// measured tables move the tops about and leave the heights at the format.
 ///
-/// Also answers the pitch the rectangles were placed with, so a caller can put
-/// a rectangle drawn on the thumbnail onto the film
+/// Also returns:
+///
+/// - The pitch that placed the rectangles. Use it to put a rectangle drawn on
+///   the thumbnail onto the film.
+/// - The [`contrast`](strip::Strip::contrast) of the fit, or `None` if the fit
+///   found no frames.
 pub fn frames(
     caps: &Capabilities,
     pass: &Pass,
     samples: &Samples,
     length: u32,
-) -> Result<(Boundary, LinePitch), Error> {
+) -> Result<(Boundary, LinePitch, Option<f32>), Error> {
     let format = window::reachable_blocks(caps, length);
     framing::reachable(caps, format)?;
     let image = pass.image(samples)?;
@@ -226,7 +230,7 @@ pub fn frames(
 
     let Some((tops, found)) = tops(caps, &image, pitch, format) else {
         info!("nothing on the strip to frame");
-        return Ok((Boundary::default(), pitch));
+        return Ok((Boundary::default(), pitch, None));
     };
 
     // The window addresses the film here, so the rectangle is the frame
@@ -249,16 +253,18 @@ pub fn frames(
     for (n, rect) in frames.iter().enumerate() {
         debug!(frame = n + 1, ?rect, "frame rect");
     }
-    Ok((Boundary { frames }, pitch))
+    Ok((Boundary { frames }, pitch, Some(found.contrast)))
 }
 
+/// The same as [`frames`], for a unit that registers frames by perforation,
+/// 2-11-9. Also returns the frame length, in Y addresses
 pub fn frames_type2(
     caps: &Capabilities,
     pass: &Pass,
     samples: &Samples,
     perf_info: &PerfInformation,
     length: u32,
-) -> Result<(BoundaryType2, u32, LinePitch), Error> {
+) -> Result<(BoundaryType2, u32, LinePitch, Option<f32>), Error> {
     // Whole readout blocks, and trimmed rather than refused where the format
     // is taller than the axis reaches
     let format = window::reachable_blocks(caps, length);
@@ -285,7 +291,7 @@ pub fn frames_type2(
     };
     let Some((tops, found)) = tops(caps, &image, pitch, format) else {
         info!("nothing on the strip to frame");
-        return Ok((BoundaryType2::default(), format, pitch));
+        return Ok((BoundaryType2::default(), format, pitch, None));
     };
 
     // The table commonly falls short of the pass: the unit stops counting
@@ -331,7 +337,12 @@ pub fn frames_type2(
         debug!(frame = n + 1, ?frame, "frame position");
     }
 
-    Ok((BoundaryType2 { frames }, format, pitch))
+    Ok((
+        BoundaryType2 { frames },
+        format,
+        pitch,
+        Some(found.contrast),
+    ))
 }
 
 /// Where the adapter's opening sits on the sensor, and how wide it is

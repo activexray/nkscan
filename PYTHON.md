@@ -83,6 +83,45 @@ for frame in frames:
     session.scan_frame(frame, infrared=True, exposures=exposures)
 ```
 
+## Focus
+
+By default, `scan_frame` autofocuses on the center of the frame. Use `focus` to change this:
+
+- `"auto"`: the unit focuses on the center of the frame. This is the default.
+- `(x, y)`: the unit focuses on this point. Each value is a fraction of the frame size.
+- An int: the lens moves to this position. The position must be in `caps.focus_range`.
+- `"hold"`: the lens does not move.
+
+`focus_frame` focuses without a scan. To focus one time for a batch, focus on one frame and scan all frames with `"hold"`:
+
+```python
+focused, position = session.focus_frame(frames[1])  # ("focused", 210)
+for frame in frames:
+    result = session.scan_frame(frame, focus="hold")
+```
+
+`ScanResult.focused` gives the focus result:
+
+- `"focused"`: the unit reached focus, or the lens moved to the position.
+- `"not_reached"`: autofocus did not reach focus. The scan continued at the last lens position.
+- `"skipped"`: `focus` was `"hold"`.
+
+`ScanResult.focus_position` gives the lens position during the scan. To control the lens directly, use `autofocus(x, y)`, `focus_to(position)` and `focus_position()`.
+
+## Check the result
+
+`ScanResult.complete` is `True` if all blocks of the pass arrived. `ScanResult.blocks` gives the number of blocks that arrived. If a pass is short, the planes contain data only for those blocks.
+
+`Discovery.thumbnail_complete` and `Discovery.thumbnail_blocks` give the same data for the thumbnail pass. `Discovery.contrast` gives the quality of the frame fit on the thumbnail. Compare it only between strips on the same unit.
+
+## Color profiles
+
+`session.nikon_profile(film)` returns the bytes of Nikon's ICC profile for this unit and film. It returns `None` if Nikon Scan has no profile for them:
+
+```python
+icc = session.nikon_profile("negative")
+```
+
 ## Nudging frames by hand
 
 `scan_frame` scans the rectangle it is given. The pass is that rectangle at both

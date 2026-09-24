@@ -6,7 +6,7 @@ use crate::{
     scan::{
         autoexpose::Exposures,
         clean::clean_frame,
-        focus::Focus,
+        focus::{Focus, Focused},
         framing,
         pass::{Pass, Progress},
         window::Recipe,
@@ -37,6 +37,8 @@ pub struct Options<'a> {
     pub lock_white_balance: bool,
     /// Run dust removal over the result in place
     pub clean: bool,
+    /// How to focus before the pass
+    pub focus: Focus,
 }
 
 /// What one frame's scan produced
@@ -48,6 +50,10 @@ pub struct Scanned {
     pub exposures: Exposures,
     /// Pixels dust removal rebuilt, where asked for
     pub cleaned: Option<usize>,
+    /// The focus result
+    pub focused: Focused,
+    /// The lens position during the pass. `None` if the unit does not report it
+    pub focus_position: Option<u16>,
 }
 
 /// Focus, meter, and take the pass over `frame`
@@ -72,8 +78,8 @@ pub fn scan_frame_with(
     samples: &mut Samples,
     mut on: impl FnMut(Phase, Progress) -> ControlFlow<()>,
 ) -> Result<Scanned, Error> {
-    let (pass, exposures) = at_frame(session, frame, |session| {
-        session.focus_frame(frame, Focus::default())?;
+    let (pass, exposures, focused, focus_position) = at_frame(session, frame, |session| {
+        let (focused, focus_position) = focus_on(session, frame, options.focus)?;
 
         let exposures = match options.exposures {
             Some(locked) => locked.clone(),
@@ -90,7 +96,7 @@ pub fn scan_frame_with(
 
         let pass =
             session.scan_pass_with(&windows, SCAN_TIMEOUT, samples, |p| on(Phase::Scan, p))?;
-        Ok((pass, exposures))
+        Ok((pass, exposures, focused, focus_position))
     })?;
     samples.to_full_scale(pass.layout.bits_per_sample);
 
@@ -103,6 +109,8 @@ pub fn scan_frame_with(
         pass,
         exposures,
         cleaned,
+        focused,
+        focus_position,
     })
 }
 
@@ -122,6 +130,34 @@ pub fn meter_frame_with(
     at_frame(session, frame, |session| {
         session.autoexpose_frame_with(frame, recipe, lock_white_balance, on)
     })
+}
+
+/// Focus on `frame` without metering or scanning it
+///
+/// Returns the focus result and the lens position. The position is `None` if
+/// the unit does not report it. To scan at this focus, give the scan
+/// [`Focus::Hold`]
+pub fn focus_frame(
+    session: &mut Session,
+    frame: Rect,
+    focus: Focus,
+) -> Result<(Focused, Option<u16>), Error> {
+    at_frame(session, frame, |session| focus_on(session, frame, focus))
+}
+
+/// Focus on `frame`, then read the lens position. The frame must already be
+/// in the unit's frame table
+fn focus_on(
+    session: &mut Session,
+    frame: Rect,
+    focus: Focus,
+) -> Result<(Focused, Option<u16>), Error> {
+    let focused = session.focus_frame(frame, focus)?;
+    let position = session.focus_position().ok();
+    if let Some(position) = position {
+        info!(position, "focused at");
+    }
+    Ok((focused, position))
 }
 
 /// Run `f` with `frame` reachable, and leave the unit's frame table as measured

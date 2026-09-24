@@ -168,6 +168,26 @@ class Discovery:
         Measured per pass, so read it from each discovery and do not cache it.
         `None` where the mechanism took no thumbnail
         """
+    @property
+    def contrast(self) -> typing.Optional[builtins.float]:
+        r"""
+        The quality of the frame fit on the thumbnail. A higher value means
+        more detail in the frames, less detail in the gaps, and more similar
+        gaps. Compare values only between strips on the same unit. `None` if
+        there is no thumbnail, or if the fit found no frames
+        """
+    @property
+    def thumbnail_complete(self) -> typing.Optional[builtins.bool]:
+        r"""
+        True if all blocks of the thumbnail pass arrived. `None` if there is no
+        thumbnail
+        """
+    @property
+    def thumbnail_blocks(self) -> typing.Optional[builtins.int]:
+        r"""
+        The number of blocks of the thumbnail pass that arrived. `None` if there
+        is no thumbnail
+        """
 
 class MediaError(ScannerError):
     r"""
@@ -211,6 +231,32 @@ class ScanResult:
     def cleaned(self) -> typing.Optional[builtins.int]:
         r"""
         Pixels dust removal rebuilt, where asked for
+        """
+    @property
+    def complete(self) -> builtins.bool:
+        r"""
+        True if all blocks of the pass arrived. If this is false, the planes
+        contain data only for the blocks in `blocks`
+        """
+    @property
+    def blocks(self) -> builtins.int:
+        r"""
+        The number of blocks of the pass that arrived
+        """
+    @property
+    def focused(self) -> builtins.str:
+        r"""
+        The focus result:
+        
+        - "focused": the unit reached focus, or the lens moved to the position.
+        - "not_reached": autofocus did not reach focus. The scan continued at
+          the last lens position.
+        - "skipped": `focus` was "hold", so the lens did not move.
+        """
+    @property
+    def focus_position(self) -> typing.Optional[builtins.int]:
+        r"""
+        The lens position during the pass. `None` if the unit does not report it
         """
 
 class ScannerError(builtins.RuntimeError):
@@ -271,7 +317,7 @@ class Session:
         works the same as a detected one, just slower if the stage has to home
         first to reach it
         """
-    def scan_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], dpi: typing.Optional[builtins.int] = None, samples: builtins.int = 1, superfine: builtins.bool = False, infrared: builtins.bool = False, clean: builtins.bool = False, lock_white_balance: builtins.bool = True, exposures: typing.Optional[typing.Mapping[builtins.str, builtins.int]] = None, progress: typing.Optional[typing.Any] = None) -> ScanResult:
+    def scan_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], dpi: typing.Optional[builtins.int] = None, samples: builtins.int = 1, superfine: builtins.bool = False, infrared: builtins.bool = False, clean: builtins.bool = False, lock_white_balance: builtins.bool = True, exposures: typing.Optional[typing.Mapping[builtins.str, builtins.int]] = None, focus: typing.Optional[typing.Union[builtins.int, tuple[builtins.float, builtins.float], typing.Literal['auto', 'hold']]] = None, progress: typing.Optional[typing.Any] = None) -> ScanResult:
         r"""
         Focus, meter, take the pass over `frame`, and optionally clean it
         
@@ -280,7 +326,9 @@ class Session:
         that positions the film by its own frame table, the rectangle is put in that
         table first, so a moved or cropped one reaches the film it asks for.
         `exposures`, keyed the way `ScanResult.exposures` is, reuses an exposure
-        already decided rather than metering this frame fresh
+        already decided rather than metering this frame fresh. `focus` is the
+        same as for `focus_frame`. Use "hold" to scan at the focus that
+        `focus_frame` set
         """
     def meter_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], infrared: builtins.bool = False, lock_white_balance: builtins.bool = True, progress: typing.Optional[typing.Any] = None) -> builtins.dict[builtins.str, builtins.int]:
         r"""
@@ -291,6 +339,50 @@ class Session:
         the way this one would be. `infrared` meters for a scan that takes the
         infrared plane or cleans, so the result carries that channel too.
         `lock_white_balance` is `scan_frame`'s
+        """
+    def focus_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], focus: typing.Optional[typing.Union[builtins.int, tuple[builtins.float, builtins.float], typing.Literal['auto', 'hold']]] = None) -> tuple[builtins.str, typing.Optional[builtins.int]]:
+        r"""
+        Focus on `frame` without metering or scanning it
+        
+        Returns the focus result and the lens position, with the same values as
+        `ScanResult.focused` and `ScanResult.focus_position`.
+        
+        `focus` is one of:
+        
+        - `None` or "auto": the unit focuses on the center of the frame.
+        - `(x, y)`: the unit focuses on this point. Each value is a fraction of
+          the frame size.
+        - An int: the lens moves to this position. The position must be in
+          `Capabilities.focus_range`.
+        - "hold": the lens does not move.
+        
+        To scan at this focus, call `scan_frame` with `focus="hold"`
+        """
+    def autofocus(self, x: builtins.int, y: builtins.int, color: typing.Optional[builtins.int] = None) -> None:
+        r"""
+        Autofocus on the point `(x, y)`, in frame addresses
+        
+        The point must be in one of the unit's frames. `color` selects the
+        channel to focus on. Not all units can focus on one channel. If the unit
+        does not reach focus, this raises `ScannerError`. `focus_frame` does not
+        raise in that case
+        """
+    def focus_to(self, position: builtins.int) -> None:
+        r"""
+        Move the lens to `position`. The position must be in
+        `Capabilities.focus_range`
+        """
+    def focus_position(self) -> builtins.int:
+        r"""
+        The current lens position, in the units that `focus_to` uses
+        """
+    def nikon_profile(self, film: builtins.str) -> typing.Optional[builtins.bytes]:
+        r"""
+        Nikon's ICC profile for this unit and `film`, as the bytes of the .icc
+        file
+        
+        `film` is "positive", "slide", "negative", "kodachrome" or "mono".
+        Returns `None` if Nikon Scan has no profile for this unit and film
         """
     def close(self) -> None:
         r"""

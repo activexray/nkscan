@@ -123,6 +123,13 @@ impl Session {
         )
     }
 
+    /// The current lens position, in the units that
+    /// [`focus_to`](Self::focus_to) uses
+    pub fn focus_position(&mut self) -> Result<u16, Error> {
+        let params = self.get_parameter(Op::FocusMove)?;
+        Ok(params.first.min(u32::from(u16::MAX)) as u16)
+    }
+
     /// Focus on `frame`, per `focus`
     ///
     /// The frame is a rectangle of the boundary table, which is what the unit
@@ -154,7 +161,7 @@ impl Session {
                 );
 
                 debug!(x, y, "focusing");
-                let outcome = match self.autofocus(x, y, color) {
+                match self.autofocus(x, y, color) {
                     Ok(()) => Ok(Focused::Yes),
                     Err(Error::Device(fault))
                         if matches!(*fault, Fault::Reported(Failure::OutOfFocus, _)) =>
@@ -163,12 +170,7 @@ impl Session {
                         Ok(Focused::NotReached)
                     }
                     Err(e) => Err(e),
-                };
-
-                if let Ok(params) = self.get_parameter(Op::FocusMove) {
-                    info!(position = params.first, "focused at");
                 }
-                outcome
             }
         }
     }

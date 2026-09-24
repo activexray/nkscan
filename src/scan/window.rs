@@ -131,6 +131,32 @@ pub struct Recipe {
 }
 
 impl Recipe {
+    /// A scan at `dpi`. If `dpi` is `None`, the scan uses the optical
+    /// resolution of the unit
+    ///
+    /// The scan reads all CCD rows at once if the unit can do this at `dpi`.
+    /// If the unit cannot, or if `superfine` is true, the scan reads one row at
+    /// a time
+    pub fn new(
+        caps: &Capabilities,
+        dpi: Option<u16>,
+        samples: u8,
+        superfine: bool,
+        infrared: bool,
+    ) -> Self {
+        let dpi = dpi.unwrap_or(caps.address.x_axis.optical_dpi);
+        let interleaving = match !superfine && caps.reads_lines_at_once_at(dpi) {
+            true => ColorInterleaving::MULTILINE_SIMULTANEOUS,
+            false => ColorInterleaving::LINE_WITHOUT_DISTANCE,
+        };
+        Self {
+            dpi,
+            samples,
+            interleaving,
+            infrared,
+        }
+    }
+
     /// A quick pass to measure this one by, not to keep
     ///
     /// The coarsest the unit offers, one reading. Single-line where it is

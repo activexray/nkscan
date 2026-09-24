@@ -10,7 +10,7 @@ use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use nkscan::{
     device,
     error::Error,
-    protocol::{caps::set_window::ColorInterleaving, decode::Samples},
+    protocol::decode::Samples,
     scan::{
         autoexpose::Exposures,
         focus::Focus,

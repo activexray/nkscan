@@ -144,20 +144,20 @@ enum Chunk {
     TooMuch(usize),
 }
 
-impl Chunk {
-    /// The byte count, where an over-long answer ends the command
-    fn count(self, asked: usize) -> Result<usize, Error> {
-        match self {
-            Chunk::Got(n) => Ok(n),
-            Chunk::TooMuch(n) => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "device sent {n} bytes for a {asked}-byte read, so the stream is out of step"
-                ),
-            )
-            .into()),
+/// Fill a data phase, asking each read for all bytes still owed.
+fn fill_data_phase(
+    out: &mut [u8],
+    mut read: impl FnMut(&mut [u8]) -> Result<usize, Error>,
+) -> Result<usize, Error> {
+    let mut done = 0;
+    while done < out.len() {
+        let got = read(&mut out[done..])?;
+        if got == 0 {
+            break;
         }
+        done += got;
     }
+    Ok(done)
 }
 
 /// What a phase check answered
@@ -312,9 +312,8 @@ impl UsbTransport {
     /// Read the closing packet of a phase, where the unit fills it out to a
     /// whole number of packets instead of ending it short
     ///
-    /// `out` asks for what the phase has left, so a [`Chunk::TooMuch`] here is
-    /// that padding. A read with more of the phase to come after it is the
-    /// pipe out of step
+    /// `out` holds everything the phase still owes, so a [`Chunk::TooMuch`]
+    /// here is padding rather than the start of another data fragment
     fn read_last(&mut self, out: &mut [u8], timeout: Duration) -> Result<usize, Error> {
         match self.read_in(out, timeout)? {
             Chunk::Got(n) => Ok(n),
@@ -330,36 +329,12 @@ impl UsbTransport {
 
     /// Read a whole data IN phase
     ///
-    /// The unit sends the data in pieces. An LS-40 sends one image line for
-    /// each piece, so one read gets the first line only. We read until we have
-    /// the transfer length the CDB asked for, and after the first piece we ask
-    /// for the size of that piece. Nikon's own USB code does the same.
+    /// The unit can end a USB transfer before the CDB's transfer length is
+    /// reached. That first piece can also be the remainder of a line split by
+    /// the previous READ, so its length does not bound later pieces. Keep
+    /// asking for the remaining phase bytes until the phase is complete.
     fn read_data_in(&mut self, out: &mut [u8], budget: Budget) -> Result<usize, Error> {
-        let mut done = 0;
-        let mut piece = out.len();
-        while done < out.len() {
-            let want = piece.min(out.len() - done);
-            // The phase is as long as the CDB's transfer length, which need not
-            // end on a packet boundary, and the unit fills out that last
-            // packet rather than ending it short. A surplus before then is not
-            // padding, it is the stream out of step
-            let last = done + want == out.len();
-            let got = if last {
-                self.read_last(&mut out[done..done + want], budget.left()?)?
-            } else {
-                self.read_in(&mut out[done..done + want], budget.left()?)?
-                    .count(want)?
-            };
-            // The unit has nothing more to send
-            if got == 0 {
-                break;
-            }
-            if done == 0 && got < out.len() {
-                piece = got;
-            }
-            done += got;
-        }
-        Ok(done)
+        fill_data_phase(out, |remaining| self.read_last(remaining, budget.left()?))
     }
 
     /// Ask what the unit wants next, in no more than `bound` and no more than
@@ -565,5 +540,114 @@ impl Transport for UsbTransport {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    /// A short packet ends a USB read, while a full request can split a line.
+    struct InPipe {
+        fragments: VecDeque<Vec<u8>>,
+        requests: Vec<usize>,
+    }
+
+    impl InPipe {
+        fn read_last(&mut self, out: &mut [u8]) -> Result<usize, Error> {
+            self.requests.push(out.len());
+            let requested = out.len().max(1).div_ceil(64) * 64;
+            let mut fragment = self.fragments.pop_front().unwrap_or_default();
+            if fragment.len() > requested {
+                let rest = fragment.split_off(requested);
+                self.fragments.push_front(rest);
+            }
+            let copied = fragment.len().min(out.len());
+            out[..copied].copy_from_slice(&fragment[..copied]);
+            Ok(copied)
+        }
+    }
+
+    #[test]
+    fn a_partial_line_does_not_limit_later_usb_fragments() {
+        // LS-40 metering: RGB lines are 1722 bytes. A 128 KiB READ ends
+        // 200 bytes into a line, leaving 1522 at the start of the next READ.
+        let payload: Vec<u8> = (0..131_072).map(|i| (i % 251) as u8).collect();
+        let mut fragments = VecDeque::from([payload[..1522].to_vec()]);
+        fragments.extend(payload[1522..].chunks(1722).map(<[u8]>::to_vec));
+        let status = vec![0; 8];
+        fragments.push_back(status.clone());
+        let mut pipe = InPipe {
+            fragments,
+            requests: Vec::new(),
+        };
+        let mut out = vec![0; payload.len()];
+
+        let got = fill_data_phase(&mut out, |remaining| pipe.read_last(remaining)).unwrap();
+
+        assert_eq!(got, payload.len());
+        assert_eq!(out, payload);
+        assert_eq!(&pipe.requests[..2], &[131_072, 129_550]);
+        assert_eq!(pipe.fragments, VecDeque::from([status]));
+    }
+
+    #[test]
+    fn a_zero_length_fragment_ends_a_short_data_phase() {
+        let mut pipe = InPipe {
+            fragments: VecDeque::from([vec![1, 2, 3], vec![]]),
+            requests: Vec::new(),
+        };
+        let mut out = [0xff; 8];
+
+        assert_eq!(
+            fill_data_phase(&mut out, |remaining| pipe.read_last(remaining)).unwrap(),
+            3,
+        );
+        assert_eq!(out, [1, 2, 3, 0xff, 0xff, 0xff, 0xff, 0xff]);
+        assert_eq!(pipe.requests, [8, 5]);
+    }
+
+    #[test]
+    fn a_read_error_ends_the_data_phase() {
+        let mut out = [0; 8];
+        let mut reads = 0;
+        let timeout = Duration::from_secs(1);
+
+        let result = fill_data_phase(&mut out, |remaining| {
+            reads += 1;
+            match reads {
+                1 => {
+                    remaining[..3].copy_from_slice(&[1, 2, 3]);
+                    Ok(3)
+                }
+                2 => Err(Error::Timeout(timeout)),
+                _ => panic!("read again after an error"),
+            }
+        });
+
+        assert!(matches!(result, Err(Error::Timeout(value)) if value == timeout));
+        assert_eq!(reads, 2);
+        assert_eq!(&out[..3], &[1, 2, 3]);
+    }
+
+    #[test]
+    fn closing_packet_padding_does_not_consume_the_status_phase() {
+        let payload: Vec<u8> = (0..17).collect();
+        let mut padded = payload.clone();
+        padded.resize(64, 0xff);
+        let status = vec![0; 8];
+        let mut pipe = InPipe {
+            fragments: VecDeque::from([padded, status.clone()]),
+            requests: Vec::new(),
+        };
+        let mut out = vec![0; payload.len()];
+
+        assert_eq!(
+            fill_data_phase(&mut out, |remaining| pipe.read_last(remaining)).unwrap(),
+            payload.len()
+        );
+        assert_eq!(out, payload);
+        assert_eq!(pipe.fragments, VecDeque::from([status]));
     }
 }

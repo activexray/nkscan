@@ -78,6 +78,18 @@ class Capabilities:
         offer to keep it
         """
     @property
+    def film_format(self) -> typing.Optional[builtins.str]:
+        r"""
+        The film format the loaded holder or adapter fixes, as `discover_frames` takes it;
+        `None` where it fixes none or the framing needs none
+        """
+    @property
+    def film_formats(self) -> builtins.list[builtins.str]:
+        r"""
+        The film formats to offer for the loaded holder or adapter; empty where it fixes the
+        format or the framing needs none
+        """
+    @property
     def multi_line(self) -> builtins.bool:
         r"""
         Whether the CCD can read its lines at once. False means a "superfine"

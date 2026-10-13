@@ -40,6 +40,19 @@ pub enum FilmFormat {
 }
 
 impl FilmFormat {
+    /// The named formats, in the order a picker offers them
+    pub const NAMED: [Self; 9] = [
+        Self::F135,
+        Self::F135Half,
+        Self::IX240,
+        Self::F16,
+        Self::F645,
+        Self::F66,
+        Self::F67,
+        Self::F68,
+        Self::F69,
+    ];
+
     /// Frame height along the feed, in dots of a 4000 dpi axis
     ///
     /// Address units, which is what the unit consumes and what Nikon Scan's own
@@ -166,6 +179,22 @@ impl FilmFormat {
             })
     }
 
+    /// The formats to offer for what is loaded; empty where the holder or adapter fixes it
+    pub fn choices(caps: &super::Capabilities) -> Vec<Self> {
+        if Self::resolve(None, caps).is_ok() {
+            return Vec::new();
+        }
+        let mf = caps.identity.is_mf_scanner();
+        let holder = caps.address.holder_id.filter(|_| mf);
+        match holder.and_then(Self::choices_for_holder) {
+            Some(choices) => choices.to_vec(),
+            None => Self::NAMED
+                .into_iter()
+                .filter(|f| mf || !f.is_120())
+                .collect(),
+        }
+    }
+
     /// Refuse a custom length that the unit cannot scan as one frame
     ///
     /// A 35mm unit scans one gate, so a longer frame comes back at the gate length (#62)
@@ -278,6 +307,24 @@ mod tests {
             FilmFormat::resolve(Some(FilmFormat::F135), &caps).ok(),
             Some(FilmFormat::F135)
         );
+    }
+
+    /// A holder or adapter that fixes the format offers no choice
+    #[test]
+    fn choices_follow_what_the_holder_fixes() {
+        let mut caps = crate::scan::window::tests::caps();
+        caps.identity.product = "LS-9000 ED".into();
+        caps.address.holder_id = Some(0x17);
+        assert_eq!(
+            FilmFormat::choices(&caps),
+            [FilmFormat::F66, FilmFormat::F67, FilmFormat::F69]
+        );
+        caps.address.holder_id = Some(0x1A);
+        assert!(FilmFormat::choices(&caps).is_empty());
+        // A 35mm unit with an unknown adapter offers only the 35mm formats
+        caps.identity.product = "LS-50 ED".into();
+        caps.address.holder_id = None;
+        assert!(FilmFormat::choices(&caps).iter().all(|f| !f.is_120()));
     }
 
     #[test]

@@ -241,6 +241,12 @@ pub struct PyCapabilities {
     /// Whether a thumbnail pass happens at all, and so whether a caller can
     /// offer to keep it
     thumbnail: bool,
+    /// The film format the loaded holder or adapter fixes, as `discover_frames` takes it;
+    /// `None` where it fixes none or the framing needs none
+    film_format: Option<String>,
+    /// The film formats to offer for the loaded holder or adapter; empty where it fixes the
+    /// format or the framing needs none
+    film_formats: Vec<String>,
     /// Whether the CCD can read its lines at once. False means a "superfine"
     /// control has nothing to switch
     multi_line: bool,
@@ -340,6 +346,9 @@ fn focused_name(focused: Focused) -> String {
 
 impl From<&RustCapabilities> for PyCapabilities {
     fn from(caps: &RustCapabilities) -> Self {
+        let framing = framing::Framing::choose(caps);
+        // Only the framings that measure the frames need the format
+        let measured = matches!(framing, Framing::Thumbnail | Framing::Perforation);
         Self {
             vendor: caps.identity.vendor.clone(),
             product: caps.identity.product.clone(),
@@ -370,14 +379,25 @@ impl From<&RustCapabilities> for PyCapabilities {
                 true => MAX_SAMPLES,
                 false => 1,
             },
-            framing: match framing::Framing::choose(caps) {
+            framing: match framing {
                 Framing::Published => "published",
                 Framing::Thumbnail => "thumbnail",
                 Framing::Perforation => "perforation",
                 Framing::Address => "address",
             }
             .to_string(),
-            thumbnail: framing::Framing::choose(caps).takes_thumbnail(caps),
+            thumbnail: framing.takes_thumbnail(caps),
+            film_format: measured
+                .then(|| FilmFormat::resolve(None, caps).ok())
+                .flatten()
+                .map(|f| f.to_string()),
+            film_formats: match measured {
+                true => FilmFormat::choices(caps)
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+                false => Vec::new(),
+            },
             multi_line: caps.reads_lines_at_once(),
             eject: caps.features.execute.supports(Op::Unload),
             autofocus: caps.features.execute.supports(Op::AutoFocus),

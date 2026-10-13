@@ -4,6 +4,8 @@
 import builtins
 import numpy
 import numpy.typing
+import os
+import pathlib
 import typing
 __all__ = [
     "Capabilities",
@@ -415,16 +417,16 @@ class UnsupportedError(ScannerError):
     """
     ...
 
-def init_logging(level: typing.Optional[builtins.str] = None) -> None:
+def init_logging(level: typing.Optional[builtins.str] = None, path: typing.Optional[builtins.str | os.PathLike | pathlib.Path] = None) -> None:
     r"""
-    Send the crate's `tracing` diagnostics to stderr.
+    Send the crate's `tracing` diagnostics to stderr, or append them to `path`.
     
     The extension installs no subscriber on its own, so without calling this the
     `debug!`/`trace!`/`warn!` calls throughout `session`, `scan`, `transport`, and
     `protocol` go nowhere when `nkscan` is used as a library. `level` sets the
-    default (`"info"` if omitted); `RUST_LOG` always overrides it and can target
-    individual modules the way it does for the CLI, e.g. `nkscan::cdb=trace`.
-    Safe to call more than once. Later calls are no-ops.
+    default (`"info"` if omitted, `"off"` to stop); `RUST_LOG` always overrides it
+    and can target individual modules the way it does for the CLI, e.g.
+    `nkscan::cdb=trace`. A later call changes the level and the destination.
     """
 
 def list_devices() -> builtins.list[Device]:

@@ -40,11 +40,23 @@ use pyo3_stub_gen::{create_exception, define_stub_info_gatherer, derive::*};
 use std::{
     borrow::Cow,
     collections::HashMap,
-    io::{IsTerminal, stderr},
+    fs::OpenOptions,
+    io,
     ops::ControlFlow,
-    sync::Mutex,
+    path::PathBuf,
+    sync::{Mutex, OnceLock},
 };
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{
+    EnvFilter, Registry,
+    filter::Filtered,
+    fmt::{
+        self,
+        format::{DefaultFields, Format},
+        writer::BoxMakeWriter,
+    },
+    prelude::*,
+    reload,
+};
 
 // ----- errors -----
 
@@ -148,27 +160,53 @@ fn list_devices() -> Vec<PyDevice> {
 
 // ----- logging -----
 
-/// Send the crate's `tracing` diagnostics to stderr.
+/// The log layer that `init_logging` installs, with its filter
+type LogLayer =
+    Filtered<fmt::Layer<Registry, DefaultFields, Format, BoxMakeWriter>, EnvFilter, Registry>;
+
+/// The handle that lets a later `init_logging` change the level and the destination
+static LOGGING: OnceLock<reload::Handle<LogLayer, Registry>> = OnceLock::new();
+
+/// Send the crate's `tracing` diagnostics to stderr, or append them to `path`.
 ///
 /// The extension installs no subscriber on its own, so without calling this the
 /// `debug!`/`trace!`/`warn!` calls throughout `session`, `scan`, `transport`, and
 /// `protocol` go nowhere when `nkscan` is used as a library. `level` sets the
-/// default (`"info"` if omitted); `RUST_LOG` always overrides it and can target
-/// individual modules the way it does for the CLI, e.g. `nkscan::cdb=trace`.
-/// Safe to call more than once. Later calls are no-ops.
+/// default (`"info"` if omitted, `"off"` to stop); `RUST_LOG` always overrides it
+/// and can target individual modules the way it does for the CLI, e.g.
+/// `nkscan::cdb=trace`. A later call changes the level and the destination.
 #[gen_stub_pyfunction]
 #[pyfunction]
-#[pyo3(signature = (level=None))]
-fn init_logging(level: Option<&str>) {
+#[pyo3(signature = (level=None, path=None))]
+fn init_logging(level: Option<&str>, path: Option<PathBuf>) -> PyResult<()> {
     let level = level.unwrap_or("info");
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(format!("{level},nusb=warn"))),
-        )
-        .with_target(false)
-        .with_ansi(stderr().is_terminal())
-        .try_init();
+    let filter = match EnvFilter::try_from_default_env() {
+        Ok(filter) => filter,
+        Err(_) => EnvFilter::try_new(format!("{level},nusb=warn"))
+            .map_err(|e| PyValueError::new_err(format!("log level '{level}': {e}")))?,
+    };
+    let writer = match path {
+        Some(path) => BoxMakeWriter::new(Mutex::new(
+            OpenOptions::new().create(true).append(true).open(path)?,
+        )),
+        None => BoxMakeWriter::new(io::stderr),
+    };
+    let handle = LOGGING.get_or_init(|| {
+        let layer = fmt::layer()
+            .with_target(false)
+            .with_ansi(false)
+            .with_writer(BoxMakeWriter::new(io::sink))
+            .with_filter(EnvFilter::new("off"));
+        let (layer, handle) = reload::Layer::new(layer);
+        let _ = tracing_subscriber::registry().with(layer).try_init();
+        handle
+    });
+    handle
+        .modify(|layer| {
+            *layer.filter_mut() = filter;
+            *layer.inner_mut().writer_mut() = writer;
+        })
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 
 // ----- capabilities -----

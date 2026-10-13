@@ -523,6 +523,7 @@ mod tests {
             set_window,
             ccd: None,
             frames: None,
+            adapter: None,
         }
     }
 

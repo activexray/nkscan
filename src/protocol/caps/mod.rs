@@ -36,6 +36,8 @@ pub struct Capabilities {
     pub ccd: Option<ccd::CcdMeasurement>,
     /// Published only when `Address` byte 16 sets `FRAME_RECTS`
     pub frames: Option<frames::Frames>,
+    /// The adapter name, FRU ASCII page 01h (2-2-2-2); `None` if the unit has no such page
+    pub adapter: Option<String>,
 }
 
 impl Capabilities {
@@ -137,6 +139,18 @@ impl Page {
         Ok(value)
     }
 
+    /// The text of a FRU ASCII page (2-2-2-2): byte 4 is its length, and a NUL ends it
+    pub fn ascii(&self) -> Result<String, Error> {
+        let len = usize::from(self.u8(4)?);
+        let bytes = self.bytes.get(5..5 + len).ok_or(Error::Truncated {
+            page: self.code,
+            need: 5 + len,
+            got: self.bytes.len(),
+        })?;
+        let text = bytes.split(|&b| b == 0).next().unwrap_or_default();
+        Ok(String::from_utf8_lossy(text).into_owned())
+    }
+
     /// How many bytes the page says it holds
     ///
     /// Clamped to what arrived, since a unit declaring more than it sent is no
@@ -199,6 +213,14 @@ impl Page {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FRU page 01h off an LS-50 with its 6-frame strip adapter
+    #[test]
+    fn the_adapter_name_is_read_off_its_fru_page() {
+        let bytes = b"\x06\x01\x00\x08\x076Strip\x00\x00\x00".to_vec();
+        let page = Page::new(0x01, bytes).expect("page");
+        assert_eq!(page.ascii().expect("ascii"), "6Strip");
+    }
 
     /// Reading past what arrived is an error, not a panic. The one place
     /// this is checked, since every page goes through these accessors

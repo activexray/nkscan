@@ -130,5 +130,11 @@ pub fn capabilities(t: &mut dyn Transport) -> Result<Capabilities, Error> {
             Err(e) => return Err(e),
         },
         frames,
+        // A unit without adapters has no page 01h
+        adapter: match vpd(t, 0x01) {
+            Ok(page) => Some(page.ascii()?),
+            Err(Error::Device(fault)) if matches!(*fault, Fault::Rejected(..)) => None,
+            Err(e) => return Err(e),
+        },
     })
 }

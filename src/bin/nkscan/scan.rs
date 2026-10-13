@@ -203,7 +203,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         // Only to warn early if --thumbnail would save nothing; discover_with
         // resolves --format itself, against whichever mechanism this picks
         let framing = Framing::choose(session.capabilities());
-        if save_thumbnail && !matches!(framing, Framing::Thumbnail | Framing::Perforation) {
+        if save_thumbnail && !framing.takes_thumbnail(session.capabilities()) {
             warn!("this unit frames without a thumbnail pass, so --thumbnail saves nothing");
         }
 
@@ -216,7 +216,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         // others read them off a page and would leave a bar claiming a pass was
         // running. Made on the first report with a length for the same reason
         // the metering bars are
-        let takes_pass = matches!(framing, Framing::Thumbnail | Framing::Perforation);
+        let takes_pass = framing.takes_thumbnail(session.capabilities());
         let mut bar: Option<ProgressBar> = None;
         let discovery = framing::discover_with(session, format, film.into(), &mut samples, |p| {
             if takes_pass && bar.is_none() && p.total > 0 {

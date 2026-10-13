@@ -67,8 +67,7 @@ class Capabilities:
     @property
     def framing(self) -> builtins.str:
         r"""
-        How this unit finds frames: "published", "thumbnail", "perforation" or
-        "address". Only the middle two take a thumbnail pass
+        How this unit finds frames: "published", "thumbnail", "perforation" or "address"
         """
     @property
     def thumbnail(self) -> builtins.bool:
@@ -154,7 +153,7 @@ class Discovery:
     def thumbnail(self) -> typing.Optional[builtins.dict[builtins.str, numpy.typing.NDArray[numpy.uint16]]]:
         r"""
         One array per channel, keyed the way `ScanResult.colors` is;
-        `None` where the mechanism that found `frames` needed no thumbnail pass.
+        `None` where discovery takes no thumbnail pass, see `Capabilities.thumbnail`.
         On a unit that counts perforations, this is the resampled thumbnail
         """
     @property

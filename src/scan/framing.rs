@@ -66,6 +66,20 @@ impl Framing {
         }
         Self::Address
     }
+
+    /// Whether discovery takes a thumbnail pass
+    ///
+    /// With published frames the pass is only a preview, taken where Nikon Scan takes one
+    pub fn takes_thumbnail(self, caps: &Capabilities) -> bool {
+        match self {
+            Self::Thumbnail | Self::Perforation => true,
+            Self::Published => {
+                thumbnail::available(caps)
+                    && thumbnail::exposure_factors(caps, Film::default()).is_some()
+            }
+            Self::Address => false,
+        }
+    }
 }
 
 /// Refuse a frame the stage cannot step to
@@ -297,13 +311,22 @@ pub fn discover_with(
             let boundary = table(session.capabilities())?;
             let found = boundary.frames.clone();
             info!(frames = found.len(), "published frames");
+            let (thumbnail, line_pitch, base_density) =
+                if mechanism.takes_thumbnail(session.capabilities()) {
+                    let pass = session.scan_thumbnail_with(samples, film, on)?;
+                    let base_density = base_density(session, &pass.image(samples)?, film);
+                    let pitch = thumbnail::LinePitch::of(&pass);
+                    (Some(pass), Some(pitch), base_density)
+                } else {
+                    (None, None, None)
+                };
             Ok(Discovery {
                 table: FrameTable::Boundary(boundary),
                 frames: found,
-                thumbnail: None,
-                line_pitch: None,
+                thumbnail,
+                line_pitch,
                 contrast: None,
-                base_density: None,
+                base_density,
             })
         }
         Framing::Thumbnail => {
@@ -424,6 +447,22 @@ pub fn discover_with(
 mod tests {
     use super::*;
     use crate::scan::window::tests::caps;
+
+    /// Published frames take a thumbnail as a preview where Nikon Scan takes one
+    #[test]
+    fn published_frames_take_a_thumbnail_where_nikon_takes_one() {
+        let mut caps = caps();
+        caps.set_window.kind |= crate::protocol::caps::set_window::ScanKind::THUMBNAIL;
+        caps.address.thumbnail_resolution = (83u16..=83u16).into();
+        // FH-835S on an LS-9000
+        caps.address.holder_id = Some(0x15);
+        assert!(Framing::Published.takes_thumbnail(&caps));
+        // An LS-50 mount adapter, where Nikon Scan takes none
+        caps.address.holder_id = None;
+        caps.adapter = Some("Mount".into());
+        assert!(!Framing::Published.takes_thumbnail(&caps));
+        assert!(!Framing::Address.takes_thumbnail(&caps));
+    }
 
     /// A cartridge addresses the film itself, so its range runs the length of
     /// the roll at one frame per boundary. These are an IA-20's

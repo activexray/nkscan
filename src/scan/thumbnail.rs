@@ -46,6 +46,11 @@ impl LinePitch {
         Self(line_pitch(caps))
     }
 
+    /// The pitch `pass` took
+    pub(crate) fn of(pass: &Pass) -> Self {
+        Self(pass.layout.line_pitch.max(1))
+    }
+
     /// Stage addresses one thumbnail column spans
     pub fn addresses_per_column(&self) -> f64 {
         f64::from(self.0)
@@ -195,7 +200,7 @@ pub fn frames(
     let length = window::reachable_blocks(caps, format.height_dots(y.optical_dpi));
     framing::reachable(caps, length)?;
     let image = pass.image(samples)?;
-    let pitch = LinePitch(pass.layout.line_pitch.max(1));
+    let pitch = LinePitch::of(pass);
     let (left, width) = opening(caps);
     let last = y.address_range.last.saturating_sub(length);
 

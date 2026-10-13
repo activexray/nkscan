@@ -198,8 +198,7 @@ pub struct PyCapabilities {
     /// Most readings of one line a pass may ask for. 1 where the unit reads a
     /// line one time, so a multi-sample control can be hidden
     max_samples: u8,
-    /// How this unit finds frames: "published", "thumbnail", "perforation" or
-    /// "address". Only the middle two take a thumbnail pass
+    /// How this unit finds frames: "published", "thumbnail", "perforation" or "address"
     framing: String,
     /// Whether a thumbnail pass happens at all, and so whether a caller can
     /// offer to keep it
@@ -340,10 +339,7 @@ impl From<&RustCapabilities> for PyCapabilities {
                 Framing::Address => "address",
             }
             .to_string(),
-            thumbnail: matches!(
-                framing::Framing::choose(caps),
-                Framing::Thumbnail | Framing::Perforation
-            ),
+            thumbnail: framing::Framing::choose(caps).takes_thumbnail(caps),
             multi_line: caps.reads_lines_at_once(),
             eject: caps.features.execute.supports(Op::Unload),
             autofocus: caps.features.execute.supports(Op::AutoFocus),
@@ -428,7 +424,7 @@ fn colors_to_numpy(
 pub struct PyDiscovery {
     frames: Vec<(u32, u32, u32, u32)>,
     /// One array per channel, keyed the way `ScanResult.colors` is;
-    /// `None` where the mechanism that found `frames` needed no thumbnail pass.
+    /// `None` where discovery takes no thumbnail pass, see `Capabilities.thumbnail`.
     /// On a unit that counts perforations, this is the resampled thumbnail
     thumbnail: Option<HashMap<String, Py<PyArray2<u16>>>>,
     /// Feed addresses one column of `thumbnail` spans

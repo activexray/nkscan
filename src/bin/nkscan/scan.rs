@@ -44,19 +44,18 @@ const SPINNER_TICK: Duration = Duration::from_millis(120);
 /// Scan what the flags ask for
 pub fn run(args: cli::Scan) -> anyhow::Result<()> {
     // First grab the requested device, or the first one
-    let devices = device::list();
-    let device = (if let Some(d) = args.device.clone() {
+    let (_, transport) = (if let Some(d) = args.device.clone() {
         device::Selector::Location(d)
     } else {
         device::Selector::Only
     })
-    .resolve(&devices)?;
+    .open()?;
 
     // Start up a scan session. The session is opened here rather than inside
     // the run below so that a cancel is caught while it is still open: a
     // stopped run has film in the gate, and giving it back is the one thing
     // that still has to happen
-    let mut session = Session::open(device.open()?)?;
+    let mut session = Session::open(transport)?;
     info!("connected to scanner");
 
     let no_eject = args.no_eject;

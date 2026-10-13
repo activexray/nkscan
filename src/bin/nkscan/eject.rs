@@ -4,22 +4,20 @@ use nkscan::{device, error::Error, protocol::sense::Intervention, session::Sessi
 use crate::cli::Eject;
 
 pub fn run(args: Eject) -> Result<()> {
-    let devices = device::list();
-
-    let device = (if let Some(d) = args.device {
+    let (device, transport) = (if let Some(d) = args.device {
         device::Selector::Location(d)
     } else {
         device::Selector::Only
     })
-    .resolve(&devices)
+    .open()
     .map_err(|e| {
-        let list: Vec<_> = devices.iter().map(ToString::to_string).collect();
+        let list: Vec<_> = device::list().iter().map(ToString::to_string).collect();
         anyhow!("{e}\n\nattached:\n  {}", list.join("\n  "))
     })?;
 
     println!("{device}");
 
-    let mut session = Session::open(device.open()?)?;
+    let mut session = Session::open(transport)?;
 
     println!("Connected to scanner");
 

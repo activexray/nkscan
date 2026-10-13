@@ -29,6 +29,7 @@ use crate::{
         window::{MAX_SAMPLES, Recipe},
     },
     session::Session as RustSession,
+    transport::Transport,
 };
 use numpy::{IntoPyArray, PyArray2, PyArrayMethods};
 use pyo3::{
@@ -465,8 +466,7 @@ impl PySession {
     }
 }
 
-fn open_device(device: &RustDevice) -> Result<PySession, Error> {
-    let transport = device.open()?;
+fn open_session(transport: Box<dyn Transport>) -> Result<PySession, Error> {
     let session = RustSession::open(transport)?;
     Ok(PySession(Mutex::new(Some(session))))
 }
@@ -479,11 +479,14 @@ impl PySession {
     fn new(py: Python<'_>, location: &str) -> PyResult<Self> {
         let location = location.to_string();
         py.detach(move || {
-            let devices = device::list();
-            let device = device::Selector::Location(location)
-                .resolve(&devices)
-                .map_err(|e| DeviceNotFound::new_err(e.to_string()))?;
-            open_device(device).map_err(PyErr::from)
+            let (_, transport) =
+                device::Selector::Location(location)
+                    .open()
+                    .map_err(|e| match e {
+                        device::SelectError::Open(e) => PyErr::from(e),
+                        e => DeviceNotFound::new_err(e.to_string()),
+                    })?;
+            open_session(transport).map_err(PyErr::from)
         })
     }
 
@@ -491,7 +494,8 @@ impl PySession {
     #[staticmethod]
     fn open(py: Python<'_>, device: &PyDevice) -> PyResult<Self> {
         let dev = device.0.clone();
-        py.detach(move || open_device(&dev)).map_err(PyErr::from)
+        py.detach(move || open_session(dev.open()?))
+            .map_err(PyErr::from)
     }
 
     /// What the scanner says it can do

@@ -17,20 +17,18 @@ use nkscan::{
 
 /// Dump every INQUIRY page the named unit carries
 pub fn run(args: cli::Dump) -> anyhow::Result<()> {
-    let devices = device::list();
-    let device = (if let Some(d) = args.device {
+    let (device, mut transport) = (if let Some(d) = args.device {
         device::Selector::Location(d)
     } else {
         device::Selector::Only
     })
-    .resolve(&devices)
+    .open()
     .map_err(|e| {
-        let list: Vec<_> = devices.iter().map(ToString::to_string).collect();
+        let list: Vec<_> = device::list().iter().map(ToString::to_string).collect();
         anyhow!("{e}\n\nattached:\n  {}", list.join("\n  "))
     })?;
 
     println!("{device}\n");
-    let mut transport = device.open()?;
 
     // Standard INQUIRY: who is this, and is it even a scanner
     let Some(identity) = read(transport.as_mut(), Inquiry::standard()) else {

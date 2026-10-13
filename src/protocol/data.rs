@@ -307,10 +307,8 @@ pub enum FrameTable {
 /// Sub-scanning is Y and main-scanning is X, and this record puts them in that
 /// order, the reverse of `Frames`, which leads with the left edge.
 ///
-/// `bottom` and `right` are one past the last line and the last column, so the
-/// extent is `bottom - top`. The record itself gives the last line and the last
-/// column, so a 13860 line frame ends at 13859 on the wire: `to_bytes` and
-/// `from_bytes` convert
+/// `bottom` is `top` plus the length and `right` is `left` plus the width, on
+/// the wire also, as Nikon Scan writes them (`ThumbnailReadCheck`)
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Rect {
     /// Bytes 4-7, upper left in the sub-scanning direction
@@ -333,7 +331,7 @@ pub struct FramePosition {
     pub top: u32,
     /// Bytes 8-9, perforation number
     pub perf_number: u16,
-    /// Byte 10, perforation decimal
+    /// Byte 10, perforation decimal, with the count-switching flag in bit 7
     pub perf_decimal: u8,
     /// Byte 11, pulse number
     pub pulse_number: u8,
@@ -349,13 +347,12 @@ impl FramePosition {
         }
     }
 
-    /// One frame's entry: a detected top, and that line's own perforation
-    /// reading rather than anything derived from the address
+    /// One frame's entry: a top, and the unit's perforation reading as it gave it
     pub fn new(top: u32, perf: &PerforationInformation) -> Self {
         FramePosition {
             top,
             perf_number: perf.perf_number,
-            perf_decimal: perf.perf_decimal,
+            perf_decimal: perf.perf_decimal | (u8::from(perf.count_switching_flag) << 7),
             pulse_number: perf.pulse_number,
         }
     }
@@ -403,13 +400,11 @@ impl Boundary {
         for n in 0..count {
             let at = Self::HEAD + n * Self::RECT;
             let r = b.get(at..at + Self::RECT)?;
-            // One past the last line and the last column, which is what the
-            // record gives
             frames.push(Rect {
                 top: be32(r, 0),
                 left: be32(r, 4),
-                bottom: be32(r, 8) + 1,
-                right: be32(r, 12) + 1,
+                bottom: be32(r, 8),
+                right: be32(r, 12),
             });
         }
         Some(Self { frames })
@@ -444,10 +439,7 @@ impl Boundary {
         out.push(self.frames.len() as u8);
         out.push(0);
         for r in &self.frames {
-            // The record gives the last line and the last column, where a
-            // `Rect` gives one past each
-            let last = |v: u32| v.saturating_sub(1);
-            for v in [r.top, r.left, last(r.bottom), last(r.right)] {
+            for v in [r.top, r.left, r.bottom, r.right] {
                 out.extend_from_slice(&v.to_be_bytes());
             }
         }
@@ -1094,11 +1086,12 @@ mod tests {
         assert!(second.count_switching_flag);
         assert_eq!(perfs.at(3), None);
 
+        // The entry keeps the count-switching flag, as Nikon Scan's does
         let frame = FramePosition::new(4321, second);
         assert_eq!(frame.top, 4321);
         assert_eq!(
             (frame.perf_number, frame.perf_decimal, frame.pulse_number),
-            (1, 1, 7)
+            (1, 0x81, 7)
         );
     }
 
@@ -1266,6 +1259,27 @@ mod tests {
         let mut b = vec![0u8; 27];
         b[13] = 2;
         assert!(Setup::from_bytes(&b).is_none());
+    }
+
+    /// The table Nikon Scan wrote for a 6x4.5 strip on an LS-9000
+    #[test]
+    fn a_frame_is_written_as_nikon_scan_writes_it() {
+        let b = Boundary {
+            frames: vec![Rect {
+                top: 2236,
+                left: 518,
+                bottom: 2236 + 6696,
+                right: 518 + 8964,
+            }],
+        };
+        let bytes = b.to_bytes().unwrap();
+        assert_eq!(
+            &bytes[4..],
+            &[
+                0x00, 0x00, 0x08, 0xBC, 0x00, 0x00, 0x02, 0x06, 0x00, 0x00, 0x22, 0xE4, 0x00, 0x00,
+                0x25, 0x0A
+            ]
+        );
     }
 
     /// The 20 bytes an LS-9000 returned with one frame loaded

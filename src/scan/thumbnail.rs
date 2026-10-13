@@ -7,33 +7,21 @@
 //! `Features` puts thumbnail in the host cooperation bits on both families, so
 //! the unit hands us the pass and expects us to make sense of it.
 
-use super::{framing, pass::Pass, profile::Film, strip, window};
+use super::{boundary, framing, pass::Pass, profile::Film, strip, window};
 use crate::{
     error::Error,
     protocol::{
         caps::{
             Capabilities,
+            film::FilmFormat,
             set_window::{ColorInterleaving, ScanKind, ScanMode},
         },
-        data::{
-            Boundary, BoundaryType2, FramePosition, PerfInformation, PerforationInformation, Rect,
-        },
+        data::{Boundary, Rect},
         decode::{Image, Samples},
-        model::Model,
         window::{Flags, Window},
     },
 };
 use tracing::*;
-
-/// The pitch of a 135 perforation in ten-thousandths of a millimeter, ISO 1007
-const PERFORATION_MM_E4: u64 = 47_498;
-
-/// Ten-thousandths of a millimeter in an inch, to turn that into addresses
-const INCH_MM_E4: u64 = 254_000;
-
-/// The least film a measurement needs, in quarter perforations. Below this the
-/// quarter that a record is rounded to is a large part of the measurement
-const MEASURED_QUARTERS: u64 = 16;
 
 /// Stage addresses one thumbnail column spans
 ///
@@ -48,105 +36,30 @@ pub(crate) fn line_pitch(caps: &Capabilities) -> u32 {
     }
 }
 
-/// How far the film moves between two thumbnail lines
-///
-/// Held as the film measured over the lines it moved in, because the answer is
-/// not a whole number of addresses and a frame spans over a hundred lines
+/// The Y addresses between two thumbnail lines
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LinePitch {
-    addresses: u64,
-    lines: u64,
-}
+pub struct LinePitch(u32);
 
 impl LinePitch {
-    /// What the pass asked for, which is [`line_pitch`]
+    /// The pitch the pass asks for
     pub fn computed(caps: &Capabilities) -> Self {
-        Self {
-            addresses: u64::from(line_pitch(caps)),
-            lines: 1,
-        }
+        Self(line_pitch(caps))
     }
 
-    /// What the film did, measured off the perforation table
-    ///
-    /// The film does not keep to the thumbnail resolution the unit reports,
-    /// and the error accumulates over a frame. 2-11-8's table is the ruler
-    /// that settles it: each record is one line's absolute position in
-    /// perforations and quarters of one, and a 135 perforation is 4.7498 mm.
-    ///
-    /// The count does not run the whole pass. The unit counts nothing before
-    /// the first perforation and stops at the last, so this measures between
-    /// the first record that moved and the last one that moved. `None` where
-    /// the table measures nothing, or gives a pitch the pass could not have
-    /// asked for. The caller then keeps the computed pitch
-    pub fn measured(caps: &Capabilities, perfs: &PerfInformation) -> Option<Self> {
-        let quarters =
-            |p: &PerforationInformation| u64::from(p.perf_number) * 4 + u64::from(p.perf_decimal);
-
-        let first = perfs.perfs.first()?;
-        let last = perfs.perfs.last()?;
-        // Past the flat head, and up to the flat tail
-        let head = perfs
-            .perfs
-            .iter()
-            .position(|p| quarters(p) != quarters(first))?;
-        let tail = perfs
-            .perfs
-            .iter()
-            .rposition(|p| quarters(p) != quarters(last))?
-            + 1;
-
-        let lines = (tail.checked_sub(head)?) as u64;
-        let moved =
-            quarters(perfs.perfs.get(tail)?).checked_sub(quarters(perfs.perfs.get(head)?))?;
-        if lines == 0 || moved < MEASURED_QUARTERS {
-            return None;
-        }
-
-        let optical = u64::from(
-            caps.address
-                .y_axis
-                .optical_dpi
-                .max(caps.address.x_axis.optical_dpi),
-        );
-        let addresses = moved * optical * PERFORATION_MM_E4 / (4 * INCH_MM_E4);
-
-        let measured = Self { addresses, lines };
-        // The pass moved the film once for every line it asked for, so a
-        // measurement far from what it asked for is a table this cannot read
-        let asked = u64::from(line_pitch(caps));
-        let apart = measured.addresses.abs_diff(asked * lines);
-        (apart * 4 <= asked * lines).then_some(measured)
-    }
-
-    /// Stage addresses one thumbnail column spans, as a fraction
-    ///
-    /// Held as a ratio internally. This is for a caller that maps between
-    /// thumbnail columns and feed addresses itself
+    /// Stage addresses one thumbnail column spans
     pub fn addresses_per_column(&self) -> f64 {
-        self.addresses as f64 / self.lines.max(1) as f64
+        f64::from(self.0)
     }
 
-    /// The Y address of a thumbnail line
+    /// The Y address of a thumbnail line, from the axis origin
     pub fn address_of(&self, line: u32) -> u32 {
-        (u64::from(line) * self.addresses / self.lines.max(1)) as u32
+        line * self.0
     }
 
-    /// How many thumbnail lines a length of film spans
-    ///
-    /// A length rather than a position, so the axis origin does not come into
-    /// it the way it does for [`Self::line_at`]
+    /// The number of thumbnail lines in a length of film, rounded
     pub fn columns(&self, addresses: u32) -> usize {
-        let per = self.addresses.max(1);
-        ((u64::from(addresses) * self.lines + per / 2) / per) as usize
-    }
-
-    /// The thumbnail line nearest a Y address
-    pub fn line_at(&self, caps: &Capabilities, y: u32) -> usize {
-        let origin = caps.address.y_axis.address_range.start;
-        let film = u64::from(y.saturating_sub(origin)) * self.lines.max(1);
-        let addresses = self.addresses.max(1);
-        ((film + addresses / 2) / addresses) as usize
+        let per = self.0.max(1);
+        ((addresses + per / 2) / per) as usize
     }
 }
 
@@ -250,11 +163,7 @@ pub fn available(caps: &Capabilities) -> bool {
         && caps.address.thumbnail_resolution.start > 0
 }
 
-/// The top of each frame the pass holds, in Y addresses
-///
-/// The two frame tables measure the same film and differ only in the pitch. A
-/// unit with a perforation table measures the pitch. A unit without one
-/// computes the pitch. `None` where the strip holds no frame
+/// The top of each frame that [`strip::find`] finds, in Y addresses; `None` if it finds none
 fn tops(
     caps: &Capabilities,
     image: &Image,
@@ -272,151 +181,53 @@ fn tops(
     Some((tops, found))
 }
 
-/// The frame table a thumbnail measures, 2-11-6
+/// The frame table (2-11-6), the line pitch, and the [`strip::find`] contrast, from a thumbnail
 ///
-/// `length` is the frame's extent along the feed, the film format, which
-/// nothing advertises. Every rectangle comes out that long: the captures'
-/// measured tables move the tops about and leave the heights at the format.
-///
-/// Also returns:
-///
-/// - The pitch that placed the rectangles. Use it to put a rectangle drawn on
-///   the thumbnail onto the film.
-/// - The [`contrast`](strip::Strip::contrast) of the fit, or `None` if the fit
-///   found no frames.
+/// A 120 format uses Nikon Scan's search ([`boundary::rectangle`]). Other formats use [`strip::find`].
 pub fn frames(
     caps: &Capabilities,
     pass: &Pass,
     samples: &Samples,
-    length: u32,
+    format: FilmFormat,
+    film: Film,
 ) -> Result<(Boundary, LinePitch, Option<f32>), Error> {
-    let format = window::reachable_blocks(caps, length);
-    framing::reachable(caps, format)?;
+    let y = &caps.address.y_axis;
+    let length = window::reachable_blocks(caps, format.height_dots(y.optical_dpi));
+    framing::reachable(caps, length)?;
     let image = pass.image(samples)?;
-
-    // This mechanism has no perforation table to measure the film against, so
-    // the pitch is the one the pass asked for
-    let pitch = LinePitch {
-        addresses: u64::from(pass.layout.line_pitch.max(1)),
-        lines: 1,
-    };
+    let pitch = LinePitch(pass.layout.line_pitch.max(1));
     let (left, width) = opening(caps);
+    let last = y.address_range.last.saturating_sub(length);
 
-    let Some((tops, found)) = tops(caps, &image, pitch, format) else {
-        info!("nothing on the strip to frame");
-        return Ok((Boundary::default(), pitch, None));
+    let (tops, contrast): (Vec<u32>, _) = if format.is_120() {
+        let found = boundary::rectangle::frames(&image, film, format, caps.address.holder_id)
+            .unwrap_or_default();
+        let tops = found
+            .iter()
+            .map(|&(s, _)| (y.address_range.start + pitch.address_of(s.max(0) as u32)).min(last))
+            .collect();
+        (tops, None)
+    } else {
+        match tops(caps, &image, pitch, length) {
+            Some((tops, found)) => (tops, Some(found.contrast)),
+            None => (Vec::new(), None),
+        }
     };
 
-    // The window addresses the film here, so the rectangle is the frame
     let frames: Vec<Rect> = tops
         .into_iter()
         .map(|top| Rect {
             top,
             left,
-            bottom: top + format,
+            bottom: top + length,
             right: left + width,
         })
         .collect();
-
-    info!(
-        frames = frames.len(),
-        pitch = pitch.address_of(found.pitch as u32),
-        contrast = found.contrast,
-        "measured the loaded strip"
-    );
+    info!(frames = frames.len(), "measured the loaded strip");
     for (n, rect) in frames.iter().enumerate() {
         debug!(frame = n + 1, ?rect, "frame rect");
     }
-    Ok((Boundary { frames }, pitch, Some(found.contrast)))
-}
-
-/// The same as [`frames`], for a unit that registers frames by perforation,
-/// 2-11-9. Also returns the frame length, in Y addresses
-pub fn frames_type2(
-    caps: &Capabilities,
-    pass: &Pass,
-    samples: &Samples,
-    perf_info: &PerfInformation,
-    length: u32,
-) -> Result<(BoundaryType2, u32, LinePitch, Option<f32>), Error> {
-    // Whole readout blocks, and trimmed rather than refused where the format
-    // is taller than the axis reaches
-    let format = window::reachable_blocks(caps, length);
-    framing::reachable(caps, format)?;
-
-    let image = pass.image(samples)?;
-
-    // A thumbnail column is one line pitch of film, and the pass starts where
-    // the Y axis does, so a column is an address. The film does not keep to
-    // the pitch the pass asked for, and the table the unit just measured says
-    // what it did keep to
-    let pitch = match LinePitch::measured(caps, perf_info) {
-        Some(measured) => {
-            debug!(
-                per_thousand_lines = measured.address_of(1000),
-                "measured the thumbnail line against the perforation table"
-            );
-            measured
-        }
-        None => {
-            debug!("no perforation table to measure the thumbnail line against");
-            LinePitch::computed(caps)
-        }
-    };
-    let Some((tops, found)) = tops(caps, &image, pitch, format) else {
-        info!("nothing on the strip to frame");
-        return Ok((BoundaryType2::default(), format, pitch, None));
-    };
-
-    // The table commonly falls short of the pass: the unit stops counting
-    // perforations past the last one on the strip. That is not a fault on its
-    // own, but a frame whose column falls past the end has no record to
-    // register it with and drops below
-    if perf_info.perfs.len() != image.cols {
-        debug!(
-            perfs = perf_info.perfs.len(),
-            columns = image.cols,
-            "the perforation table does not run the length of the thumbnail pass"
-        );
-    }
-
-    // 2-11-9 moves the film so that an entry's top address is the first line
-    // the pass reads, and the record is how it gets there. The two are one
-    // reading of one place and move together
-    let frames: Vec<FramePosition> = tops
-        .into_iter()
-        .filter_map(|top| {
-            let col = pitch.line_at(caps, top);
-            let perf = perf_info.at(col);
-            debug!(col, top, ?perf, "the pass over a frame");
-            match perf {
-                Some(perf) => Some(FramePosition::new(top, perf)),
-                None => {
-                    // Past wherever the perforation table stopped: nothing to
-                    // register this frame's stage position against
-                    warn!(col, top, "no perforation reading for this frame, dropped");
-                    None
-                }
-            }
-        })
-        .collect();
-
-    info!(
-        frames = frames.len(),
-        pitch = pitch.address_of(found.pitch as u32),
-        contrast = found.contrast,
-        "measured the loaded strip"
-    );
-    for (n, frame) in frames.iter().enumerate() {
-        debug!(frame = n + 1, ?frame, "frame position");
-    }
-
-    Ok((
-        BoundaryType2 { frames },
-        format,
-        pitch,
-        Some(found.contrast),
-    ))
+    Ok((Boundary { frames }, pitch, contrast))
 }
 
 /// Where the adapter's opening sits on the sensor, and how wide it is
@@ -448,17 +259,6 @@ pub(crate) fn windows(caps: &Capabilities) -> Result<Vec<Window>, Error> {
         )));
     }
 
-    let flags = match caps.identity.model() {
-        Some(Model::Ls8000 | Model::Ls9000) => Flags::empty(),
-        Some(_) => Flags::POSITIVE | Flags::AVERAGING,
-        None => {
-            return Err(Error::Unsupported {
-                op: "thumbnail window",
-                reason: "unrecognized model".into(),
-            });
-        }
-    };
-
     let (left, width) = opening(caps);
     let mut windows = window::blank(caps, &window::color_channels(caps))?;
     for w in &mut windows {
@@ -472,7 +272,8 @@ pub(crate) fn windows(caps: &Capabilities) -> Result<Vec<Window>, Error> {
         w.size = (width, y.address_range.last);
         w.scanning_kind = ScanKind::THUMBNAIL;
         w.scanning_mode = ScanMode::NORMAL_QUALITY;
-        w.flags = flags;
+        // Nikon Scan's flags for all units and films
+        w.flags = Flags::AVERAGING | Flags::POSITIVE;
         w.color_interleaving = ColorInterleaving::LINE_WITHOUT_DISTANCE;
     }
     Ok(windows)
@@ -483,64 +284,90 @@ mod tests {
     use super::*;
     use crate::scan::window::tests::caps;
 
-    /// A table like the one an LS-50 measures: a flat head with nothing
-    /// counted yet, then `perforations` of film at `lines` thumbnail lines
-    /// each, then a flat tail past the last perforation
-    fn table(head: usize, lines: usize, perforations: usize, tail: usize) -> PerfInformation {
-        let mut perfs = vec![PerforationInformation::default(); head];
-        for line in 0..lines * perforations {
-            let quarters = line * 4 / lines.max(1);
-            perfs.push(PerforationInformation {
-                perf_number: (quarters / 4) as u16,
-                perf_decimal: (quarters % 4) as u8,
-                ..Default::default()
-            });
+    /// Answers INQUIRY with the pages of a capture, and refuses other pages
+    struct Replay(std::collections::HashMap<String, Vec<u8>>);
+
+    impl crate::transport::Transport for Replay {
+        fn max_transfer(&self) -> usize {
+            65536
         }
-        let last = perfs.last().cloned().unwrap_or_default();
-        perfs.extend(std::iter::repeat_n(last, tail));
-        PerfInformation { perfs }
+
+        fn execute(
+            &mut self,
+            cdb: &[u8],
+            data: crate::transport::Data,
+            _: std::time::Duration,
+        ) -> Result<crate::transport::Completion, crate::transport::Error> {
+            use crate::transport::{Completion, Data, Sense, Status};
+            let key = match cdb[1] & 1 {
+                0 => "std".to_owned(),
+                _ => format!("{:02x}", cdb[2]),
+            };
+            Ok(match (self.0.get(&key), data) {
+                (Some(page), Data::In(buf)) => {
+                    let n = page.len().min(buf.len());
+                    buf[..n].copy_from_slice(&page[..n]);
+                    Completion {
+                        status: Status::Good,
+                        sense: None,
+                        transferred: n,
+                    }
+                }
+                _ => Completion {
+                    status: Status::CheckCondition,
+                    sense: Some(Sense {
+                        key: 5,
+                        asc: 0x24,
+                        ascq: 0,
+                        tsc: None,
+                        ili: false,
+                        information: None,
+                        raw: Vec::new(),
+                    }),
+                    transferred: 0,
+                },
+            })
+        }
     }
 
-    /// 4.7498 mm a perforation over a 4000 dpi axis is 748 addresses, so a
-    /// quarter every 4.5 lines is 41.6 addresses a line: the film's own pitch,
-    /// not the 41 that 4000/97 computes
-    #[test]
-    fn the_perforation_table_measures_the_line() {
-        let mut caps = caps();
-        caps.address.thumbnail_resolution = (97u16..=97u16).into();
-        assert_eq!(line_pitch(&caps), 41);
-
-        // A perforation every 18 lines, 40 of them
-        let measured = LinePitch::measured(&caps, &table(20, 18, 40, 30)).expect("a pitch");
-
-        // 748 addresses of film every 18 lines, so 41.555 a line
-        assert_eq!(measured.address_of(1000), 41_555);
-        // A 135 frame is about 137 lines, where the computed pitch is a
-        // millimeter short over the frame
-        assert_eq!(
-            measured.address_of(137) - LinePitch::computed(&caps).address_of(137),
-            76
-        );
-        assert_eq!(measured.line_at(&caps, measured.address_of(137)), 137);
+    /// Compares our thumbnail windows with Nikon Scan's; `start` is the unit's 8Ch exposures
+    fn windows_match_nikon(unit: &str, film: Film, start: [u32; 3]) {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/thumbnail_window")
+            .join(unit);
+        let pages = std::fs::read_dir(&dir)
+            .expect("fixture")
+            .filter_map(|e| {
+                let name = e.ok()?.file_name().into_string().ok()?;
+                let code = name.strip_prefix("page_")?.strip_suffix(".bin")?.to_owned();
+                Some((code, std::fs::read(dir.join(&name)).ok()?))
+            })
+            .collect();
+        let caps = crate::session::probe::capabilities(&mut Replay(pages)).expect("capabilities");
+        let factors = exposure_factors(&caps, film).expect("factors");
+        let mut wrong = Vec::new();
+        for (c, mut w) in windows(&caps).expect("windows").into_iter().enumerate() {
+            w.exposure = crate::scan::meter::scale(start[c], factors[c]);
+            let nikon = std::fs::read(dir.join(format!("window_{}.bin", w.id))).expect("window");
+            let ours = w.to_bytes();
+            if ours[..] != nikon[..] {
+                wrong.push(format!(
+                    "window {}\n ours  {:02x?}\n nikon {:02x?}",
+                    w.id, ours, nikon
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
-    /// Nothing to measure against, or a table that says something the pass
-    /// cannot have done, and the computed pitch stands
     #[test]
-    fn an_unmeasurable_table_keeps_the_computed_pitch() {
-        let mut caps = caps();
-        caps.address.thumbnail_resolution = (97u16..=97u16).into();
+    fn an_ls50_thumbnail_window_is_nikons() {
+        windows_match_nikon("ls50", Film::Negative, [48130, 51796, 35362]);
+    }
 
-        assert_eq!(
-            LinePitch::measured(&caps, &PerfInformation::default()),
-            None
-        );
-        // Flat: the unit counted nothing
-        assert_eq!(LinePitch::measured(&caps, &table(40, 1, 0, 0)), None);
-        // Three perforations is not enough film to divide by
-        assert_eq!(LinePitch::measured(&caps, &table(10, 18, 3, 10)), None);
-        // A perforation every other line is ten times what the pass asked for
-        assert_eq!(LinePitch::measured(&caps, &table(10, 2, 40, 10)), None);
+    #[test]
+    fn an_ls9000_thumbnail_window_is_nikons() {
+        windows_match_nikon("ls9000", Film::Positive, [326754, 234030, 192099]);
     }
 
     /// Nikon Scan's thumbnail exposures in two captures, from the start-up exposures

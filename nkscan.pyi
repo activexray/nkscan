@@ -154,7 +154,8 @@ class Discovery:
     def thumbnail(self) -> typing.Optional[builtins.dict[builtins.str, numpy.typing.NDArray[numpy.uint16]]]:
         r"""
         One array per channel, keyed the way `ScanResult.colors` is;
-        `None` where the mechanism that found `frames` needed no thumbnail pass
+        `None` where the mechanism that found `frames` needed no thumbnail pass.
+        On a unit that counts perforations, this is the resampled thumbnail
         """
     @property
     def addresses_per_column(self) -> typing.Optional[builtins.float]:
@@ -165,16 +166,12 @@ class Discovery:
         rectangle previewed is the rectangle scanned. Do not compute it as
         `optical_dpi / thumbnail_dpi`: the film does not keep to the thumbnail
         resolution the unit reports, and the error accumulates along the strip.
-        Measured per pass, so read it from each discovery and do not cache it.
-        `None` where the mechanism took no thumbnail
+        `None` without a thumbnail, and on a unit that counts perforations
         """
     @property
     def contrast(self) -> typing.Optional[builtins.float]:
         r"""
-        The quality of the frame fit on the thumbnail. A higher value means
-        more detail in the frames, less detail in the gaps, and more similar
-        gaps. Compare values only between strips on the same unit. `None` if
-        there is no thumbnail, or if the fit found no frames
+        The quality of the fallback frame fit; `None` where Nikon Scan's search found the frames
         """
     @property
     def thumbnail_complete(self) -> typing.Optional[builtins.bool]:

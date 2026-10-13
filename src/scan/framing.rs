@@ -3,6 +3,7 @@
 //! Four mechanisms, picked from what the unit and the loaded adapter advertise.
 
 use super::{
+    boundary,
     pass::{Pass, Progress},
     profile::Film,
     thumbnail,
@@ -11,7 +12,7 @@ use crate::{
     error::Error,
     protocol::{
         caps::{Capabilities, address::CoordinateBase, film::FilmFormat, other::DataTypes},
-        data::{Boundary, FramePosition, FrameTable, Op, PerforationInformation, Rect},
+        data::{Boundary, FrameTable, Op, Rect},
         decode::{Image, Samples},
         window::Channel,
     },
@@ -182,15 +183,14 @@ pub fn frames(caps: &Capabilities) -> Result<Boundary, Error> {
 ///
 /// Only for a unit that positions the film by that table. Such a unit reads a
 /// rectangle that is not in the table as an offset into the frame that holds
-/// its top, and sends black data past the end of that frame. An entry carrying
-/// the perforation record of the rectangle's own thumbnail line moves the film
-/// to the rectangle. The unit accepts the table only as a whole, so this
-/// starts from the table the session knows, or from the unit's table if the
-/// session knows none. A top already in the table is left alone.
+/// its top, and sends black data past the end of that frame. The unit accepts
+/// the table only as a whole, so this starts from the table the session knows,
+/// or from the unit's table if the session knows none. A top already in the
+/// table is left alone.
 ///
 /// Answers whether a table was written. The caller must put the measured table
-/// back, because [`BoundaryType2::register`] replaces an entry and does not add
-/// one
+/// back, because [`BoundaryType2::register`](crate::protocol::data::BoundaryType2::register)
+/// replaces an entry and does not add one
 pub fn register(session: &mut Session, frame: Rect) -> Result<bool, Error> {
     if Framing::choose(session.capabilities()) != Framing::Perforation {
         return Ok(false);
@@ -210,40 +210,22 @@ pub fn register(session: &mut Session, frame: Rect) -> Result<bool, Error> {
         return Ok(false);
     }
 
-    let (line, perf) = record(session, frame.top)?;
-    table.register(FramePosition::new(frame.top, &perf));
-    debug!(
-        top = frame.top,
-        line,
-        ?perf,
-        "registered a frame off the table"
-    );
+    // Use a record of the pass: a calculated record needs a length that only the pass measures
+    let perfs = session.read_perforations()?;
+    let optical = session.capabilities().address.y_axis.optical_dpi;
+    let entry = boundary::perforation::record_at(&perfs, optical, frame.top).ok_or_else(|| {
+        Error::Unsupported {
+            op: "frame registration",
+            reason: format!(
+                "no perforation reading of the last pass is at or before {}",
+                frame.top
+            ),
+        }
+    })?;
+    table.register(entry);
+    debug!(top = frame.top, ?entry, "registered a frame off the table");
     session.set_boundaries_type2_for_pass(&table)?;
     Ok(true)
-}
-
-/// The perforation record that puts the top of a frame at `top`
-///
-/// The record the last pass read at the frame's own line. Do not calculate
-/// one: the phases of the pattern have different pulse counts, so arithmetic
-/// on a record needs a length that only the pass measures. Nikon Scan also
-/// takes the record from the table
-fn record(session: &mut Session, top: u32) -> Result<(usize, PerforationInformation), Error> {
-    let perfs = session.read_perforations()?;
-    // The same ruler the table was built with, so a top lands on the line it
-    // was built from rather than a line the computed pitch put it short of
-    let caps = session.capabilities();
-    let line = thumbnail::LinePitch::measured(caps, &perfs)
-        .unwrap_or_else(|| thumbnail::LinePitch::computed(caps))
-        .line_at(caps, top);
-    let perf = perfs.at(line).ok_or_else(|| Error::Unsupported {
-        op: "frame registration",
-        reason: format!(
-            "a frame at {top} needs the perforation reading of thumbnail line {line}, and the last pass measured {}",
-            perfs.perfs.len()
-        ),
-    })?;
-    Ok((line, perf.clone()))
 }
 
 /// The discovered frame table, however that happened.
@@ -252,16 +234,9 @@ pub struct Discovery {
     pub table: FrameTable,
     pub frames: Vec<Rect>,
     pub thumbnail: Option<Pass>,
-    /// How a column of [`thumbnail`](Self::thumbnail) maps to a feed address
-    ///
-    /// Use this to put a rectangle drawn on the thumbnail onto the film. Do
-    /// not compute it as `optical_dpi / thumbnail_dpi`: the film does not keep
-    /// to the thumbnail resolution the unit reports. `None` where the
-    /// mechanism took no thumbnail
+    /// The feed addresses of one [`thumbnail`](Self::thumbnail) column; `None` if the columns are not evenly spaced
     pub line_pitch: Option<thumbnail::LinePitch>,
-    /// The [`contrast`](crate::scan::strip::Strip::contrast) of the frame fit
-    /// on the thumbnail. `None` if there is no thumbnail, or if the fit found
-    /// no frames
+    /// The [`contrast`](crate::scan::strip::Strip::contrast) of a `strip::find` fit that found frames
     pub contrast: Option<f32>,
     /// The film base density off the thumbnail, for [`crate::scan::meter::Metering::base_density`]
     pub base_density: Option<[f64; 3]>,
@@ -340,13 +315,9 @@ pub fn discover_with(
                 complete = pass.complete,
                 "thumbnail"
             );
-            let optical_dpi = session.capabilities().address.y_axis.optical_dpi;
-            let length = format.height_dots(optical_dpi);
-            info!(?format, length, "frame length");
-
             let base_density = base_density(session, &pass.image(samples)?, film);
             let (measured, pitch, contrast) =
-                thumbnail::frames(session.capabilities(), &pass, samples, length)?;
+                thumbnail::frames(session.capabilities(), &pass, samples, format, film)?;
             // Nothing measured is nothing to tell the unit, and it refuses an
             // empty record. The caller gets the pass either way, which is the
             // only evidence of why the strip measured empty
@@ -382,27 +353,54 @@ pub fn discover_with(
             let _ = session.read_perforations()?;
             let _ = session.read_boundaries_type2();
 
-            let pass = session.scan_thumbnail_with(samples, film, on)?;
+            let mut pass = session.scan_thumbnail_with(samples, film, on)?;
             debug!(
                 rows = pass.rows,
                 cols = pass.cols,
                 complete = pass.complete,
                 "thumbnail"
             );
-            let optical_dpi = session.capabilities().address.y_axis.optical_dpi;
-            let length = format.height_dots(optical_dpi);
+            let perfs = session.read_perforations()?;
+            // Measure before the resample
+            let base_density = base_density(session, &pass.image(samples)?, film);
+            let caps = session.capabilities();
+            let optical = caps.address.y_axis.optical_dpi;
+            let length = super::window::reachable_blocks(caps, format.height_dots(optical));
+            reachable(caps, length)?;
             info!(?format, length, "frame length");
 
-            let perfs = session.read_perforations()?;
-            let base_density = base_density(session, &pass.image(samples)?, film);
-            let (measured, length, line_pitch, contrast) =
-                thumbnail::frames_type2(session.capabilities(), &pass, samples, &perfs, length)?;
+            // Nikon Scan's search, for the number of frames the unit holds
+            let line_pitch = pass.layout.line_pitch;
+            let held = usize::from(caps.address.loaded_frames);
+            let starts = boundary::perforation::frames(
+                &pass.image(samples)?,
+                &perfs,
+                optical,
+                line_pitch,
+                film,
+                held,
+            )
+            .unwrap_or_default();
+            let kept = boundary::perforation::resample(&perfs, optical, line_pitch);
+            let measured = boundary::perforation::table(
+                &perfs,
+                optical,
+                &kept,
+                starts.iter().map(|&s| s as i64),
+            );
+            // Return the resampled thumbnail, where a frame's line is its column
+            if !kept.is_empty() {
+                pass.keep_columns(samples, &kept);
+            }
             if !measured.frames.is_empty() {
                 session.set_boundaries_type2(&measured)?;
             }
 
-            let x_start = session.capabilities().address.x_axis.address_range.start;
-            let x_boundary = session.capabilities().address.x_axis.boundary;
+            let caps = session.capabilities();
+            let (x_start, x_boundary) = (
+                caps.address.x_axis.address_range.start,
+                caps.address.x_axis.boundary,
+            );
             let found = measured
                 .frames
                 .iter()
@@ -413,8 +411,9 @@ pub fn discover_with(
                 table: FrameTable::BoundaryType2(measured),
                 frames: found,
                 thumbnail: Some(pass),
-                line_pitch: Some(line_pitch),
-                contrast,
+                // The resampled columns are not evenly spaced
+                line_pitch: None,
+                contrast: None,
                 base_density,
             })
         }

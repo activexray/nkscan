@@ -427,7 +427,8 @@ fn colors_to_numpy(
 pub struct PyDiscovery {
     frames: Vec<(u32, u32, u32, u32)>,
     /// One array per channel, keyed the way `ScanResult.colors` is;
-    /// `None` where the mechanism that found `frames` needed no thumbnail pass
+    /// `None` where the mechanism that found `frames` needed no thumbnail pass.
+    /// On a unit that counts perforations, this is the resampled thumbnail
     thumbnail: Option<HashMap<String, Py<PyArray2<u16>>>>,
     /// Feed addresses one column of `thumbnail` spans
     ///
@@ -435,13 +436,9 @@ pub struct PyDiscovery {
     /// rectangle previewed is the rectangle scanned. Do not compute it as
     /// `optical_dpi / thumbnail_dpi`: the film does not keep to the thumbnail
     /// resolution the unit reports, and the error accumulates along the strip.
-    /// Measured per pass, so read it from each discovery and do not cache it.
-    /// `None` where the mechanism took no thumbnail
+    /// `None` without a thumbnail, and on a unit that counts perforations
     addresses_per_column: Option<f64>,
-    /// The quality of the frame fit on the thumbnail. A higher value means
-    /// more detail in the frames, less detail in the gaps, and more similar
-    /// gaps. Compare values only between strips on the same unit. `None` if
-    /// there is no thumbnail, or if the fit found no frames
+    /// The quality of the fallback frame fit; `None` where Nikon Scan's search found the frames
     contrast: Option<f32>,
     /// True if all blocks of the thumbnail pass arrived. `None` if there is no
     /// thumbnail

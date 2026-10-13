@@ -77,8 +77,9 @@ impl AutoExposure {
     /// The two unit-side branches are unexercised: neither an LS-50 nor an
     /// LS-9000 sets [`ScanKind::AE`] or `AE_WB`, so every unit seen so far
     /// lands on [`Host`](Self::Host)
-    pub(crate) fn choose(caps: &Capabilities, lock_white_balance: bool) -> Result<Self, Error> {
+    pub(crate) fn choose(caps: &Capabilities, metering: &Metering) -> Result<Self, Error> {
         let kinds = caps.set_window.kind;
+        let lock_white_balance = metering.lock_white_balance;
 
         if lock_white_balance && kinds.contains(ScanKind::AE_WB) {
             return Ok(Self::Unit(ScanKind::AE_WB));
@@ -99,10 +100,7 @@ impl AutoExposure {
             });
         }
 
-        Ok(Self::Host(Metering {
-            lock_white_balance,
-            ..Metering::default()
-        }))
+        Ok(Self::Host(*metering))
     }
 }
 
@@ -119,16 +117,14 @@ pub(crate) fn prescan_windows(caps: &Capabilities, windows: &[Window]) -> Vec<Wi
         .iter()
         .map(|w| {
             let mut w = w.clone();
-            // A preview halves Y where a scan is square, and runs without the
-            // averaging bit. The captures pair 666x333 with byte 41 = 01h and
-            // high speed every time
-            // LS-5x always prescans at 285dpi
-            w.resolution = if caps.identity.is_mf_scanner() {
-                (dpi, dpi / 2)
+            // An LS-8000/9000 prescan halves Y and has no averaging (byte 41 is 01h)
+            // An LS-50/5000 prescan is 285 dpi with averaging (byte 41 is 80h)
+            if caps.identity.is_mf_scanner() {
+                w.resolution = (dpi, dpi / 2);
+                w.flags.remove(Flags::AVERAGING);
             } else {
-                (285, 285)
-            };
-            w.flags.remove(Flags::AVERAGING);
+                w.resolution = (285, 285);
+            }
             if fast {
                 w.scanning_mode = ScanMode::HIGH_SPEED;
             }

@@ -11,6 +11,7 @@ use crate::{
     protocol::{
         caps::{
             Capabilities as RustCapabilities,
+            film::FilmFormat,
             set_window::{ScanKind, ScanMode},
         },
         data::{Op, Rect},
@@ -236,6 +237,30 @@ fn film_from_name(film: &str) -> PyResult<Film> {
     film.parse().map_err(PyRuntimeError::new_err)
 }
 
+/// Parse a format name, as `discover_frames` takes it
+fn format_from_name(format: Option<&str>) -> PyResult<Option<FilmFormat>> {
+    format
+        .map(str::parse)
+        .transpose()
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// The metering `scan_frame` and `meter_frame` run, from their arguments
+fn metering_from(
+    film: Option<&str>,
+    format: Option<&str>,
+    base_density: Option<(f64, f64, f64)>,
+    lock_white_balance: Option<bool>,
+) -> PyResult<Metering> {
+    let mut metering = Metering::new(film.map(film_from_name).transpose()?.unwrap_or_default());
+    metering.format = format_from_name(format)?;
+    metering.base_density = base_density.map(|(r, g, b)| [r, g, b]);
+    if let Some(lock) = lock_white_balance {
+        metering.lock_white_balance = lock;
+    }
+    Ok(metering)
+}
+
 // ----- focus -----
 
 /// Parse the `focus` argument of `scan_frame` and `focus_frame`
@@ -424,6 +449,8 @@ pub struct PyDiscovery {
     /// The number of blocks of the thumbnail pass that arrived. `None` if there
     /// is no thumbnail
     thumbnail_blocks: Option<usize>,
+    /// The film base density off the thumbnail, for `scan_frame`; `None` without a thumbnail
+    base_density: Option<(f64, f64, f64)>,
 }
 
 // ----- a session -----
@@ -503,32 +530,32 @@ impl PySession {
     /// Only asked for by the two of four discovery mechanisms that need a
     /// thumbnail pass to find frames, and even there only where the loaded
     /// holder does not fix or narrow it by itself, so it can usually be left
-    /// `None`. The polarity of the film is not asked for: a frame is found by
-    /// the bare film between two frames, which reads flat at any polarity.
+    /// `None`. `film` ("positive", "slide", "negative", "kodachrome" or
+    /// "mono", default positive) sets the thumbnail exposure.
     /// `Discovery.thumbnail`, where the mechanism took one, is what a caller
     /// wanting to nudge `Discovery.frames` by hand shows the operator: a
     /// rectangle handed to `scan_frame` needs no match in it, so a nudged one
     /// works the same as a detected one, just slower if the stage has to home
     /// first to reach it
-    #[pyo3(signature = (format=None, progress=None))]
+    #[pyo3(signature = (format=None, film=None, progress=None))]
     fn discover_frames(
         &self,
         py: Python<'_>,
         format: Option<&str>,
+        film: Option<&str>,
         progress: Option<Py<PyAny>>,
     ) -> PyResult<PyDiscovery> {
-        let format = format
-            .map(str::parse)
-            .transpose()
-            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        let format = format_from_name(format)?;
+        let film = film.map(film_from_name).transpose()?.unwrap_or_default();
 
-        let (frames, thumbnail, ids, samples, shape, pitch, contrast, arrived) =
+        let (frames, thumbnail, ids, samples, shape, pitch, contrast, arrived, base_density) =
             py.detach(move || {
                 self.with(|session| {
                     let mut samples = Samples::default();
-                    let discovery = framing::discover_with(session, format, &mut samples, |p| {
-                        report(&progress, "discover", 0, p)
-                    })?;
+                    let discovery =
+                        framing::discover_with(session, format, film, &mut samples, |p| {
+                            report(&progress, "discover", 0, p)
+                        })?;
                     let frames: Vec<_> = discovery
                         .frames
                         .into_iter()
@@ -536,6 +563,7 @@ impl PySession {
                         .collect();
                     let pitch = discovery.line_pitch.map(|p| p.addresses_per_column());
                     let contrast = discovery.contrast;
+                    let base_density = discovery.base_density.map(|[r, g, b]| (r, g, b));
                     match discovery.thumbnail {
                         Some(pass) => {
                             let ids: Vec<u8> = pass.layout.colors().collect();
@@ -550,6 +578,7 @@ impl PySession {
                                 pitch,
                                 contrast,
                                 arrived,
+                                base_density,
                             ))
                         }
                         None => Ok((
@@ -561,6 +590,7 @@ impl PySession {
                             pitch,
                             contrast,
                             None,
+                            base_density,
                         )),
                     }
                 })
@@ -577,6 +607,7 @@ impl PySession {
             contrast,
             thumbnail_complete: arrived.map(|(complete, _)| complete),
             thumbnail_blocks: arrived.map(|(_, blocks)| blocks),
+            base_density,
         })
     }
 
@@ -589,7 +620,11 @@ impl PySession {
     /// `exposures`, keyed the way `ScanResult.exposures` is, reuses an exposure
     /// already decided rather than metering this frame fresh. `focus` is the
     /// same as for `focus_frame`. Use "hold" to scan at the focus that
-    /// `focus_frame` set
+    /// `focus_frame` set.
+    ///
+    /// `film` and `format` are as for `discover_frames`, and `base_density` is
+    /// `Discovery.base_density`. `lock_white_balance` defaults to
+    /// `Capabilities.locks_white_balance(film)`
     #[pyo3(signature = (
         frame,
         dpi=None,
@@ -597,7 +632,10 @@ impl PySession {
         superfine=false,
         infrared=false,
         clean=false,
-        lock_white_balance=true,
+        film=None,
+        format=None,
+        base_density=None,
+        lock_white_balance=None,
         exposures=None,
         focus=None,
         progress=None,
@@ -612,7 +650,10 @@ impl PySession {
         superfine: bool,
         infrared: bool,
         clean: bool,
-        lock_white_balance: bool,
+        film: Option<&str>,
+        format: Option<&str>,
+        base_density: Option<(f64, f64, f64)>,
+        lock_white_balance: Option<bool>,
         exposures: Option<HashMap<String, u32>>,
         #[gen_stub(override_type(type_repr = "typing.Optional[typing.Union[builtins.int, tuple[builtins.float, builtins.float], typing.Literal['auto', 'hold']]]", imports = ("builtins", "typing")))]
         focus: Option<Bound<'_, PyAny>>,
@@ -620,6 +661,7 @@ impl PySession {
     ) -> PyResult<PyScanResult> {
         let focus = focus_from(focus.as_ref())?;
         let frame = rect(frame);
+        let metering = metering_from(film, format, base_density, lock_white_balance)?;
         let locked = exposures.map(|by_name| {
             let mut e = Exposures::default();
             for (name, value) in by_name {
@@ -642,7 +684,7 @@ impl PySession {
                 let mut buf = Samples::default();
                 let options = frame::Options {
                     exposures: locked.as_ref(),
-                    lock_white_balance,
+                    metering,
                     clean,
                     focus,
                 };
@@ -694,30 +736,41 @@ impl PySession {
     /// the pass after it. Handing the result to `scan_frame` exposes any frame
     /// the way this one would be. `infrared` meters for a scan that takes the
     /// infrared plane or cleans, so the result carries that channel too.
-    /// `lock_white_balance` is `scan_frame`'s
-    #[pyo3(signature = (frame, infrared=false, lock_white_balance=true, progress=None))]
+    /// `film`, `format`, `base_density` and `lock_white_balance` are
+    /// `scan_frame`'s
+    #[pyo3(signature = (
+        frame,
+        infrared=false,
+        film=None,
+        format=None,
+        base_density=None,
+        lock_white_balance=None,
+        progress=None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
     fn meter_frame(
         &self,
         py: Python<'_>,
         frame: (u32, u32, u32, u32),
         infrared: bool,
-        lock_white_balance: bool,
+        film: Option<&str>,
+        format: Option<&str>,
+        base_density: Option<(f64, f64, f64)>,
+        lock_white_balance: Option<bool>,
         progress: Option<Py<PyAny>>,
     ) -> PyResult<HashMap<String, u32>> {
         let frame = rect(frame);
+        let metering = metering_from(film, format, base_density, lock_white_balance)?;
 
         py.detach(move || {
             self.with(|session| {
                 // Metering takes its own resolution and reading mode from the
                 // recipe's `metering`, so only the channels matter here
                 let recipe = Recipe::new(session.capabilities(), None, 1, false, infrared);
-                let exposures = frame::meter_frame_with(
-                    session,
-                    &recipe,
-                    frame,
-                    lock_white_balance,
-                    |pass, p| report(&progress, "meter", pass, p),
-                )?;
+                let exposures =
+                    frame::meter_frame_with(session, &recipe, frame, &metering, |pass, p| {
+                        report(&progress, "meter", pass, p)
+                    })?;
                 Ok(exposures
                     .iter()
                     .map(|(c, e)| (channel_name(c.id()), e))

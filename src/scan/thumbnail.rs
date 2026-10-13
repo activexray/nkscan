@@ -7,7 +7,7 @@
 //! `Features` puts thumbnail in the host cooperation bits on both families, so
 //! the unit hands us the pass and expects us to make sense of it.
 
-use super::{framing, pass::Pass, strip, window};
+use super::{framing, pass::Pass, profile::Film, strip, window};
 use crate::{
     error::Error,
     protocol::{
@@ -165,6 +165,80 @@ fn top_of(caps: &Capabilities, middle: u32, format: u32) -> Option<u32> {
             .saturating_sub(format / 2)
             .clamp(origin.min(last), last),
     )
+}
+
+/// Nikon Scan's thumbnail exposure factors on the start-up exposure, by film and holder or adapter
+///
+/// `CNkThumbSourceData::SetDataInfo` (LS5000.md3 Mac `1012b430`, LS9000.md3 `10017a60`).
+/// `None` if Nikon Scan takes no thumbnail.
+pub fn exposure_factors(caps: &Capabilities, film: Film) -> Option<[f64; 3]> {
+    const POSITIVE: [f64; 3] = [1.186, 1.21, 1.259];
+    const NEGATIVE: [f64; 3] = [1.231, 2.844, 3.839];
+    const DENSE_NEGATIVE: [f64; 3] = [1.259, 3.162, 5.012];
+    const MONO: [f64; 3] = [1.301, 1.528, 1.411];
+    let row = match caps.address.holder_id {
+        Some(holder) => match (holder, film) {
+            (_, Film::Kodachrome) => [1.246, 1.259, 1.246],
+            (0x13, _) => [1.0; 3],
+            (0x12..=0x18, Film::Positive) => POSITIVE,
+            (0x12..=0x18, Film::MonochromeNegative) => MONO,
+            (0x12 | 0x14 | 0x15, Film::Negative) => DENSE_NEGATIVE,
+            (0x16..=0x18, Film::Negative) => NEGATIVE,
+            _ => return None,
+        },
+        None => {
+            let strip = match caps.adapter.as_deref()? {
+                "Strip" | "6Strip" | "36Strip" => true,
+                "240" => false,
+                _ => return None,
+            };
+            match (film, strip) {
+                (Film::Kodachrome, _) => [1.24; 3],
+                (Film::Positive, _) => POSITIVE,
+                (Film::Negative, true) => NEGATIVE,
+                (Film::MonochromeNegative, true) => MONO,
+                (Film::Negative | Film::MonochromeNegative, false) => DENSE_NEGATIVE,
+            }
+        }
+    };
+    Some(row)
+}
+
+/// Nikon Scan's film base density off a thumbnail (`GetBaseDensity`, LS5000.md3 Mac `10139370`)
+///
+/// `ratio` is the start-up exposure over the thumbnail exposure. `None` if the thumbnail is short.
+pub(crate) fn base_density(image: &Image, ratio: [f64; 3]) -> Option<[f64; 3]> {
+    const LINES: std::ops::Range<usize> = 0x4b..0xe1;
+    const RANGE: [(f64, f64); 3] = [(0.121, 0.526), (0.459, 0.969), (0.654, 1.137)];
+    if image.cols < 0xe2 || image.colors.len() < 3 {
+        return None;
+    }
+    let full = f64::from(super::meter::ceiling(image.bits));
+    let brightest: [f64; 3] = std::array::from_fn(|c| {
+        LINES
+            .map(|x| {
+                let sum: u64 = (0..image.rows)
+                    .map(|y| u64::from(image.colors[c][y * image.stride + x]))
+                    .sum();
+                sum as f64 / image.rows as f64
+            })
+            .filter(|&average| average < 0.9 * full)
+            .fold(0.0, f64::max)
+    });
+    if brightest.contains(&0.0) {
+        return None;
+    }
+    let density = std::array::from_fn(|c| {
+        let d = (full / (brightest[c] * ratio[c])).log10();
+        let (lo, hi) = RANGE[c];
+        if (lo..=hi).contains(&d) {
+            d
+        } else {
+            super::meter::DEFAULT_BASE_DENSITY[c]
+        }
+    });
+    debug!(?density, "film base density");
+    Some(density)
 }
 
 /// Whether this unit and adapter will thumbnail at all
@@ -467,5 +541,30 @@ mod tests {
         assert_eq!(LinePitch::measured(&caps, &table(10, 18, 3, 10)), None);
         // A perforation every other line is ten times what the pass asked for
         assert_eq!(LinePitch::measured(&caps, &table(10, 2, 40, 10)), None);
+    }
+
+    /// Nikon Scan's thumbnail exposures in two captures, from the start-up exposures
+    #[test]
+    fn a_thumbnail_is_exposed_as_nikon_exposes_it() {
+        let exposed = |caps: &Capabilities, film, start: [u32; 3]| {
+            let f = exposure_factors(caps, film).expect("factors");
+            [0, 1, 2].map(|c| crate::scan::meter::scale(start[c], f[c]))
+        };
+        let mut ls50 = caps();
+        ls50.address.holder_id = None;
+        ls50.adapter = Some("6Strip".into());
+        assert_eq!(
+            exposed(&ls50, Film::Negative, [47971, 51820, 35423]),
+            [59052, 147376, 135988]
+        );
+        let mut ls9000 = caps();
+        ls9000.address.holder_id = Some(0x17);
+        assert_eq!(
+            exposed(&ls9000, Film::Positive, [326754, 234030, 192099]),
+            [387530, 283176, 241852]
+        );
+        // Nikon Scan takes no thumbnail through a mount
+        ls50.adapter = Some("Mount".into());
+        assert_eq!(exposure_factors(&ls50, Film::Negative), None);
     }
 }

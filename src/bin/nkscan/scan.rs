@@ -219,7 +219,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         // the metering bars are
         let takes_pass = matches!(framing, Framing::Thumbnail | Framing::Perforation);
         let mut bar: Option<ProgressBar> = None;
-        let discovery = framing::discover_with(session, format, &mut samples, |p| {
+        let discovery = framing::discover_with(session, format, film.into(), &mut samples, |p| {
             if takes_pass && bar.is_none() && p.total > 0 {
                 bar = Some(pass_bar("thumbnail", p.total));
             }
@@ -240,6 +240,14 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
             let path = io::write_thumbnail(&basename, first, &samples, pass)?;
             info!("wrote {}", path.display());
         }
+
+        // Every frame on this strip is metered against the base its thumbnail measured
+        let metering = Metering {
+            lock_white_balance: hold_white_balance,
+            format,
+            base_density: discovery.base_density,
+            ..Metering::new(film.into())
+        };
 
         // Select all or the requested subset of the frames to scan
         let selected_frames = if frames.is_empty() {
@@ -278,7 +286,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
 
             let options = frame::Options {
                 exposures: locked.as_ref(),
-                lock_white_balance: hold_white_balance,
+                metering,
                 clean,
                 focus: Focus::default(),
             };

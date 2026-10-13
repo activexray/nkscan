@@ -13,6 +13,7 @@ use nkscan::{
     scan::{
         frame::{self, Options},
         framing::{self, Framing},
+        profile::Film,
         window::Recipe,
     },
     session::Session,
@@ -75,7 +76,8 @@ fn a_frame_scanned_twice_comes_back_in_the_same_place() {
     session.stage().expect("stage");
 
     let mut samples = Samples::default();
-    let discovery = framing::discover(&mut session, None, &mut samples).expect("discovery");
+    let discovery =
+        framing::discover(&mut session, None, Film::default(), &mut samples).expect("discovery");
     let frame = *discovery
         .frames
         .get(3)
@@ -131,7 +133,8 @@ fn a_frame_scans_at_the_exposures_metered_for_it() {
     session.stage().expect("stage");
 
     let mut samples = Samples::default();
-    let discovery = framing::discover(&mut session, None, &mut samples).expect("discovery");
+    let discovery =
+        framing::discover(&mut session, None, Film::default(), &mut samples).expect("discovery");
     let frame = *discovery
         .frames
         .get(1)
@@ -145,7 +148,8 @@ fn a_frame_scans_at_the_exposures_metered_for_it() {
         infrared: false,
     };
 
-    let metered = frame::meter_frame_with(&mut session, &recipe, frame, false, |_, _| {
+    let metering = nkscan::scan::meter::Metering::new(Film::Negative);
+    let metered = frame::meter_frame_with(&mut session, &recipe, frame, &metering, |_, _| {
         ControlFlow::Continue(())
     })
     .expect("metering");

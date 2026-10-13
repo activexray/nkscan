@@ -3,13 +3,14 @@
 use crate::{
     error::Error,
     protocol::{
-        caps::other::DataTypes,
+        caps::film::FilmFormat,
         data::Rect,
         decode::{Image, Samples},
         window::Window,
     },
     scan::{
         autoexpose::{AutoExposure, Exposures, prescan_windows},
+        meter::{Metering, Step},
         pass::Progress,
         window::Recipe,
     },
@@ -26,19 +27,14 @@ impl Session {
     ///
     /// Builds its own metering windows from `recipe`, so the exposures come off
     /// the frame rather than off whatever the last pass left in the unit, and
-    /// cover the channels `recipe` will scan. `lock_white_balance` keeps the
-    /// channels in the ratio the unit calls neutral, which is what a scan that
-    /// has to stay comparable to the next one wants. The pass is the frame, so
-    /// every pixel of it is metered
+    /// cover the channels `recipe` will scan
     pub fn autoexpose_frame(
         &mut self,
         frame: Rect,
         recipe: &Recipe,
-        lock_white_balance: bool,
+        metering: &Metering,
     ) -> Result<Exposures, Error> {
-        self.autoexpose_frame_with(frame, recipe, lock_white_balance, |_, _| {
-            ControlFlow::Continue(())
-        })
+        self.autoexpose_frame_with(frame, recipe, metering, |_, _| ControlFlow::Continue(()))
     }
 
     /// The same as [`Self::autoexpose_frame`], with `on` given which metering pass is running
@@ -47,13 +43,18 @@ impl Session {
         &mut self,
         frame: Rect,
         recipe: &Recipe,
-        lock_white_balance: bool,
+        metering: &Metering,
         on: impl FnMut(usize, Progress) -> ControlFlow<()>,
     ) -> Result<Exposures, Error> {
         let windows = recipe
             .metering(self.capabilities())
             .windows(self.capabilities(), frame)?;
-        self.autoexpose_with(&windows, lock_white_balance, on)
+        // The crop needs a format; the holder can give it
+        let mut metering = *metering;
+        if metering.format.is_none() {
+            metering.format = FilmFormat::resolve(None, self.capabilities()).ok();
+        }
+        self.autoexpose_with(&windows, &metering, on)
     }
 
     /// Meter `windows` and answer their new exposures
@@ -64,13 +65,9 @@ impl Session {
     pub fn autoexpose(
         &mut self,
         windows: &[Window],
-        lock_white_balance: bool,
+        metering: &Metering,
     ) -> Result<Exposures, Error> {
-        self.autoexpose_with(
-            windows,
-            lock_white_balance,
-            |_, _| ControlFlow::Continue(()),
-        )
+        self.autoexpose_with(windows, metering, |_, _| ControlFlow::Continue(()))
     }
 
     /// The same as [`Self::autoexpose`], letting `on` cancel by returning `Break`
@@ -80,10 +77,10 @@ impl Session {
     pub fn autoexpose_with(
         &mut self,
         windows: &[Window],
-        lock_white_balance: bool,
+        metering: &Metering,
         mut on: impl FnMut(usize, Progress) -> ControlFlow<()>,
     ) -> Result<Exposures, Error> {
-        let mechanism = AutoExposure::choose(self.capabilities(), lock_white_balance)?;
+        let mechanism = AutoExposure::choose(self.capabilities(), metering)?;
         debug!(?mechanism, "metering");
 
         match mechanism {
@@ -115,70 +112,29 @@ impl Session {
                 // Exposures persist in the unit across sessions, so metering from
                 // whatever is in the descriptors compounds run over run.
                 // `DataType::WhiteBalanceExposure` is the unit's own neutral,
-                // measured at start-up, so we start there every time.
+                // measured at start-up, and Nikon Scan meters from it
                 let seeded = self.seed_white_balance(windows)?;
+                let base: Vec<u32> = seeded.iter().map(|w| w.exposure).collect();
 
                 let mut windows = prescan_windows(self.capabilities(), &seeded);
+                for (w, e) in windows.iter_mut().zip(metering.seed(&seeded, &base)) {
+                    w.exposure = e;
+                }
                 let mut samples = Samples::default();
-                let mut layout = None;
-                let mut n = 0;
-                loop {
-                    let taken = self
-                        .scan_pass_with(&windows, PASS_TIMEOUT, &mut samples, |p| on(n + 1, p))?;
-                    let layout = layout.insert(taken.layout);
-                    let image = Image::new(layout, &samples)?;
-                    n += 1;
-
-                    // Correct from what this pass measured, whether or not
-                    // another one follows: the exposures the scan gets are the
-                    // ones the last pass asked for, never the ones it ran at
-                    let next = metering.apply(self.capabilities(), &image, &windows)?;
-                    for (w, exposure) in windows.iter_mut().zip(next) {
+                for pass in 1.. {
+                    let taken =
+                        self.scan_pass_with(&windows, PASS_TIMEOUT, &mut samples, |p| on(pass, p))?;
+                    let image = Image::new(&taken.layout, &samples)?;
+                    let step = metering.step(self.capabilities(), &image, &windows, &base, pass)?;
+                    debug!(pass, ?step, "metering pass");
+                    let (Step::Again(next) | Step::Done(next)) = &step;
+                    for (w, &exposure) in windows.iter_mut().zip(next) {
                         w.exposure = exposure;
                     }
-
-                    // A level below full scale says exactly what exposure lands
-                    // on target, so confirming it costs a pass to learn nothing.
-                    // Only a clipped channel, whose correction is a retreat
-                    // rather than a measurement, is worth another
-                    let measured = metering.measured(&image, &windows);
-                    debug!(pass = n, measured, "metering pass");
-                    if measured {
-                        break;
-                    }
-                    if n >= metering.max_passes.max(1) {
-                        debug!(passes = n, "metering never came off full scale");
+                    if matches!(step, Step::Done(_)) {
                         break;
                     }
                 }
-
-                let layout = layout.expect("the loop runs at least once");
-                let measured = metering.measure(&Image::new(&layout, &samples)?, &windows);
-                // `setup` is a diagnostic - nothing below reads it - and it is
-                // the one command in a pass the unit can be slow about: a whole
-                // PROBE_TIMEOUT per channel on some holders, which reads as the
-                // scan having hung. Nikon Scan never asks for it at all, so it
-                // stays behind the log level that would print it
-                let compare = enabled!(Level::TRACE)
-                    && self
-                        .capabilities()
-                        .features
-                        .data_types
-                        .contains(DataTypes::SETUP_READ);
-                for (n, (window, level)) in windows.iter().zip(&measured).enumerate() {
-                    let unit = compare.then(|| self.setup(window.id).ok()).flatten();
-                    let image = unit.as_ref().and_then(|s| s.images.first());
-                    debug!(
-                        channel = n,
-                        id = window.id,
-                        ours = level,
-                        base_level = unit.as_ref().map(|s| s.base_level),
-                        unit_min = image.map(|i| i.min),
-                        unit_max = image.map(|i| i.max),
-                        "metering levels"
-                    );
-                }
-
                 Ok(Exposures::read(&windows))
             }
         }

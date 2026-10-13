@@ -32,7 +32,7 @@ fn options() -> Options {
         model: dust::Model::Ls9000,
         quality: dust::Quality::Normal,
         dpi: 4000,
-        metering_target: nkscan::scan::meter::Metering::default().target,
+        metering_target: nkscan::scan::meter::INFRARED_TARGET,
     }
 }
 

@@ -7,7 +7,11 @@ use super::Session;
 use crate::{
     error::Error,
     protocol::{decode::Samples, image::Layout, window::Window},
-    scan::pass::{self, Pass, Progress},
+    scan::{
+        meter,
+        pass::{self, Pass, Progress},
+        profile::Film,
+    },
     session::window::Started,
 };
 use std::{
@@ -272,15 +276,16 @@ impl Session {
     /// Scan everything loaded at the lowest resolution
     ///
     /// Builds its own windows from the capabilities (whole strip, lowest dpi,
-    /// one channel per color), seeds white balance, and takes the pass
-    pub fn scan_thumbnail(&mut self, samples: &mut Samples) -> Result<Pass, Error> {
-        self.scan_thumbnail_with(samples, |_| ControlFlow::Continue(()))
+    /// one channel per color), exposed as Nikon Scan exposes them for `film`
+    pub fn scan_thumbnail(&mut self, samples: &mut Samples, film: Film) -> Result<Pass, Error> {
+        self.scan_thumbnail_with(samples, film, |_| ControlFlow::Continue(()))
     }
 
     /// The same as [`Self::scan_thumbnail`], letting `on` cancel by returning `Break`
     pub fn scan_thumbnail_with(
         &mut self,
         samples: &mut Samples,
+        film: Film,
         on: impl FnMut(Progress) -> ControlFlow<()>,
     ) -> Result<Pass, Error> {
         if !crate::scan::thumbnail::available(self.capabilities()) {
@@ -291,7 +296,14 @@ impl Session {
         }
 
         let windows = crate::scan::thumbnail::windows(self.capabilities())?;
-        let windows = self.seed_white_balance(&windows)?;
+        let mut windows = self.seed_white_balance(&windows)?;
+        let factors = crate::scan::thumbnail::exposure_factors(self.capabilities(), film);
+        for w in &mut windows {
+            if let (Some(f), Some(c)) = (factors, meter::color(w)) {
+                w.exposure = meter::scale(w.exposure, f[c]);
+            }
+        }
+        debug!(?film, ?factors, "thumbnail exposure");
         self.scan_pass_with(&windows, THUMBNAIL_TIMEOUT, samples, on)
     }
 }

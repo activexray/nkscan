@@ -4,7 +4,7 @@ use crate::{
     dust,
     error::Error,
     protocol::{decode::Samples, model::Model, window::Channel},
-    scan::{meter::Metering, pass::Pass},
+    scan::{meter::INFRARED_TARGET, pass::Pass},
 };
 use tracing::*;
 
@@ -48,8 +48,8 @@ pub fn clean_frame(
         model,
         quality: dust::Quality::Normal,
         dpi: pass.layout.dpi,
-        // What autoexpose::Plan hands the host meter
-        metering_target: Metering::default().target,
+        // Where the host meter puts infrared
+        metering_target: INFRARED_TARGET,
     };
 
     let Some(ir) = samples.ir.as_deref() else {

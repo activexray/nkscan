@@ -4,6 +4,7 @@
 
 use super::{
     pass::{Pass, Progress},
+    profile::Film,
     thumbnail,
 };
 use crate::{
@@ -11,7 +12,8 @@ use crate::{
     protocol::{
         caps::{Capabilities, address::CoordinateBase, film::FilmFormat, other::DataTypes},
         data::{Boundary, FramePosition, FrameTable, Op, PerforationInformation, Rect},
-        decode::Samples,
+        decode::{Image, Samples},
+        window::Channel,
     },
     session::Session,
 };
@@ -261,27 +263,51 @@ pub struct Discovery {
     /// on the thumbnail. `None` if there is no thumbnail, or if the fit found
     /// no frames
     pub contrast: Option<f32>,
+    /// The film base density off the thumbnail, for [`crate::scan::meter::Metering::base_density`]
+    pub base_density: Option<[f64; 3]>,
+}
+
+/// The thumbnail's film base density at the unit's start-up exposures
+fn base_density(session: &mut Session, image: &Image, film: Film) -> Option<[f64; 3]> {
+    let factors = thumbnail::exposure_factors(session.capabilities(), film).unwrap_or([1.0; 3]);
+    let mut ratio = [1.0; 3];
+    for (c, channel) in [Channel::Red, Channel::Green, Channel::Blue]
+        .into_iter()
+        .enumerate()
+    {
+        let base = session.white_balance(channel).ok()?;
+        let thumbnail = super::meter::scale(base, factors[c]);
+        ratio[c] = f64::from(base) / f64::from(thumbnail.max(1));
+    }
+    thumbnail::base_density(image, ratio)
 }
 
 /// Find every frame on whatever is loaded, driving whatever pass the chosen mechanism needs
 pub fn discover(
     session: &mut Session,
     format: Option<FilmFormat>,
+    film: Film,
     samples: &mut Samples,
 ) -> Result<Discovery, Error> {
-    discover_with(session, format, samples, |_| ControlFlow::Continue(()))
+    discover_with(
+        session,
+        format,
+        film,
+        samples,
+        |_| ControlFlow::Continue(()),
+    )
 }
 
 /// The same as [`discover`], letting `on` cancel a thumbnail pass by returning `Break`
 ///
 /// `format` is only needed by [`Framing::Thumbnail`] and [`Framing::Perforation`], and even
 /// there only where [`FilmFormat::resolve`] cannot work it out from the loaded holder.
-/// The polarity of the film is not asked for: a frame is found by the bare
-/// film between two frames, which reads flat at any polarity.
+/// `film` sets the thumbnail exposure, see [`thumbnail::exposure_factors`].
 /// `samples` is scratch, left holding the thumbnail where [`Discovery::thumbnail`] is `Some`
 pub fn discover_with(
     session: &mut Session,
     format: Option<FilmFormat>,
+    film: Film,
     samples: &mut Samples,
     on: impl FnMut(Progress) -> ControlFlow<()>,
 ) -> Result<Discovery, Error> {
@@ -302,11 +328,12 @@ pub fn discover_with(
                 thumbnail: None,
                 line_pitch: None,
                 contrast: None,
+                base_density: None,
             })
         }
         Framing::Thumbnail => {
             let format = need_format(session)?;
-            let pass = session.scan_thumbnail_with(samples, on)?;
+            let pass = session.scan_thumbnail_with(samples, film, on)?;
             debug!(
                 rows = pass.rows,
                 cols = pass.cols,
@@ -317,6 +344,7 @@ pub fn discover_with(
             let length = format.height_dots(optical_dpi);
             info!(?format, length, "frame length");
 
+            let base_density = base_density(session, &pass.image(samples)?, film);
             let (measured, pitch, contrast) =
                 thumbnail::frames(session.capabilities(), &pass, samples, length)?;
             // Nothing measured is nothing to tell the unit, and it refuses an
@@ -333,6 +361,7 @@ pub fn discover_with(
                 thumbnail: Some(pass),
                 line_pitch: Some(pitch),
                 contrast,
+                base_density,
             })
         }
         Framing::Address => {
@@ -344,6 +373,7 @@ pub fn discover_with(
                 thumbnail: None,
                 line_pitch: None,
                 contrast: None,
+                base_density: None,
             })
         }
         Framing::Perforation => {
@@ -352,7 +382,7 @@ pub fn discover_with(
             let _ = session.read_perforations()?;
             let _ = session.read_boundaries_type2();
 
-            let pass = session.scan_thumbnail_with(samples, on)?;
+            let pass = session.scan_thumbnail_with(samples, film, on)?;
             debug!(
                 rows = pass.rows,
                 cols = pass.cols,
@@ -364,6 +394,7 @@ pub fn discover_with(
             info!(?format, length, "frame length");
 
             let perfs = session.read_perforations()?;
+            let base_density = base_density(session, &pass.image(samples)?, film);
             let (measured, length, line_pitch, contrast) =
                 thumbnail::frames_type2(session.capabilities(), &pass, samples, &perfs, length)?;
             if !measured.frames.is_empty() {
@@ -384,6 +415,7 @@ pub fn discover_with(
                 thumbnail: Some(pass),
                 line_pitch: Some(line_pitch),
                 contrast,
+                base_density,
             })
         }
     }

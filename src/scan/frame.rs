@@ -8,6 +8,7 @@ use crate::{
         clean::clean_frame,
         focus::{Focus, Focused},
         framing,
+        meter::Metering,
         pass::{Pass, Progress},
         window::Recipe,
     },
@@ -33,8 +34,8 @@ pub enum Phase {
 pub struct Options<'a> {
     /// Reuse an exposure already decided; `None` meters this frame fresh
     pub exposures: Option<&'a Exposures>,
-    /// Honored only where `exposures` is `None`
-    pub lock_white_balance: bool,
+    /// How to meter the frame; used only if `exposures` is `None`
+    pub metering: Metering,
     /// Run dust removal over the result in place
     pub clean: bool,
     /// How to focus before the pass
@@ -84,8 +85,7 @@ pub fn scan_frame_with(
         let exposures = match options.exposures {
             Some(locked) => locked.clone(),
             None => {
-                let lock = options.lock_white_balance;
-                session.autoexpose_frame_with(frame, recipe, lock, |pass, p| {
+                session.autoexpose_frame_with(frame, recipe, &options.metering, |pass, p| {
                     on(Phase::Meter(pass), p)
                 })?
             }
@@ -124,11 +124,11 @@ pub fn meter_frame_with(
     session: &mut Session,
     recipe: &Recipe,
     frame: Rect,
-    lock_white_balance: bool,
+    metering: &Metering,
     on: impl FnMut(usize, Progress) -> ControlFlow<()>,
 ) -> Result<Exposures, Error> {
     at_frame(session, frame, |session| {
-        session.autoexpose_frame_with(frame, recipe, lock_white_balance, on)
+        session.autoexpose_frame_with(frame, recipe, metering, on)
     })
 }
 

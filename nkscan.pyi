@@ -188,6 +188,11 @@ class Discovery:
         The number of blocks of the thumbnail pass that arrived. `None` if there
         is no thumbnail
         """
+    @property
+    def base_density(self) -> typing.Optional[tuple[builtins.float, builtins.float, builtins.float]]:
+        r"""
+        The film base density off the thumbnail, for `scan_frame`; `None` without a thumbnail
+        """
 
 class MediaError(ScannerError):
     r"""
@@ -300,7 +305,7 @@ class Session:
         r"""
         Take in whatever the adapter has waiting, answering whether anything came
         """
-    def discover_frames(self, format: typing.Optional[builtins.str] = None, progress: typing.Optional[typing.Any] = None) -> Discovery:
+    def discover_frames(self, format: typing.Optional[builtins.str] = None, film: typing.Optional[builtins.str] = None, progress: typing.Optional[typing.Any] = None) -> Discovery:
         r"""
         Find every frame on whatever is loaded
         
@@ -309,15 +314,15 @@ class Session:
         Only asked for by the two of four discovery mechanisms that need a
         thumbnail pass to find frames, and even there only where the loaded
         holder does not fix or narrow it by itself, so it can usually be left
-        `None`. The polarity of the film is not asked for: a frame is found by
-        the bare film between two frames, which reads flat at any polarity.
+        `None`. `film` ("positive", "slide", "negative", "kodachrome" or
+        "mono", default positive) sets the thumbnail exposure.
         `Discovery.thumbnail`, where the mechanism took one, is what a caller
         wanting to nudge `Discovery.frames` by hand shows the operator: a
         rectangle handed to `scan_frame` needs no match in it, so a nudged one
         works the same as a detected one, just slower if the stage has to home
         first to reach it
         """
-    def scan_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], dpi: typing.Optional[builtins.int] = None, samples: builtins.int = 1, superfine: builtins.bool = False, infrared: builtins.bool = False, clean: builtins.bool = False, lock_white_balance: builtins.bool = True, exposures: typing.Optional[typing.Mapping[builtins.str, builtins.int]] = None, focus: typing.Optional[typing.Union[builtins.int, tuple[builtins.float, builtins.float], typing.Literal['auto', 'hold']]] = None, progress: typing.Optional[typing.Any] = None) -> ScanResult:
+    def scan_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], dpi: typing.Optional[builtins.int] = None, samples: builtins.int = 1, superfine: builtins.bool = False, infrared: builtins.bool = False, clean: builtins.bool = False, film: typing.Optional[builtins.str] = None, format: typing.Optional[builtins.str] = None, base_density: typing.Optional[tuple[builtins.float, builtins.float, builtins.float]] = None, lock_white_balance: typing.Optional[builtins.bool] = None, exposures: typing.Optional[typing.Mapping[builtins.str, builtins.int]] = None, focus: typing.Optional[typing.Union[builtins.int, tuple[builtins.float, builtins.float], typing.Literal['auto', 'hold']]] = None, progress: typing.Optional[typing.Any] = None) -> ScanResult:
         r"""
         Focus, meter, take the pass over `frame`, and optionally clean it
         
@@ -328,9 +333,13 @@ class Session:
         `exposures`, keyed the way `ScanResult.exposures` is, reuses an exposure
         already decided rather than metering this frame fresh. `focus` is the
         same as for `focus_frame`. Use "hold" to scan at the focus that
-        `focus_frame` set
+        `focus_frame` set.
+        
+        `film` and `format` are as for `discover_frames`, and `base_density` is
+        `Discovery.base_density`. `lock_white_balance` defaults to
+        `Capabilities.locks_white_balance(film)`
         """
-    def meter_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], infrared: builtins.bool = False, lock_white_balance: builtins.bool = True, progress: typing.Optional[typing.Any] = None) -> builtins.dict[builtins.str, builtins.int]:
+    def meter_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], infrared: builtins.bool = False, film: typing.Optional[builtins.str] = None, format: typing.Optional[builtins.str] = None, base_density: typing.Optional[tuple[builtins.float, builtins.float, builtins.float]] = None, lock_white_balance: typing.Optional[builtins.bool] = None, progress: typing.Optional[typing.Any] = None) -> builtins.dict[builtins.str, builtins.int]:
         r"""
         Meter `frame` and answer the exposures `scan_frame` would scan it at
         
@@ -338,7 +347,8 @@ class Session:
         the pass after it. Handing the result to `scan_frame` exposes any frame
         the way this one would be. `infrared` meters for a scan that takes the
         infrared plane or cleans, so the result carries that channel too.
-        `lock_white_balance` is `scan_frame`'s
+        `film`, `format`, `base_density` and `lock_white_balance` are
+        `scan_frame`'s
         """
     def focus_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], focus: typing.Optional[typing.Union[builtins.int, tuple[builtins.float, builtins.float], typing.Literal['auto', 'hold']]] = None) -> tuple[builtins.str, typing.Optional[builtins.int]]:
         r"""

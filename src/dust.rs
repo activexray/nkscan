@@ -171,7 +171,7 @@ pub struct Options {
     /// scan resolution
     pub dpi: u32,
     /// Fraction of full scale this crate's AE metered the IR channel to.
-    /// Tracks [`crate::scan::meter::Metering::target`]
+    /// Tracks [`crate::scan::meter::INFRARED_TARGET`]
     pub metering_target: f32,
 }
 

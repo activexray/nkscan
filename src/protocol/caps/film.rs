@@ -13,8 +13,7 @@ use std::{fmt, str::FromStr};
 
 /// A film format, keyed by its frame height in millimeters
 ///
-/// The names are nominal and the gates are not: 6×4.5 exposes 41.5 mm of film
-/// and 6×8 exposes 76. These carry the gate.
+/// The names are nominal. The lengths are Nikon Scan's frame lengths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilmFormat {
     /// APS (IX240), 30.2 × 16.7 mm recorded. C and P are crops of that same
@@ -26,13 +25,13 @@ pub enum FilmFormat {
     F135Half,
     /// 16mm film, 16 × 20 mm (FH-816)
     F16,
-    /// 120 film, 6 × 4.5 cm, which exposes 41.5 mm
+    /// 120 film, 6 × 4.5 cm
     F645,
     /// 120 film, 6 × 6 cm
     F66,
-    /// 120 film, 6 × 7 cm, which exposes 69.5 mm
+    /// 120 film, 6 × 7 cm
     F67,
-    /// 120 film, 6 × 8 cm, which exposes 76 mm
+    /// 120 film, 6 × 8 cm
     F68,
     /// 120 film, 6 × 9 cm
     F69,
@@ -47,13 +46,12 @@ impl FilmFormat {
     /// numbers are in. A millimeter cannot express them: 6x6's 8964 dots are
     /// 56.92 mm, and 56.9 mm reaches only 8961.
     ///
-    /// 135, 6x4.5, 6x6 and 6x9 are Nikon Scan's own, read off the scans in the
-    /// capture corpus. 135 is also an LS-50's published Y boundary, because the
-    /// gate of a strip feeder is one frame, and is longer than the 36 mm the
-    /// name gives.
+    /// 135 is an LS-50's published Y boundary, because the gate of a strip
+    /// feeder is one frame, and is longer than the 36 mm the name gives.
     ///
-    /// The rest are the round millimeter and are not checked against Nikon
-    /// Scan. 6x9 can be the longest frame the holder takes and not the frame
+    /// The five 120 formats are Nikon Scan's (`CBrownieThumbManager::BaseFrameRect`).
+    ///
+    /// The rest are the round millimeter and are not checked against Nikon Scan.
     const fn height_dots_4000(self) -> u32 {
         match self {
             Self::IX240 => 4756,
@@ -62,12 +60,20 @@ impl FilmFormat {
             Self::F16 => 3150,
             Self::F645 => 6696,
             Self::F66 => 8964,
-            Self::F67 => 10945,
-            Self::F68 => 11969,
+            Self::F67 => 11016,
+            Self::F68 => 12204,
             Self::F69 => 13176,
             // Whole millimeters, so 4000 dots to 25.4 of them
             Self::Custom(mm) => mm * 40000 / 254,
         }
+    }
+
+    /// Whether this is a 120 format
+    pub fn is_120(self) -> bool {
+        matches!(
+            self,
+            Self::F645 | Self::F66 | Self::F67 | Self::F68 | Self::F69
+        )
     }
 
     /// Frame height in scanner address units (dots at optical DPI)
@@ -212,8 +218,8 @@ mod tests {
     #[test]
     fn a_format_is_its_gate_rather_than_its_name() {
         assert_eq!(FilmFormat::F645.height_dots_4000(), 6696);
-        assert_eq!(FilmFormat::F67.height_dots_4000(), 10945);
-        assert_eq!(FilmFormat::F68.height_dots_4000(), 11969);
+        assert_eq!(FilmFormat::F67.height_dots_4000(), 11016);
+        assert_eq!(FilmFormat::F68.height_dots_4000(), 12204);
         // 135 is the gate an LS-50 publishes, not the 36 mm the name gives
         assert_eq!(FilmFormat::F135.height_dots_4000(), 5959);
     }

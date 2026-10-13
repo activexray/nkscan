@@ -144,20 +144,19 @@ enum Chunk {
     TooMuch(usize),
 }
 
-impl Chunk {
-    /// The byte count, where an over-long answer ends the command
-    fn count(self, asked: usize) -> Result<usize, Error> {
-        match self {
-            Chunk::Got(n) => Ok(n),
-            Chunk::TooMuch(n) => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "device sent {n} bytes for a {asked}-byte read, so the stream is out of step"
-                ),
-            )
-            .into()),
+/// Read into `out` until it is full or a read gives 0 bytes
+fn fill(
+    out: &mut [u8],
+    mut read: impl FnMut(&mut [u8]) -> Result<usize, Error>,
+) -> Result<usize, Error> {
+    let mut done = 0;
+    while done < out.len() {
+        match read(&mut out[done..])? {
+            0 => break,
+            n => done += n,
         }
     }
+    Ok(done)
 }
 
 /// What a phase check answered
@@ -309,12 +308,9 @@ impl UsbTransport {
         }
     }
 
-    /// Read the closing packet of a phase, where the unit fills it out to a
-    /// whole number of packets instead of ending it short
+    /// Read the next piece of a phase into `out`, which is all that the phase still has
     ///
-    /// `out` asks for what the phase has left, so a [`Chunk::TooMuch`] here is
-    /// that padding. A read with more of the phase to come after it is the
-    /// pipe out of step
+    /// A [`Chunk::TooMuch`] is then the padding of the last packet
     fn read_last(&mut self, out: &mut [u8], timeout: Duration) -> Result<usize, Error> {
         match self.read_in(out, timeout)? {
             Chunk::Got(n) => Ok(n),
@@ -330,36 +326,10 @@ impl UsbTransport {
 
     /// Read a whole data IN phase
     ///
-    /// The unit sends the data in pieces. An LS-40 sends one image line for
-    /// each piece, so one read gets the first line only. We read until we have
-    /// the transfer length the CDB asked for, and after the first piece we ask
-    /// for the size of that piece. Nikon's own USB code does the same.
+    /// Each read asks for all that is left, because a READ can stop in a line
+    /// and the next one then starts with a short piece
     fn read_data_in(&mut self, out: &mut [u8], budget: Budget) -> Result<usize, Error> {
-        let mut done = 0;
-        let mut piece = out.len();
-        while done < out.len() {
-            let want = piece.min(out.len() - done);
-            // The phase is as long as the CDB's transfer length, which need not
-            // end on a packet boundary, and the unit fills out that last
-            // packet rather than ending it short. A surplus before then is not
-            // padding, it is the stream out of step
-            let last = done + want == out.len();
-            let got = if last {
-                self.read_last(&mut out[done..done + want], budget.left()?)?
-            } else {
-                self.read_in(&mut out[done..done + want], budget.left()?)?
-                    .count(want)?
-            };
-            // The unit has nothing more to send
-            if got == 0 {
-                break;
-            }
-            if done == 0 && got < out.len() {
-                piece = got;
-            }
-            done += got;
-        }
-        Ok(done)
+        fill(out, |rest| self.read_last(rest, budget.left()?))
     }
 
     /// Ask what the unit wants next, in no more than `bound` and no more than
@@ -565,5 +535,25 @@ impl Transport for UsbTransport {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An LS-40 READ that starts with the last 1522 bytes of a 1722-byte line
+    #[test]
+    fn a_read_after_a_split_line_takes_whole_lines() {
+        let data: Vec<u8> = (0..131_072).map(|i| i as u8).collect();
+        let mut pieces = std::iter::once(&data[..1522]).chain(data[1522..].chunks(1722));
+        let mut out = vec![0; data.len()];
+        let got = fill(&mut out, |rest| {
+            let piece = pieces.next().unwrap_or_default();
+            rest[..piece.len()].copy_from_slice(piece);
+            Ok(piece.len())
+        });
+        assert_eq!(got.expect("fill"), data.len());
+        assert_eq!(out, data);
     }
 }

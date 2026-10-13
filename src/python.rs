@@ -473,6 +473,12 @@ pub struct PyDiscovery {
     /// resolution the unit reports, and the error accumulates along the strip.
     /// `None` without a thumbnail, and on a unit that counts perforations
     addresses_per_column: Option<f64>,
+    /// The feed address of each column of `thumbnail`, on every unit that takes one
+    ///
+    /// Use this to find the columns of a frame: the first column at or after its top, up to
+    /// the first column at or after its bottom. The addresses never decrease. `None` without
+    /// a thumbnail
+    column_addresses: Option<Vec<u32>>,
     /// The quality of the fallback frame fit; `None` where Nikon Scan's search found the frames
     contrast: Option<f32>,
     /// True if all blocks of the thumbnail pass arrived. `None` if there is no
@@ -596,7 +602,10 @@ impl PySession {
                         .into_iter()
                         .map(|r| (r.top, r.left, r.bottom, r.right))
                         .collect();
-                    let pitch = discovery.line_pitch.map(|p| p.addresses_per_column());
+                    let pitch = (
+                        discovery.line_pitch.map(|p| p.addresses_per_column()),
+                        discovery.column_addresses,
+                    );
                     let contrast = discovery.contrast;
                     let base_density = discovery.base_density.map(|[r, g, b]| (r, g, b));
                     match discovery.thumbnail {
@@ -638,7 +647,8 @@ impl PySession {
         Ok(PyDiscovery {
             frames,
             thumbnail,
-            addresses_per_column: pitch,
+            addresses_per_column: pitch.0,
+            column_addresses: pitch.1,
             contrast,
             thumbnail_complete: arrived.map(|(complete, _)| complete),
             thumbnail_blocks: arrived.map(|(_, blocks)| blocks),

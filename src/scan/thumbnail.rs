@@ -61,6 +61,14 @@ impl LinePitch {
         line * self.0
     }
 
+    /// The feed address of each of `cols` columns
+    pub fn column_addresses(&self, caps: &Capabilities, cols: usize) -> Vec<u32> {
+        let origin = caps.address.y_axis.address_range.start;
+        (0..cols as u32)
+            .map(|i| origin + self.address_of(i))
+            .collect()
+    }
+
     /// The number of thumbnail lines in a length of film, rounded
     pub fn columns(&self, addresses: u32) -> usize {
         let per = self.0.max(1);

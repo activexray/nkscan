@@ -250,6 +250,8 @@ pub struct Discovery {
     pub thumbnail: Option<Pass>,
     /// The feed addresses of one [`thumbnail`](Self::thumbnail) column; `None` if the columns are not evenly spaced
     pub line_pitch: Option<thumbnail::LinePitch>,
+    /// The feed address of each [`thumbnail`](Self::thumbnail) column; `None` without a thumbnail
+    pub column_addresses: Option<Vec<u32>>,
     /// The [`contrast`](crate::scan::strip::Strip::contrast) of a `strip::find` fit that found frames
     pub contrast: Option<f32>,
     /// The film base density off the thumbnail, for [`crate::scan::meter::Metering::base_density`]
@@ -311,20 +313,22 @@ pub fn discover_with(
             let boundary = table(session.capabilities())?;
             let found = boundary.frames.clone();
             info!(frames = found.len(), "published frames");
-            let (thumbnail, line_pitch, base_density) =
+            let (thumbnail, line_pitch, column_addresses, base_density) =
                 if mechanism.takes_thumbnail(session.capabilities()) {
                     let pass = session.scan_thumbnail_with(samples, film, on)?;
                     let base_density = base_density(session, &pass.image(samples)?, film);
                     let pitch = thumbnail::LinePitch::of(&pass);
-                    (Some(pass), Some(pitch), base_density)
+                    let columns = pitch.column_addresses(session.capabilities(), pass.cols);
+                    (Some(pass), Some(pitch), Some(columns), base_density)
                 } else {
-                    (None, None, None)
+                    (None, None, None, None)
                 };
             Ok(Discovery {
                 table: FrameTable::Boundary(boundary),
                 frames: found,
                 thumbnail,
                 line_pitch,
+                column_addresses,
                 contrast: None,
                 base_density,
             })
@@ -352,6 +356,7 @@ pub fn discover_with(
             Ok(Discovery {
                 table: FrameTable::Boundary(measured),
                 frames: found,
+                column_addresses: Some(pitch.column_addresses(session.capabilities(), pass.cols)),
                 thumbnail: Some(pass),
                 line_pitch: Some(pitch),
                 contrast,
@@ -366,6 +371,7 @@ pub fn discover_with(
                 frames: found,
                 thumbnail: None,
                 line_pitch: None,
+                column_addresses: None,
                 contrast: None,
                 base_density: None,
             })
@@ -412,9 +418,10 @@ pub fn discover_with(
                 starts.iter().map(|&s| s as i64),
             );
             // Return the resampled thumbnail, where a frame's line is its column
-            if !kept.is_empty() {
+            let column_addresses = (!kept.is_empty()).then(|| {
                 pass.keep_columns(samples, &kept);
-            }
+                boundary::perforation::addresses(&perfs, optical, &kept)
+            });
             if !measured.frames.is_empty() {
                 session.set_boundaries_type2(&measured)?;
             }
@@ -436,6 +443,7 @@ pub fn discover_with(
                 thumbnail: Some(pass),
                 // The resampled columns are not evenly spaced
                 line_pitch: None,
+                column_addresses,
                 contrast: None,
                 base_density,
             })

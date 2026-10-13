@@ -139,3 +139,25 @@ fn a_nudge_moves_one_frame_onto_its_new_record() {
     assert_eq!(moved.len(), 1);
     assert!(moved[0].1.top > moved[0].0.top);
 }
+
+/// A frame's first column is the one Nikon shows first, two lines before its record line
+#[test]
+fn a_frame_starts_at_the_column_nikon_shows_first() {
+    for name in [
+        "coolscan_v_thumbnail_preview_scan",
+        "coolscan_v_slide",
+        "coolscan_v_bw",
+        "coolscan_v_thin_neg_redo",
+        "coolscan_v_frame_test",
+    ] {
+        let (perfs, kept, starts, _) = found(name);
+        let columns = addresses(&perfs, 4000, &kept);
+        assert_eq!(columns.len(), kept.len(), "{name}");
+        assert!(columns.is_sorted(), "{name}");
+        let table = table(&perfs, 4000, &kept, lines(&starts));
+        for (frame, &start) in table.frames.iter().zip(&starts) {
+            let first = columns.partition_point(|&a| a < frame.top);
+            assert_eq!(first, (start.max(1) - 1).saturating_sub(2), "{name}");
+        }
+    }
+}

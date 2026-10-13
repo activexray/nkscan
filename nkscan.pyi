@@ -170,6 +170,15 @@ class Discovery:
         `None` without a thumbnail, and on a unit that counts perforations
         """
     @property
+    def column_addresses(self) -> typing.Optional[builtins.list[builtins.int]]:
+        r"""
+        The feed address of each column of `thumbnail`, on every unit that takes one
+        
+        Use this to find the columns of a frame: the first column at or after its top, up to
+        the first column at or after its bottom. The addresses never decrease. `None` without
+        a thumbnail
+        """
+    @property
     def contrast(self) -> typing.Optional[builtins.float]:
         r"""
         The quality of the fallback frame fit; `None` where Nikon Scan's search found the frames

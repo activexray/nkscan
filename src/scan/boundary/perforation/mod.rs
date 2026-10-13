@@ -85,6 +85,31 @@ pub fn table(
     BoundaryType2 { frames }
 }
 
+/// Lines Nikon shows before a frame's record line (`CSAThumbCtrl::ReadData`, `100814f0`)
+const SHOWN_BEFORE: usize = 2;
+
+/// The feed address of the film in each line of the [`resample`]d thumbnail, never decreasing
+///
+/// Nikon shows a frame from [`SHOWN_BEFORE`] lines before the line whose record is its top, so a
+/// line takes the record address of the line that many after it. Nikon's grid steps back where a
+/// decimal changes, and a line past the film has an empty record, so a line keeps the address of
+/// the line before it where its own is lower
+pub fn addresses(perfs: &PerfInformation, optical_dpi: u16, kept: &[usize]) -> Vec<u32> {
+    let spec = Spec::for_dpi(optical_dpi);
+    let records: Vec<u32> = kept
+        .iter()
+        .filter_map(|&line| perfs.at(line))
+        .scan(0, |last, r| {
+            *last = spec.address(r).max(*last);
+            Some(*last)
+        })
+        .collect();
+    let last = records.len().saturating_sub(1);
+    (0..records.len())
+        .map(|i| records[(i + SHOWN_BEFORE).min(last)])
+        .collect()
+}
+
 /// The entry for a rectangle at `top`: the last record at or before `top`
 pub fn record_at(perfs: &PerfInformation, optical_dpi: u16, top: u32) -> Option<FramePosition> {
     let spec = Spec::for_dpi(optical_dpi);

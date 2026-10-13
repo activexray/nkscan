@@ -253,7 +253,11 @@ static BOOL WINAPI hookedDeviceIoControl(
         if (isDataIn && !result && lpOverlapped) {
             DWORD start = GetTickCount();
             while (!HasOverlappedIoCompleted(lpOverlapped)) {
-                if (GetTickCount() - start > 10000) break; /* 10s safety cap */
+                /* A thumbnail READ can take more than 10 s */
+                if (GetTickCount() - start > 600000) {
+                    log_write("  WARNING: overlapped read still pending after 600 s, buffer not captured\r\n");
+                    break;
+                }
                 Sleep(1);
             }
             savedErr = GetLastError();

@@ -35,7 +35,7 @@ pub enum FilmFormat {
     F68,
     /// 120 film, 6 × 9 cm
     F69,
-    /// Operator-supplied height in millimeters
+    /// Operator-supplied height in millimeters, on an LS-8000/9000 only and up to the 6x9 length
     Custom(u32),
 }
 
@@ -130,7 +130,7 @@ impl FilmFormat {
     /// `caps.identity.is_mf_scanner()` is what picks holder ID over adapter ID
     pub fn resolve(explicit: Option<Self>, caps: &super::Capabilities) -> Result<Self, Error> {
         if let Some(format) = explicit {
-            return Ok(format);
+            return format.check(caps);
         }
 
         let uses_adapter =
@@ -164,6 +164,26 @@ impl FilmFormat {
                     reason: format!("this holder does not fix it{choices}"),
                 }
             })
+    }
+
+    /// Refuse a custom length that the unit cannot scan as one frame
+    ///
+    /// A 35mm unit scans one gate, so a longer frame comes back at the gate length (#62)
+    fn check(self, caps: &super::Capabilities) -> Result<Self, Error> {
+        let Self::Custom(mm) = self else {
+            return Ok(self);
+        };
+        let longest = Self::F69.height_dots_4000();
+        if caps.identity.is_mf_scanner() && self.height_dots_4000() <= longest {
+            return Ok(self);
+        }
+        Err(Error::Unsupported {
+            op: "film format",
+            reason: format!(
+                "a custom length of {mm} mm needs an LS-8000/9000 and at most {} mm",
+                longest * 254 / 40000
+            ),
+        })
     }
 }
 
@@ -212,6 +232,7 @@ impl fmt::Display for FilmFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::caps::Capabilities;
 
     /// The names are nominal and the gates are not. Getting these wrong leaves
     /// a frame with a strip of the next one along its edge
@@ -240,6 +261,23 @@ mod tests {
         assert_eq!(FilmFormat::from_holder(0x1A), Some(FilmFormat::F66));
         assert_eq!(FilmFormat::from_holder(0x1D), Some(FilmFormat::F69));
         assert_eq!(FilmFormat::from_holder(0x17), None);
+    }
+
+    /// A custom length is for the 120 units, and no longer than 6x9 (#62)
+    #[test]
+    fn a_custom_length_needs_a_120_unit() {
+        let mut caps = crate::scan::window::tests::caps();
+        caps.identity.product = "LS-9000 ED".into();
+        let resolve =
+            |caps: &Capabilities, mm| FilmFormat::resolve(Some(FilmFormat::Custom(mm)), caps);
+        assert_eq!(resolve(&caps, 83).ok(), Some(FilmFormat::Custom(83)));
+        assert!(resolve(&caps, 84).is_err());
+        caps.identity.product = "LS-4000 ED".into();
+        assert!(resolve(&caps, 58).is_err());
+        assert_eq!(
+            FilmFormat::resolve(Some(FilmFormat::F135), &caps).ok(),
+            Some(FilmFormat::F135)
+        );
     }
 
     #[test]

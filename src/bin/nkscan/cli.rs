@@ -112,7 +112,7 @@ pub struct Scan {
     #[arg(long)]
     pub thumbnail: bool,
 
-    /// Film format. One of: 135, half, IX240, 16, 645, 66, 67, 68, 69, or a custom frame length in mm. Defaults to what the holder reports (if any).
+    /// Film format. One of: 135, half, IX240, 16, 645, 66, 67, 68, 69, or a custom frame length in mm (LS-8000/9000 only, up to 83 mm). Defaults to what the holder reports (if any).
     #[arg(long, value_parser = FilmFormat::from_str)]
     pub format: Option<FilmFormat>,
 

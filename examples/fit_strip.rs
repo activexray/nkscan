@@ -1,4 +1,7 @@
-//! Scratch: run `scan::strip::find` against saved thumbnails and draw the fit.
+//! Scratch: find the frames on saved thumbnails and draw them.
+//!
+//! A 120 strip uses `boundary::rectangle`, and a name with "slide" is a positive.
+//! Other strips use `scan::strip::find`, because the files have no 8Eh records.
 //!
 //! The format comes from the file name where it is in it, so the whole
 //! `thumbnails/` corpus can be run in one loop. The count in the name is what
@@ -10,7 +13,7 @@
 
 use nkscan::{
     protocol::{caps::film::FilmFormat, decode::Image},
-    scan::strip,
+    scan::{boundary::rectangle, profile::Film, strip},
 };
 use std::{env, path::PathBuf};
 use tiff::{
@@ -134,29 +137,60 @@ fn main() {
         };
 
         let nominal = format.height_dots(dpi.round() as u16) as usize;
-        let started = std::time::Instant::now();
-        let Some(found) = strip::find(&image, nominal) else {
-            eprintln!("{name}: no fit");
-            continue;
+        let film = if name.contains("slide") {
+            Film::Positive
+        } else {
+            Film::Negative
         };
+        let started = std::time::Instant::now();
+        // Each frame's picture, and the rectangle a scan of it would take
+        let (pictures, scans): (Vec<std::ops::Range<usize>>, Vec<usize>) =
+            if let Some(found) = rectangle::frames(&image, film, format, Some(0x17)) {
+                // The rectangle is the format length from the frame's first line
+                let starts: Vec<usize> = found.iter().map(|&(s, _)| s.max(0) as usize).collect();
+                (
+                    starts
+                        .iter()
+                        .map(|&s| s..(s + nominal).min(cols as usize))
+                        .collect(),
+                    starts,
+                )
+            } else if let Some(found) = strip::find(&image, nominal) {
+                println!(
+                    "  pitch {} picture {} contrast {:.3}",
+                    found.pitch,
+                    found.frames[0].len(),
+                    found.contrast
+                );
+                // The format on the middle of the picture, as `thumbnail::frames` does
+                let scans = found
+                    .frames
+                    .iter()
+                    .map(|f| {
+                        (f.start + f.len() / 2)
+                            .saturating_sub(nominal / 2)
+                            .min((cols as usize).saturating_sub(nominal))
+                    })
+                    .collect();
+                (found.frames, scans)
+            } else {
+                eprintln!("{name}: no fit");
+                continue;
+            };
         let took = started.elapsed();
 
         let verdict = match want {
-            Some(n) if n != found.frames.len() => " MISCOUNT",
+            Some(n) if n != pictures.len() => " MISCOUNT",
             _ => "",
         };
         println!(
-            "{name}: {cols}x{rows} @{dpi:.0}dpi {format:?} want {want:?} nominal {nominal}\n  \
-             {} frames{verdict} pitch {} picture {} contrast {:.3} in {}ms filled {}",
-            found.frames.len(),
-            found.pitch,
-            found.frames[0].len(),
-            found.contrast,
+            "{name}: {cols}x{rows} @{dpi:.0}dpi {format:?} {film:?} want {want:?} nominal {nominal}\n  \
+             {} frames{verdict} in {}ms filled {}",
+            pictures.len(),
             took.as_millis(),
             image.cols
         );
-        let places: Vec<String> = found
-            .frames
+        let places: Vec<String> = pictures
             .iter()
             .map(|f| format!("{}..{}", f.start, f.end))
             .collect();
@@ -182,7 +216,7 @@ fn main() {
         };
         // The picture that was found, in the frame's own color, and the
         // rectangle a scan of it would take, in white dashes
-        for (n, frame) in found.frames.iter().enumerate() {
+        for (n, frame) in pictures.iter().enumerate() {
             let color = palette[n % palette.len()];
             for thick in 0..2 {
                 for y in 0..h {
@@ -195,13 +229,7 @@ fn main() {
                 }
             }
         }
-        // The rectangle a scan takes is the format over the middle of the
-        // picture, as `thumbnail::frames` puts it
-        for frame in &found.frames {
-            let middle = frame.start + frame.len() / 2;
-            let start = middle
-                .saturating_sub(nominal / 2)
-                .min(w.saturating_sub(nominal));
+        for &start in &scans {
             for y in (0..h).filter(|y| y % 8 < 4) {
                 set(start, y, [65535, 65535, 65535]);
                 set(

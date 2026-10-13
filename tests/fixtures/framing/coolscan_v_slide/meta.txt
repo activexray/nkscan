@@ -1,0 +1,4 @@
+bits 14
+film positive
+frames 5
+line_pitch 41

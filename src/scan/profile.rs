@@ -38,6 +38,13 @@ pub enum Film {
     MonochromeNegative,
 }
 
+impl Film {
+    /// Whether the film is a negative
+    pub fn is_negative(self) -> bool {
+        matches!(self, Self::Negative | Self::MonochromeNegative)
+    }
+}
+
 impl std::str::FromStr for Film {
     type Err = String;
 

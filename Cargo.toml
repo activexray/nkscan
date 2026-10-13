@@ -18,6 +18,7 @@ exclude = [
   "pyproject.toml",
   "scripts/",
   "scsi_proxy/",
+  "tests/fixtures/",
 ]
 
 [dependencies]

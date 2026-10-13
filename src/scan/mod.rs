@@ -6,6 +6,7 @@
 //! happens here, once, before anything moves.
 
 pub mod autoexpose;
+pub mod boundary;
 pub mod clean;
 pub mod focus;
 pub mod frame;

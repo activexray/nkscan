@@ -1,6 +1,7 @@
 /target
 .direnv
 *.tiff
+!tests/fixtures/**/*.tiff
 nkscan-wb.txt
 result
 

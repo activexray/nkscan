@@ -1,0 +1,17 @@
+# Nikon's own CBrownieBoundarySearch (LS9000.md3) under emulation, tools/captures/emu_ls9000.py
+# thumbnail folder polarity: start end per frame
+6x45_bw_4frames.tiff 6 negative: 54 197, 216 359, 375 518, 536 690
+6x45_color_neg_3frames.tiff 6 negative: 47 188, 207 350, 372 515, 543 697
+6x45_slide_4frames.tiff 6 positive: 50 193, 208 351, 371 514, 532 686
+6x45_slide_dark_4frames.tiff 6 positive: 49 183, 213 353, 371 503, 536 690
+6x6_bw_3frames_dense.tiff 7 negative: 56 239, 261 452, 473 656
+6x6_bw_3frames_thin.tiff 7 negative: 55 261, 261 445, 467 655
+6x6_bw_3frames.tiff 7 negative: 80 262, 266 472, 466 654
+6x6_color_neg_3frames.tiff 7 negative: 47 253, 236 427, 455 643
+6x6_color_neg_overlapping_3frames.tiff 7 negative: 58 249, 255 461, 461 649
+6x6_slide_3frames.tiff 7 positive: 53 259, 261 449, 476 656
+6x9_bw_2frames.tiff 10 negative: 55 358, 348 624
+6x9_color_neg_2frames.tiff 10 negative: 49 352, 368 644
+6x9_color_neg_overlapping_2frames.tiff 10 negative: 47 326, 342 616
+6x9_slide_2frames.tiff 10 positive: 60 363, 373 647
+holga_bw_2frames.tiff 7 negative: 47 233, 237 428, 443 629

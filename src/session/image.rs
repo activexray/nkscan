@@ -34,7 +34,7 @@ impl Session {
     /// The same, on a budget the caller sets
     ///
     /// The first read of a pass waits for the stage to reach position, which is
-    /// what [`MOVE_TIMEOUT`] is sized for. A read partway through one has no
+    /// what `MOVE_TIMEOUT` is sized for. A read partway through one has no
     /// such waiting to do, and giving it a stage move's worth of budget is how
     /// a unit that has stopped answering holds the program for three minutes
     /// instead of saying so

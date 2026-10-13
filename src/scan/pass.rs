@@ -46,6 +46,23 @@ impl Pass {
         let cols = filled_columns(&planes, self.rows, self.cols);
         Image::partial(&self.layout, samples, cols)
     }
+
+    /// Keep only the feed columns `columns`, in that order, in `samples` and in this pass
+    pub fn keep_columns(&mut self, samples: &mut Samples, columns: &[usize]) {
+        let (rows, stride) = (self.rows, self.cols);
+        let gather = |plane: &mut Vec<u16>| {
+            *plane = (0..rows)
+                .flat_map(|y| columns.iter().map(move |&x| (y, x)))
+                .map(|(y, x)| plane[y * stride + x])
+                .collect();
+        };
+        samples.colors.iter_mut().for_each(gather);
+        if let Some(ir) = samples.ir.as_mut().filter(|ir| !ir.is_empty()) {
+            gather(ir);
+        }
+        self.cols = columns.len();
+        self.layout.lines = columns.len() as u32;
+    }
 }
 
 /// How far along a pass is, reported once per chunk

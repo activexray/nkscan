@@ -5,6 +5,54 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0]
+
+### Added
+
+- `scan::boundary`, a port of Nikon Scan's frame search for perforation units and for 120 film.
+- `Capabilities::adapter`, the adapter name from FRU page 01h.
+- `Discovery::base_density`, the film base density from the thumbnail, also in Python.
+- `thumbnail::exposure_factors`, Nikon Scan's thumbnail exposure for each film.
+- `Pass::keep_columns`, which keeps only the given feed columns of a pass.
+- `Selector::open`, which opens a scanner on the handle that probed it.
+- `Framing::takes_thumbnail`, which tells if discovery takes a thumbnail pass.
+- `Film::is_negative` and `FilmFormat::is_120`.
+- Python `init_logging` takes `path`, a file to append to. A later call changes the level and the destination, and `"off"` stops the log.
+
+### Changed
+
+- **Breaking:** `framing::discover`, `discover_with`, `Session::scan_thumbnail` and `scan_thumbnail_with` take the film. Python `discover_frames` takes `film`.
+- **Breaking:** `Metering` gives the film, format, base density and white balance lock. `frame::Options::metering` replaces `lock_white_balance`, and `Session::autoexpose*` and `frame::meter_frame_with` take a `&Metering`.
+- **Breaking:** `thumbnail::frames` takes the format and the film. `thumbnail::frames_type2` is removed.
+- **Breaking:** `Metering::target` and `max_passes` are removed. `meter::INFRARED_TARGET` is the infrared target.
+- **Breaking:** `SelectError` has an `Open` variant for a scanner that does not open.
+- **Breaking:** Python `scan_frame` and `meter_frame` take `film`, `format` and `base_density`. `lock_white_balance` defaults to the value for the film.
+- Frames are found with Nikon Scan's search on perforation units and on 120 film. 135 in a 35mm holder on an LS-8000/9000 still uses `strip::find`.
+- On a perforation unit, the thumbnail is the resampled thumbnail and `Discovery::line_pitch` is `None`.
+- Metering is Nikon Scan's: a prescan at a factor of the start-up exposure, then the film curve for a negative or full scale for a positive.
+- Metering reads a crop of the frame by format.
+- A black and white negative is metered per channel, as Nikon Scan does.
+- An LS-50/5000 prescan uses averaging, as Nikon Scan does.
+- The thumbnail exposure is Nikon Scan's for the film and the holder or adapter.
+- The thumbnail windows are byte-identical to Nikon Scan's on an LS-50 and an LS-9000.
+- `framing::register` uses the last perforation record at or before the frame top.
+- Python `Session(location)` and the CLI open the scanner one time, not two times.
+- With published frames, discovery takes a thumbnail pass where Nikon Scan takes one. `Discovery::thumbnail` is the preview of the holder, and Python `Capabilities.thumbnail` is true.
+
+### Removed
+
+- `LinePitch::measured` and `LinePitch::line_at`.
+
+### Fixed
+
+- Python `init_logging` writes to stderr, as documented. It wrote to stdout. The lines have no ANSI colors.
+- A custom `--format` length on a unit other than an LS-8000/9000, or longer than 6x9, is refused. It was scanned at the gate length.
+- `Identity::is_mf_scanner` panicked on an unknown product.
+- A USB READ that starts in the middle of an image line no longer fails with "stream is out of step". Seen on an LS-40.
+- 6×7 and 6×8 frames are 11016 and 12204 dots long, as in Nikon Scan.
+- A `Boundary` rectangle is `top + length` and `left + width` on the wire, as Nikon Scan writes it. It was one line and one column short.
+- A frame entry keeps the count-switching flag of its perforation record.
+
 ## [0.12.0]
 
 ### Added

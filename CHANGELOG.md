@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1]
+
+### Added
+
+- `framing::cartridge`, true for a unit with LOAD that keeps the same film behind the gate, as the IA-20 does.
+
+### Changed
+
+- `framing::self_feeding` uses the addressing kind, byte 17 of the address page, and not the frame count.
+
+### Fixed
+
+- `nkscan scan` on an IA-20 loaded the same APS cartridge again after the eject, and did not stop. Now it asks for the next cartridge, then loads it (#72).
+
 ## [0.14.0]
 
 ### Added

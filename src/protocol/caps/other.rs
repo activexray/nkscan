@@ -159,6 +159,17 @@ impl ExecuteOps {
             .map(Op::from)
             .filter(|&op| self.supports(op))
     }
+
+    /// A registry that advertises only `ops`
+    #[cfg(test)]
+    pub(crate) fn of(ops: &[Op]) -> Self {
+        let mut groups = [0u16; 8];
+        for op in ops {
+            let code = op.code();
+            groups[usize::from((code >> 4) - 8)] |= 1 << (code & 0x0F);
+        }
+        Self(groups)
+    }
 }
 
 impl Features {

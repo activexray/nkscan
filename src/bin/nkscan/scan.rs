@@ -389,6 +389,10 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         if no_eject {
             break;
         }
+        // Get these before the eject. The eject causes a unit attention, and
+        // the refresh after it shows the empty gate
+        let self_feeding = framing::self_feeding(session.capabilities());
+        let cartridge = framing::cartridge(session.capabilities());
         let ejected = session.eject()?;
         if ejected {
             info!("ejected");
@@ -402,7 +406,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
 
         // A unit with a supply behind the gate takes the next medium in itself,
         // and is also the only one that can say when it has run out
-        if framing::self_feeding(session.capabilities()) {
+        if self_feeding {
             session.refresh()?;
             if !ready(session, true)? {
                 info!("nothing left to load");
@@ -419,7 +423,17 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         if !ejected && !confirm("Replace or advance the film, then press Enter")? {
             break;
         }
-        wait_for_film(session, "load the next strip", false)?;
+        // A cartridge stays in the adapter after the eject. Only the operator
+        // knows when a new cartridge is in. Then LOAD takes in its film
+        if cartridge && !confirm("Replace the cartridge, then press Enter")? {
+            break;
+        }
+        let prompt = if cartridge {
+            "load the next cartridge"
+        } else {
+            "load the next strip"
+        };
+        wait_for_film(session, prompt, cartridge)?;
     }
     Ok(())
 }

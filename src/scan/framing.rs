@@ -11,7 +11,12 @@ use super::{
 use crate::{
     error::Error,
     protocol::{
-        caps::{Capabilities, address::CoordinateBase, film::FilmFormat, other::DataTypes},
+        caps::{
+            Capabilities,
+            address::{AddressingKind, CoordinateBase},
+            film::FilmFormat,
+            other::DataTypes,
+        },
         data::{Boundary, FrameTable, Op, Rect},
         decode::{Image, Samples},
         window::Channel,
@@ -157,12 +162,24 @@ pub fn frames_on_medium(caps: &Capabilities) -> u32 {
     }
 }
 
-/// Whether the unit fetches the next medium itself
+/// Whether the unit takes in the next medium itself
 ///
-/// A supply of single-frame media is a stack it works through. Anything longer
-/// is one medium and the operator swaps it
+/// A slide feeder addresses its gate, and LOAD takes the next slide from the
+/// stack. A cartridge addresses the film, 2-2-2-3 byte 17 bit 0, and LOAD takes
+/// in the same roll again. Do not use the frame count for this: after the
+/// eject, an IA-20 can show a range of one frame
 pub fn self_feeding(caps: &Capabilities) -> bool {
-    caps.features.execute.supports(Op::Load) && frames_on_medium(caps) == 1
+    caps.features.execute.supports(Op::Load)
+        && !caps
+            .address
+            .addressing_kind
+            .contains(AddressingKind::ADDR_MEDIUM)
+}
+
+/// Whether the unit has LOAD but keeps the same film behind the gate, as the
+/// IA-20 does
+pub fn cartridge(caps: &Capabilities) -> bool {
+    caps.features.execute.supports(Op::Load) && !self_feeding(caps)
 }
 
 /// The frames a [`Framing::Address`] unit never describes on its own: one rect
@@ -471,6 +488,36 @@ mod tests {
         caps.adapter = Some("Mount".into());
         assert!(!Framing::Published.takes_thumbnail(&caps));
         assert!(!Framing::Address.takes_thumbnail(&caps));
+    }
+
+    /// Byte 17 and the LOAD bit for each adapter, 2-2-2-3 and 2-2-2-5. Only
+    /// the slide feeder takes the next medium from a stack. An IA-20 with a
+    /// range of one frame is not a feeder
+    #[test]
+    fn only_a_slide_feeder_feeds_itself() {
+        use crate::protocol::caps::other::ExecuteOps;
+        let mut caps = caps();
+        let adapter = |caps: &mut Capabilities, kind: u8, ops: &[Op]| {
+            caps.address.addressing_kind = AddressingKind::from_bits_truncate(kind);
+            caps.features.execute = ExecuteOps::of(ops);
+        };
+
+        // SF-210
+        adapter(&mut caps, 0x32, &[Op::Unload, Op::Load]);
+        assert!(self_feeding(&caps));
+        assert!(!cartridge(&caps));
+
+        // IA-20, with a range of one frame
+        adapter(&mut caps, 0x35, &[Op::Unload, Op::Load]);
+        assert_eq!(frames_on_medium(&caps), 1);
+        assert!(!self_feeding(&caps));
+        assert!(cartridge(&caps));
+
+        // SA-21/SA-30, then MA-21
+        adapter(&mut caps, 0x31, &[Op::Unload]);
+        assert!(!self_feeding(&caps) && !cartridge(&caps));
+        adapter(&mut caps, 0x22, &[]);
+        assert!(!self_feeding(&caps) && !cartridge(&caps));
     }
 
     /// A cartridge addresses the film itself, so its range runs the length of

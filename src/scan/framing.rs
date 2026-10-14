@@ -250,7 +250,8 @@ pub struct Discovery {
     pub thumbnail: Option<Pass>,
     /// The feed addresses of one [`thumbnail`](Self::thumbnail) column; `None` if the columns are not evenly spaced
     pub line_pitch: Option<thumbnail::LinePitch>,
-    /// The feed address of each [`thumbnail`](Self::thumbnail) column; `None` without a thumbnail
+    /// The feed address of each [`thumbnail`](Self::thumbnail) column. The addresses never decrease.
+    /// `None` without a thumbnail, or where no thumbnail line has a perforation record
     pub column_addresses: Option<Vec<u32>>,
     /// The [`contrast`](crate::scan::strip::Strip::contrast) of a `strip::find` fit that found frames
     pub contrast: Option<f32>,

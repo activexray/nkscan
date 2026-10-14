@@ -241,11 +241,11 @@ pub struct PyCapabilities {
     /// Whether a thumbnail pass happens at all, and so whether a caller can
     /// offer to keep it
     thumbnail: bool,
-    /// The film format the loaded holder or adapter fixes, as `discover_frames` takes it;
-    /// `None` where it fixes none or the framing needs none
+    /// The film format the loaded holder or adapter sets, as `discover_frames` takes it.
+    /// `None` where it sets no format, or where the framing does not use a format
     film_format: Option<String>,
-    /// The film formats to offer for the loaded holder or adapter; empty where it fixes the
-    /// format or the framing needs none
+    /// The film formats to offer for the loaded holder or adapter. Empty where it sets the
+    /// format, or where the framing does not use a format
     film_formats: Vec<String>,
     /// Whether the CCD can read its lines at once. False means a "superfine"
     /// control has nothing to switch
@@ -493,11 +493,11 @@ pub struct PyDiscovery {
     /// resolution the unit reports, and the error accumulates along the strip.
     /// `None` without a thumbnail, and on a unit that counts perforations
     addresses_per_column: Option<f64>,
-    /// The feed address of each column of `thumbnail`, on every unit that takes one
+    /// The feed address of each column of `thumbnail`. The addresses never decrease
     ///
-    /// Use this to find the columns of a frame: the first column at or after its top, up to
-    /// the first column at or after its bottom. The addresses never decrease. `None` without
-    /// a thumbnail
+    /// The columns of a frame start at the first column at or after its top. They stop before
+    /// the first column at or after its bottom. `None` without a thumbnail, or where no
+    /// thumbnail line has a perforation record
     column_addresses: Option<Vec<u32>>,
     /// The quality of the fallback frame fit; `None` where Nikon Scan's search found the frames
     contrast: Option<f32>,
@@ -609,56 +609,65 @@ impl PySession {
         let format = format_from_name(format)?;
         let film = film.map(film_from_name).transpose()?.unwrap_or_default();
 
-        let (frames, thumbnail, ids, samples, shape, pitch, contrast, arrived, base_density) =
-            py.detach(move || {
-                self.with(|session| {
-                    let mut samples = Samples::default();
-                    let discovery =
-                        framing::discover_with(session, format, film, &mut samples, |p| {
-                            report(&progress, "discover", 0, p)
-                        })?;
-                    let frames: Vec<_> = discovery
-                        .frames
-                        .into_iter()
-                        .map(|r| (r.top, r.left, r.bottom, r.right))
-                        .collect();
-                    let pitch = (
-                        discovery.line_pitch.map(|p| p.addresses_per_column()),
-                        discovery.column_addresses,
-                    );
-                    let contrast = discovery.contrast;
-                    let base_density = discovery.base_density.map(|[r, g, b]| (r, g, b));
-                    match discovery.thumbnail {
-                        Some(pass) => {
-                            let ids: Vec<u8> = pass.layout.colors().collect();
-                            let shape = (pass.rows, pass.cols);
-                            let arrived = Some((pass.complete, pass.blocks));
-                            Ok((
-                                frames,
-                                true,
-                                ids,
-                                samples.colors,
-                                shape,
-                                pitch,
-                                contrast,
-                                arrived,
-                                base_density,
-                            ))
-                        }
-                        None => Ok((
+        let (
+            frames,
+            thumbnail,
+            ids,
+            samples,
+            shape,
+            pitch,
+            columns,
+            contrast,
+            arrived,
+            base_density,
+        ) = py.detach(move || {
+            self.with(|session| {
+                let mut samples = Samples::default();
+                let discovery = framing::discover_with(session, format, film, &mut samples, |p| {
+                    report(&progress, "discover", 0, p)
+                })?;
+                let frames: Vec<_> = discovery
+                    .frames
+                    .into_iter()
+                    .map(|r| (r.top, r.left, r.bottom, r.right))
+                    .collect();
+                let pitch = discovery.line_pitch.map(|p| p.addresses_per_column());
+                let columns = discovery.column_addresses;
+                let contrast = discovery.contrast;
+                let base_density = discovery.base_density.map(|[r, g, b]| (r, g, b));
+                match discovery.thumbnail {
+                    Some(pass) => {
+                        let ids: Vec<u8> = pass.layout.colors().collect();
+                        let shape = (pass.rows, pass.cols);
+                        let arrived = Some((pass.complete, pass.blocks));
+                        Ok((
                             frames,
-                            false,
-                            Vec::new(),
-                            Vec::new(),
-                            (0, 0),
+                            true,
+                            ids,
+                            samples.colors,
+                            shape,
                             pitch,
+                            columns,
                             contrast,
-                            None,
+                            arrived,
                             base_density,
-                        )),
+                        ))
                     }
-                })
-            })?;
+                    None => Ok((
+                        frames,
+                        false,
+                        Vec::new(),
+                        Vec::new(),
+                        (0, 0),
+                        pitch,
+                        columns,
+                        contrast,
+                        None,
+                        base_density,
+                    )),
+                }
+            })
+        })?;
 
         let thumbnail = thumbnail.then(|| {
             let (rows, cols) = shape;
@@ -667,8 +676,8 @@ impl PySession {
         Ok(PyDiscovery {
             frames,
             thumbnail,
-            addresses_per_column: pitch.0,
-            column_addresses: pitch.1,
+            addresses_per_column: pitch,
+            column_addresses: columns,
             contrast,
             thumbnail_complete: arrived.map(|(complete, _)| complete),
             thumbnail_blocks: arrived.map(|(_, blocks)| blocks),

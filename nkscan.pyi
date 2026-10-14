@@ -80,14 +80,14 @@ class Capabilities:
     @property
     def film_format(self) -> typing.Optional[builtins.str]:
         r"""
-        The film format the loaded holder or adapter fixes, as `discover_frames` takes it;
-        `None` where it fixes none or the framing needs none
+        The film format the loaded holder or adapter sets, as `discover_frames` takes it.
+        `None` where it sets no format, or where the framing does not use a format
         """
     @property
     def film_formats(self) -> builtins.list[builtins.str]:
         r"""
-        The film formats to offer for the loaded holder or adapter; empty where it fixes the
-        format or the framing needs none
+        The film formats to offer for the loaded holder or adapter. Empty where it sets the
+        format, or where the framing does not use a format
         """
     @property
     def multi_line(self) -> builtins.bool:
@@ -184,11 +184,11 @@ class Discovery:
     @property
     def column_addresses(self) -> typing.Optional[builtins.list[builtins.int]]:
         r"""
-        The feed address of each column of `thumbnail`, on every unit that takes one
+        The feed address of each column of `thumbnail`. The addresses never decrease
         
-        Use this to find the columns of a frame: the first column at or after its top, up to
-        the first column at or after its bottom. The addresses never decrease. `None` without
-        a thumbnail
+        The columns of a frame start at the first column at or after its top. They stop before
+        the first column at or after its bottom. `None` without a thumbnail, or where no
+        thumbnail line has a perforation record
         """
     @property
     def contrast(self) -> typing.Optional[builtins.float]:

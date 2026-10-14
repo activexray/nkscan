@@ -41,7 +41,7 @@ pub enum FilmFormat {
 
 impl FilmFormat {
     /// The named formats, in the order a picker offers them
-    pub const NAMED: [Self; 9] = [
+    const NAMED: [Self; 9] = [
         Self::F135,
         Self::F135Half,
         Self::IX240,
@@ -179,7 +179,7 @@ impl FilmFormat {
             })
     }
 
-    /// The formats to offer for what is loaded; empty where the holder or adapter fixes it
+    /// The formats to offer for the loaded holder or adapter. Empty where it sets the format
     pub fn choices(caps: &super::Capabilities) -> Vec<Self> {
         if Self::resolve(None, caps).is_ok() {
             return Vec::new();

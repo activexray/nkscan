@@ -88,13 +88,12 @@ pub fn table(
 /// Lines Nikon shows before a frame's record line (`CSAThumbCtrl::ReadData`, `100814f0`)
 const SHOWN_BEFORE: usize = 2;
 
-/// The feed address of the film in each line of the [`resample`]d thumbnail, never decreasing
+/// The feed address of each line of the [`resample`]d thumbnail. The addresses never decrease
 ///
-/// Nikon shows a frame from [`SHOWN_BEFORE`] lines before the line whose record is its top, so a
-/// line takes the record address of the line that many after it. Nikon's grid steps back where a
-/// decimal changes, and a line past the film has an empty record, so a line keeps the address of
-/// the line before it where its own is lower
-pub fn addresses(perfs: &PerfInformation, optical_dpi: u16, kept: &[usize]) -> Vec<u32> {
+/// A line takes the record address of the line [`SHOWN_BEFORE`] lines after it.
+/// Where that address is lower than the one before it, the line keeps the one before it.
+/// This occurs where a decimal changes and past the end of the film.
+pub(crate) fn addresses(perfs: &PerfInformation, optical_dpi: u16, kept: &[usize]) -> Vec<u32> {
     let spec = Spec::for_dpi(optical_dpi);
     let records: Vec<u32> = kept
         .iter()

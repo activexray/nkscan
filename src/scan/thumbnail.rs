@@ -62,7 +62,7 @@ impl LinePitch {
     }
 
     /// The feed address of each of `cols` columns
-    pub fn column_addresses(&self, caps: &Capabilities, cols: usize) -> Vec<u32> {
+    pub(crate) fn column_addresses(&self, caps: &Capabilities, cols: usize) -> Vec<u32> {
         let origin = caps.address.y_axis.address_range.start;
         (0..cols as u32)
             .map(|i| origin + self.address_of(i))

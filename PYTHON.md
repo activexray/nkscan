@@ -61,9 +61,13 @@ if not caps.eject:
     hide("eject")            # the operator takes the holder out by hand
 if not caps.autofocus:
     hide("autofocus")
+if not caps.film_formats:
+    hide("film format")      # the holder sets the format, or the framing uses none
 ```
 
 `x_dpi_range`, `y_dpi_range`, `focus_range`, `max_samples` and `max_frames` bound the controls that take a number. `framing` says how frames are found ("published", "thumbnail", "perforation" or "address"), and `interleavings` lists the reading modes offered.
+
+`film_formats` lists the formats to offer for the loaded holder or adapter, as `discover_frames` takes them. It is empty where the holder or adapter sets the format. `film_format` is the format it sets, or `None`.
 
 ## Metering
 
@@ -131,8 +135,8 @@ cropped, is put in the unit's frame table before the pass, so it reaches the fil
 it asks for.
 
 `discover_frames` returns its thumbnail pass, keyed the same way
-`ScanResult.colors` is, along with the mapping between a thumbnail column and a
-feed address. Where the holder publishes its frames, the pass is only a preview:
+`ScanResult.colors` is, and the feed address of each thumbnail column. Where the
+holder publishes its frames, the pass is only a preview:
 
 ```python
 discovery = session.discover_frames(film=film)
@@ -140,28 +144,32 @@ if discovery.thumbnail is not None:
     show_to_operator(discovery.thumbnail)  # dict[str, NDArray[uint16]]
 ```
 
-Use `discovery.addresses_per_column` to go between the two, so the rectangle the
+Use `discovery.column_addresses` to go between the two, so the rectangle the
 operator sees is the rectangle that gets scanned:
 
 ```python
-per = discovery.addresses_per_column          # e.g. 48 on an LS-9000
+from bisect import bisect_left
+
+columns = discovery.column_addresses           # one feed address per column
 top, left, bottom, right = discovery.frames[3]
 
 # the frame's own columns of the thumbnail, to draw or slice a preview tile
-first, last = round(top / per), round(bottom / per)
+first, last = bisect_left(columns, top), bisect_left(columns, bottom)
 tile = {name: plane[:, first:last] for name, plane in discovery.thumbnail.items()}
 
-# and back, for a rectangle the operator dragged
-moved = (round(first * per), left, round(last * per), right)
-result = session.scan_frame(moved)
+# and back, for a frame the operator moved by `n` columns
+moved = (columns[first + n], left, columns[first + n] + bottom - top, right)
+result = session.scan_frame(moved, film=film)
 ```
 
-Read that number from each `Discovery`. Do not compute it as
-`optical_dpi / thumbnail_dpi`: the pass rounds it down to whole addresses.
+The addresses never decrease. On a unit that counts perforations
+(`caps.framing == "perforation"`) the columns are not evenly spaced: the thumbnail
+is resampled as Nikon Scan resamples it. A column has the address of the film that
+Nikon Scan shows in that column. On these units, Nikon Scan lets a frame move
+144 columns each way.
 
-On a unit that counts perforations (`caps.framing == "perforation"`) it is `None`. The
-thumbnail is resampled as Nikon Scan resamples it, so its columns are not evenly
-spaced. Use `discovery.frames` for the rectangles there.
+`discovery.addresses_per_column` is the spacing of evenly spaced columns, and
+`None` on a unit that counts perforations.
 
 ## Progress and cancellation
 

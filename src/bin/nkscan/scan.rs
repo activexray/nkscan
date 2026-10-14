@@ -18,7 +18,7 @@ use nkscan::{
         framing::{self, Framing},
         meter::Metering,
         pass::Progress,
-        profile,
+        profile::{self, Film},
         window::Recipe,
     },
     session::Session,
@@ -130,12 +130,12 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
     // Silver grains stop infrared as they stop light, so the mask a
     // black and white negative returns is the picture again rather than
     // the dust on it
-    if film == cli::FilmType::Mono && (ir || clean) {
+    if film == Film::MonochromeNegative && (ir || clean) {
         bail!("--ir and --clean do not work on black and white negatives");
     }
 
     // What the scans get tagged with, which follows the film type
-    let icc = profile::nikon(&session.capabilities().identity, film.into());
+    let icc = profile::nikon(&session.capabilities().identity, film);
     if icc.is_none() {
         warn!(
             product = session.capabilities().identity.product,
@@ -218,7 +218,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         // the metering bars are
         let takes_pass = framing.takes_thumbnail(session.capabilities());
         let mut bar: Option<ProgressBar> = None;
-        let discovery = framing::discover_with(session, format, film.into(), &mut samples, |p| {
+        let discovery = framing::discover_with(session, format, film, &mut samples, |p| {
             if takes_pass && bar.is_none() && p.total > 0 {
                 bar = Some(pass_bar("thumbnail", p.total));
             }
@@ -245,7 +245,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
             lock_white_balance: hold_white_balance,
             format,
             base_density: discovery.base_density,
-            ..Metering::new(film.into())
+            ..Metering::new(film)
         };
 
         // Select all or the requested subset of the frames to scan
@@ -369,7 +369,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
                 &samples,
                 &pass,
                 icc,
-                film == cli::FilmType::Mono,
+                film == Film::MonochromeNegative,
                 ir,
             )?;
             info!(
@@ -432,8 +432,8 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
 /// the difference between the orange mask coming off before the ADC and being
 /// quantised through, and there is nothing in the output that says which
 /// happened
-fn hold_white_balance(film: cli::FilmType, unlock: bool, lock: bool) -> bool {
-    let default = Metering::locks_white_balance(film.into());
+fn hold_white_balance(film: Film, unlock: bool, lock: bool) -> bool {
+    let default = Metering::locks_white_balance(film);
     let asked = match (lock, unlock) {
         (true, _) => true,
         (_, true) => false,

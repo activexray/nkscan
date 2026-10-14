@@ -117,32 +117,8 @@ pub struct Scan {
     pub format: Option<FilmFormat>,
 
     /// Film type, which picks the color profile the scans are tagged with
-    #[arg(long, value_enum, default_value_t = FilmType::Negative)]
-    pub film: FilmType,
-}
-
-/// The film types Nikon profiled, as flag values
-#[derive(Debug, Copy, Clone, PartialEq, Eq, clap::ValueEnum)]
-pub enum FilmType {
-    /// Slide film
-    Positive,
-    /// Color negative
-    Negative,
-    /// Kodachrome, whose dyes need their own profile
-    Kodachrome,
-    /// Black and white negative
-    Mono,
-}
-
-impl From<FilmType> for Film {
-    fn from(f: FilmType) -> Self {
-        match f {
-            FilmType::Positive => Film::Positive,
-            FilmType::Negative => Film::Negative,
-            FilmType::Kodachrome => Film::Kodachrome,
-            FilmType::Mono => Film::MonochromeNegative,
-        }
-    }
+    #[arg(long, value_enum, default_value_t = Film::Negative)]
+    pub film: Film,
 }
 
 /// A log level flag, by name

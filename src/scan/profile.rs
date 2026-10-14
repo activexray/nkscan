@@ -26,15 +26,26 @@ use crate::protocol::{caps::identity::Identity, model::Model};
 ///
 /// The scanner is the same; the dyes it is looking through are not
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum Film {
     /// Slide film, and what Nikon Scan uses when nothing else is chosen
     #[default]
+    #[cfg_attr(feature = "cli", value(help = "Slide film"))]
     Positive,
     /// Color negative, mask and all
+    #[cfg_attr(feature = "cli", value(help = "Color negative"))]
     Negative,
     /// Kodachrome, whose dyes are enough unlike E6 to need their own
+    #[cfg_attr(
+        feature = "cli",
+        value(help = "Kodachrome, whose dyes need their own profile")
+    )]
     Kodachrome,
     /// Black and white negative. A matrix rather than a table
+    #[cfg_attr(
+        feature = "cli",
+        value(name = "mono", help = "Black and white negative")
+    )]
     MonochromeNegative,
 }
 

@@ -247,7 +247,12 @@ fn packed_rows(caps: &Capabilities, interleaving: ColorInterleaving) -> u8 {
 /// The transfer lengths a READ has to end on, `Address` byte 4
 ///
 /// Bit 1 makes it a line across every color, bit 2 one line. Neither set means
-/// the unit constrains nothing, so any length will do
+/// the unit constrains nothing, but a READ still ends on a whole line across
+/// every color, as Nikon Scan's do. An LS-4000 on the SA-30 sets neither, and a
+/// thumbnail read in lengths that end mid-line comes back with its 8Eh records
+/// running ahead of its lines, about 20 over a roll, so every frame lands a
+/// little further off than the last. Where a line will not fit one READ, the
+/// session reads in any lengths instead, see `Session::image_chunks`
 ///
 /// A line is what the unit puts on the wire, so it counts the bytes 2-11-5-3
 /// attaches to each one. A length that ends mid-line is rounded up to the next
@@ -276,7 +281,7 @@ fn read_granules(caps: &Capabilities, layout: &Layout, truncated: Option<&Trunca
         };
     }
     if !transfer.contains(Transfer::READ_LINE) {
-        return Granules::NONE;
+        return Granules::every(whole_line);
     }
 
     // What is attached across all colors sits at the ends of the whole line, so
@@ -680,6 +685,24 @@ mod tests {
         assert_eq!((coarse.pixels, coarse.lines), (4000, 8000));
     }
 
+    /// An LS-4000 on the SA-30 sets neither line bit. Its thumbnail, 96 pixels
+    /// of three colors at two bytes, is read 227 whole lines at a time, as
+    /// Nikon Scan reads it, and not in 131072 bytes that end mid-line
+    #[test]
+    fn a_thumbnail_on_a_unit_that_asks_for_no_unit_is_read_in_whole_lines() {
+        let mut windows = rgb(97, (3946, 250_278));
+        for w in &mut windows {
+            w.scanning_kind = ScanKind::THUMBNAIL;
+        }
+        let layout = Layout::new(&caps(0x01, 1, 3), &windows, 4000, None).unwrap();
+        assert_eq!(layout.pixels, 96);
+        assert_eq!(layout.granules, Granules::every(576));
+        assert_eq!(
+            layout.granules.take(0, layout.total_bytes(), 128 * 1024),
+            130_752
+        );
+    }
+
     /// Address byte 4 gives the two constraints different units, and the LS-5000
     /// sets the wider one
     #[test]
@@ -692,8 +715,9 @@ mod tests {
                 .granules
         };
 
-        // Bit 0 is microcode downloading, not a constraint on READ
-        assert_eq!(granule(0x01), Granules::NONE);
+        // Bit 0 is microcode downloading, not a constraint on READ, and with no
+        // constraint a READ ends on a whole line across every color all the same
+        assert_eq!(granule(0x01), Granules::every(line * 3));
         assert_eq!(granule(0x03), Granules::every(line * 3));
         assert_eq!(granule(0x05), Granules::every(line));
     }

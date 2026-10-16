@@ -109,6 +109,10 @@ matches_nikon!(
     a_strip_starting_on_its_first_frame_is_framed_as_nikon_frames_it,
     "coolscan_v_frame_test"
 );
+matches_nikon!(
+    an_ls4000_roll_is_framed_as_nikon_frames_it,
+    "ls4000_full_roll"
+);
 
 /// A nudge stays after line 0 and before the last record, at most 144 lines
 #[test]

@@ -379,6 +379,11 @@ mod tests {
     }
 
     #[test]
+    fn an_ls4000_roll_thumbnail_window_is_nikons() {
+        windows_match_nikon("ls4000", Film::Negative, [46805, 36481, 29701]);
+    }
+
+    #[test]
     fn an_ls9000_thumbnail_window_is_nikons() {
         windows_match_nikon("ls9000", Film::Positive, [326754, 234030, 192099]);
     }

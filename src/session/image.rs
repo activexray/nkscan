@@ -8,9 +8,10 @@ use super::{DRAIN_TIMEOUT, MOVE_TIMEOUT, Session};
 use crate::{
     error::Error,
     protocol::{
+        caps::address::Transfer,
         cdbs::Read,
         data::DataType,
-        image::Layout,
+        image::{Granules, Layout},
         sense::{Fault, Refusal},
     },
     transport::Data,
@@ -95,11 +96,13 @@ impl Session {
     /// Dropping one closes the scan, whatever route the caller took out of it
     pub fn image_chunks<'a>(&'a mut self, layout: &Layout) -> Result<Chunks<'a>, Error> {
         let chunk = self.chunk_size(layout)?;
+        let mut layout = layout.clone();
+        layout.granules = fitted(layout.granules, chunk, self.requires_granules());
         Ok(Chunks {
             session: self,
-            layout: layout.clone(),
-            chunk,
             remaining: layout.total_bytes(),
+            layout,
+            chunk,
             at: 0,
             spent: false,
             closed: false,
@@ -121,7 +124,7 @@ impl Session {
         }
 
         let granule = layout.granules.widest();
-        if granule > chunk {
+        if granule > chunk && self.requires_granules() {
             return Err(Error::Unsupported {
                 op: "image read",
                 reason: format!(
@@ -130,6 +133,28 @@ impl Session {
             });
         }
         Ok(chunk)
+    }
+}
+
+impl Session {
+    /// Whether `Address` byte 4 makes the unit split a READ only on its own units
+    fn requires_granules(&self) -> bool {
+        self.caps
+            .address
+            .transfer
+            .intersects(Transfer::READ_LINE | Transfer::READ_LINE_COLS)
+    }
+}
+
+/// The lengths a READ ends on, given that one READ carries at most `chunk`
+///
+/// Whole lines are only what Nikon Scan reads where the unit asks for no unit
+/// of its own, so a line wider than one READ is read in any lengths rather
+/// than refused. A unit that does ask is refused by `chunk_size` instead
+fn fitted(granules: Granules, chunk: usize, required: bool) -> Granules {
+    match granules.widest() > chunk && !required {
+        true => Granules::NONE,
+        false => granules,
     }
 }
 
@@ -375,7 +400,19 @@ impl Drop for Chunks<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::fitted;
     use crate::protocol::image::Granules;
+
+    /// A unit that asks for no unit still gets whole lines, unless one will not fit a READ
+    #[test]
+    fn whole_lines_give_way_only_where_a_line_does_not_fit() {
+        let line = Granules::every(576);
+        assert_eq!(fitted(line, 131_072, false), line);
+        let wide = Granules::every(48_000);
+        assert_eq!(fitted(wide, 32_768, false), Granules::NONE);
+        // A unit that asks for its lines keeps them, and `chunk_size` refuses the scan
+        assert_eq!(fitted(wide, 32_768, true), wide);
+    }
 
     /// A packed three-row pass over a line count that does not divide by three
     /// leaves a part-group at the end, and asking for it as it stands is what

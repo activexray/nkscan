@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- On a unit that sets neither line bit in address byte 4, image READs now end on a whole line across every color, as Nikon Scan's do. On an LS-4000 with the SA-30, thumbnail READs that ended mid-line made the 8Eh records run about 20 lines ahead of the image over a roll. Each frame then landed a little further off than the last, about 4 mm by frame 40. Where a line will not fit one READ, the image is read in any lengths as before.
+
 ## [0.14.1]
 
 ### Added

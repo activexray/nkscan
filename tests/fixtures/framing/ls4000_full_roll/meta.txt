@@ -1,0 +1,4 @@
+bits 14
+film negative
+frames 40
+line_pitch 41

@@ -481,7 +481,7 @@ impl UsbTransport {
 impl Transport for UsbTransport {
     fn max_transfer(&self) -> usize {
         // A cap on what one READ asks for, not a limit of the unit
-        128 * 1024
+        1024 * 1024
     }
 
     fn execute(

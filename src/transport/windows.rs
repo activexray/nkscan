@@ -33,7 +33,8 @@ const SRB_STATUS_MASK: u8 = 0x3F;
 const SENSE_LENGTH: usize = 32;
 const QUOTA_RETRIES: usize = 200;
 const QUOTA_RETRY_DELAY: Duration = Duration::from_millis(50);
-const MAX_TRANSFER: usize = 128 * 1024;
+/// Nikon Scan sends READs of 804636 bytes through `SCSISCAN_CMD`
+const MAX_TRANSFER: usize = 1024 * 1024;
 
 /// Microsoft's `SCSISCAN_CMD`, from `scsiscan.h`
 #[repr(C)]

@@ -95,9 +95,8 @@ impl Session {
     ///
     /// Dropping one closes the scan, whatever route the caller took out of it
     pub fn image_chunks<'a>(&'a mut self, layout: &Layout) -> Result<Chunks<'a>, Error> {
-        let chunk = self.chunk_size(layout)?;
         let mut layout = layout.clone();
-        layout.granules = fitted(layout.granules, chunk, self.requires_granules());
+        let chunk = self.chunk_size(&mut layout)?;
         Ok(Chunks {
             session: self,
             remaining: layout.total_bytes(),
@@ -112,27 +111,36 @@ impl Session {
 
     /// The most one READ may ask for
     ///
-    /// Bounded by what the transport can carry and by `Address`'s general SCSI
-    /// buffer size. What a READ actually asks for inside that is
+    /// The transport's preferred size, or one granule when a granule is larger,
+    /// but never more than the transport and `Address`'s general SCSI buffer
+    /// size can carry.
+    /// What a READ actually asks for inside that is
     /// [`Granules::take`](crate::protocol::image::Granules::take)'s business,
     /// since it is where in a line the stream has got to that says where the
     /// next one may stop
-    fn chunk_size(&self, layout: &Layout) -> Result<usize, Error> {
-        let mut chunk = self.transport.max_transfer();
+    ///
+    /// When the unit sets neither line bit and a line is too large for one
+    /// READ, `layout` changes to one reading per granule, as Nikon Scan reads
+    /// it
+    fn chunk_size(&self, layout: &mut Layout) -> Result<usize, Error> {
+        let mut most = self.transport.max_transfer();
         if let Some(limit) = self.caps.address.scsi_buffer {
-            chunk = chunk.min(usize::from(limit));
+            most = most.min(usize::from(limit));
+        }
+        if !self.requires_granules() {
+            layout.granules = fitted(layout.granules, layout.reading_granules(), most);
         }
 
         let granule = layout.granules.widest();
-        if granule > chunk && self.requires_granules() {
+        if granule > most {
             return Err(Error::Unsupported {
                 op: "image read",
                 reason: format!(
-                    "this unit reads in units of {granule} bytes, and no more than {chunk} can be transferred at once"
+                    "this unit reads in units of {granule} bytes, and no more than {most} can be transferred at once"
                 ),
             });
         }
-        Ok(chunk)
+        Ok(granule.max(self.transport.preferred_transfer()).min(most))
     }
 }
 
@@ -146,15 +154,14 @@ impl Session {
     }
 }
 
-/// The lengths a READ ends on, given that one READ carries at most `chunk`
+/// The lengths a READ ends on when one READ can carry at most `most` bytes
 ///
-/// Whole lines are only what Nikon Scan reads where the unit asks for no unit
-/// of its own, so a line wider than one READ is read in any lengths rather
-/// than refused. A unit that does ask is refused by `chunk_size` instead
-fn fitted(granules: Granules, chunk: usize, required: bool) -> Granules {
-    match granules.widest() > chunk && !required {
-        true => Granules::NONE,
-        false => granules,
+/// A whole line, or else one reading of a line. Nikon Scan reads a large
+/// LS-9000 line in this way
+fn fitted(line: Granules, readings: Granules, most: usize) -> Granules {
+    match line.widest() > most {
+        true => readings,
+        false => line,
     }
 }
 
@@ -403,15 +410,17 @@ mod tests {
     use super::fitted;
     use crate::protocol::image::Granules;
 
-    /// A unit that asks for no unit still gets whole lines, unless one will not fit a READ
+    /// A line that is too large for one READ is read one reading at a time
     #[test]
-    fn whole_lines_give_way_only_where_a_line_does_not_fit() {
-        let line = Granules::every(576);
-        assert_eq!(fitted(line, 131_072, false), line);
-        let wide = Granules::every(48_000);
-        assert_eq!(fitted(wide, 32_768, false), Granules::NONE);
-        // A unit that asks for its lines keeps them, and `chunk_size` refuses the scan
-        assert_eq!(fitted(wide, 32_768, true), wide);
+    fn a_line_too_large_for_one_read_is_read_in_readings() {
+        let line = Granules::every(3 * 878_472);
+        let readings = Granules {
+            first: 3 * 71_712,
+            rest: 3 * 53_784,
+            line: 3 * 878_472,
+        };
+        assert_eq!(fitted(line, readings, 4 * 1024 * 1024), line);
+        assert_eq!(fitted(line, readings, 1024 * 1024), readings);
     }
 
     /// A packed three-row pass over a line count that does not divide by three

@@ -189,7 +189,7 @@ ioctl_write_ptr_bad!(sg_set_reserved_size, SG_SET_RESERVED_SIZE, i32);
 ioctl_read_bad!(sg_get_reserved_size, SG_GET_RESERVED_SIZE, i32);
 
 /// What to ask the reserved buffer to be, in bytes
-const WANTED_RESERVED_SIZE: i32 = 512 * 1024;
+const WANTED_RESERVED_SIZE: i32 = 1024 * 1024;
 
 /// A SCSI-Generic Nikon Scanner
 pub struct SgTransport {
@@ -362,5 +362,10 @@ impl Transport for SgTransport {
 
     fn max_transfer(&self) -> usize {
         self.max_transfer as usize
+    }
+
+    // The reserved buffer is already the size the kernel gives one transfer
+    fn preferred_transfer(&self) -> usize {
+        self.max_transfer()
     }
 }

@@ -333,8 +333,8 @@ impl Drop for ScsiTaskTransport {
 
 impl Transport for ScsiTaskTransport {
     fn max_transfer(&self) -> usize {
-        // Same normal-ish chunk as the other transports
-        128 * 1024
+        // Same cap as the other transports
+        1024 * 1024
     }
 
     #[instrument(skip_all, fields(cdb = ?cdb, ?data))]

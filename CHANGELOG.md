@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- On a unit that sets neither line bit in address byte 4, image READs now end on a whole line across every color, as Nikon Scan's do. On an LS-4000 with the SA-30, thumbnail READs that ended mid-line made the 8Eh records run about 20 lines ahead of the image over a roll. Each frame then landed a little further off than the last, about 4 mm by frame 40. Where a line will not fit one READ, the image is read in any lengths as before.
+- When a unit sets neither line bit in `Address` byte 4, a READ now ends on a whole line, as Nikon Scan's READs do. On an LS-4000 with the SA-30, READs that ended mid-line gave more 8Eh records than lines, and frames were registered further off along the roll. When one line is too large for one READ, a READ ends on one reading of a line. If one reading is also too large, the scan is refused.
+- A READ can now be up to 1 MB on Windows, macOS and USB, and on Linux when the kernel allows it. A READ is larger than before only when one line or reading is larger than the usual READ size: 128 KB, or the sg reserved buffer on Linux.
 
 ## [0.14.1]
 

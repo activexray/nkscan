@@ -168,10 +168,20 @@ impl From<u8> for Status {
     }
 }
 
+/// What one READ asks for by default. On an LS-4000 with the SA-30, Nikon Scan
+/// reads a thumbnail in READs of 130752 bytes, which is 227 lines
+const PREFERRED_TRANSFER: usize = 128 * 1024;
+
 /// What one platform backend has to implement to carry a CDB and its data phase
 pub trait Transport: Send {
     /// The maximum size in bytes we can transfer in a single operation.
     fn max_transfer(&self) -> usize;
+
+    /// What one READ asks for, in bytes, when one line or reading is smaller.
+    /// Never more than [`max_transfer`](Transport::max_transfer)
+    fn preferred_transfer(&self) -> usize {
+        PREFERRED_TRANSFER.min(self.max_transfer())
+    }
 
     /// Run one SCSI transaction: `cdb` is the command, `data` its data phase
     ///

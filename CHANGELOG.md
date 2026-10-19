@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `Capabilities` has a new field, `holder`, which gives the name of the holder.
+
+### Fixed
+
+- On the LS-40, the prescan is now 290 dpi. The metering crop for 135 and IX240 film on the LS-40 is now the LS-40 crop from LS4000.md3. Before this change, the prescan was 285 dpi, and the crop was the LS-4000 crop, changed to the LS-40 resolution.
+- On the LS-40, LS-4000, LS-50 and LS-5000, the adapter, the holder and the film now select the metering crop, as in Nikon Scan. Before this change, positives used the negative crop. For a positive in a strip adapter, metering now uses the full width of the frame. A positive in the FH-3 holder has its own crop. For a positive in other holders, in the slide feeder or in the IA-20, metering uses the full prescan.
+
 ## [0.14.3]
 
 ### Fixed

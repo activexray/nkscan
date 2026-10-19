@@ -9,7 +9,7 @@ use crate::{
         },
         window::{Channel, Flags, Window},
     },
-    scan::meter::Metering,
+    scan::meter::{Metering, prescan_divisor},
 };
 use std::collections::BTreeMap;
 
@@ -118,12 +118,14 @@ pub(crate) fn prescan_windows(caps: &Capabilities, windows: &[Window]) -> Vec<Wi
         .map(|w| {
             let mut w = w.clone();
             // An LS-8000/9000 prescan halves Y and has no averaging (byte 41 is 01h)
-            // An LS-50/5000 prescan is 285 dpi with averaging (byte 41 is 80h)
+            // An LS-50/5000 prescan is 285 dpi with averaging (byte 41 is 80h). The
+            // LS-40 prescan is 290 dpi (LS4000.md3 `10034dc8`)
             if caps.identity.is_mf_scanner() {
                 w.resolution = (dpi, dpi / 2);
                 w.flags.remove(Flags::AVERAGING);
             } else {
-                w.resolution = (285, 285);
+                let dpi = caps.address.x_axis.optical_dpi / prescan_divisor(caps);
+                w.resolution = (dpi, dpi);
             }
             if fast {
                 w.scanning_mode = ScanMode::HIGH_SPEED;

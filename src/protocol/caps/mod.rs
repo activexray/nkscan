@@ -38,6 +38,9 @@ pub struct Capabilities {
     pub frames: Option<frames::Frames>,
     /// The adapter name, FRU ASCII page 01h (2-2-2-2); `None` if the unit has no such page
     pub adapter: Option<String>,
+    /// The name of the holder, from the FRU ASCII page that `Address` byte 15 gives (10h on
+    /// the MA-21: FH-3, FH-G1 or FH-A1). `None` if there is no holder
+    pub holder: Option<String>,
 }
 
 impl Capabilities {

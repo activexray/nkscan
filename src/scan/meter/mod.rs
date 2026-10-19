@@ -237,38 +237,37 @@ impl Metering {
         }
     }
 
-    /// The measured crop in prescan pixels (LS5000.md3 Mac `1009e250`, LS9000.md3 `1003a780`)
+    /// The measured crop in prescan pixels (LS5000.md3 Mac `1009e250`, LS4000.md3 `10034f6a`,
+    /// LS9000.md3 `1003a780`)
     fn crop(&self, caps: &Capabilities, window: &Window, image: &Image) -> Crop {
-        let device: Option<[u32; 4]> = match self.format {
-            Some(FilmFormat::F135) => Some([36, 245, 50, 375].map(|v| v * 14)),
-            Some(FilmFormat::IX240) => Some([0x1c, 0xb2, 0x21, 0x11b].map(|v| v * 14)),
-            Some(FilmFormat::F645) => Some([547, 8417, 675, 6021]),
-            Some(FilmFormat::F66) => Some([547, 8417, 675, 8289]),
-            Some(FilmFormat::F67) => Some([547, 8417, 675, 10341]),
-            Some(FilmFormat::F68) => Some([547, 8417, 675, 11529]),
-            Some(FilmFormat::F69) => Some([547, 8417, 675, 12501]),
-            _ => None,
+        let ls40 = caps.address.x_axis.optical_dpi != 4000;
+        let n = u32::from(prescan_divisor(caps));
+        let device: Option<[u32; 4]> = match adapter_crop(caps, self.film) {
+            Some(crop) => crop.map(|c| c.map(|v| v * n)),
+            None => match self.format {
+                Some(FilmFormat::F135) if ls40 => Some([36, 249, 51, 381].map(|v| v * n)),
+                Some(FilmFormat::F135) => Some([36, 245, 50, 375].map(|v| v * n)),
+                Some(FilmFormat::IX240) if ls40 => Some([0x1d, 0xb6, 0x22, 0x121].map(|v| v * n)),
+                Some(FilmFormat::IX240) => Some([0x1c, 0xb2, 0x21, 0x11b].map(|v| v * n)),
+                Some(FilmFormat::F645) => Some([547, 8417, 675, 6021]),
+                Some(FilmFormat::F66) => Some([547, 8417, 675, 8289]),
+                Some(FilmFormat::F67) => Some([547, 8417, 675, 10341]),
+                Some(FilmFormat::F68) => Some([547, 8417, 675, 11529]),
+                Some(FilmFormat::F69) => Some([547, 8417, 675, 12501]),
+                _ => None,
+            },
         };
         let Some([x0, x1, y0, y1]) = device else {
             return Crop::whole(image);
         };
         let (pixels, lines) = (image.rows - 1, image.cols - 1);
-        let (ox, oy) = (
-            caps.address.x_axis.optical_dpi,
-            caps.address.y_axis.optical_dpi,
-        );
         let reduce = |optical: u16, dpi: u16| u32::from(optical / dpi.max(1)).max(1);
-        let (rx, ry) = (
-            reduce(ox, window.resolution.0),
-            reduce(oy, window.resolution.1),
-        );
-        let at = |v: u32, optical: u16, r: u32, last: usize| {
-            let dots = (u64::from(v) * u64::from(optical) + 2000) / 4000;
-            ((dots / u64::from(r)) as usize).min(last)
-        };
+        let rx = reduce(caps.address.x_axis.optical_dpi, window.resolution.0);
+        let ry = reduce(caps.address.y_axis.optical_dpi, window.resolution.1);
+        let at = |v: u32, r: u32, last: usize| ((v / r) as usize).min(last);
         Crop {
-            x: (at(x0, ox, rx, pixels), at(x1, ox, rx, pixels)),
-            y: (at(y0, oy, ry, lines), at(y1, oy, ry, lines)),
+            x: (at(x0, rx, pixels), at(x1, rx, pixels)),
+            y: (at(y0, ry, lines), at(y1, ry, lines)),
         }
     }
 
@@ -279,6 +278,40 @@ impl Metering {
             .into_iter()
             .map(|e| e.clamp(limit.start, limit.last.min(MAX_EXPOSURE)))
             .collect()
+    }
+}
+
+/// The 35mm crop of Nikon Scan in prescan pixels, from the adapter, the holder and the film.
+/// `Some(None)` is the full prescan. `None` is an adapter that is not known (LS5000.md3
+/// `1003c1f0`, LS4000.md3 `10034bd0`)
+fn adapter_crop(caps: &Capabilities, film: Film) -> Option<Option<[u32; 4]>> {
+    if caps.identity.is_mf_scanner() {
+        return None;
+    }
+    let ls40 = caps.address.x_axis.optical_dpi != 4000;
+    let fh3 = matches!(caps.holder.as_deref(), Some("FH-3" | "FH3"));
+    let crop = match (caps.adapter.as_deref()?, film.is_negative(), ls40) {
+        ("240", true, false) => [0x1c, 0xb2, 0x21, 0x11b],
+        ("240", true, true) => [0x1d, 0xb6, 0x22, 0x121],
+        ("Mount" | "Feeder" | "Strip" | "6Strip" | "36Strip", true, false) => [36, 245, 50, 375],
+        ("Mount" | "Feeder" | "Strip" | "6Strip" | "36Strip", true, true) => [36, 249, 51, 381],
+        ("Strip" | "6Strip" | "36Strip", false, false) => [0, 0x119, 0x13, 0x196],
+        ("Strip" | "6Strip" | "36Strip", false, true) => [0, 0x11e, 0x13, 0x19d],
+        ("Mount", false, false) if fh3 => [0, 0x119, 9, 0x192],
+        ("Mount", false, true) if fh3 => [0, 0x11e, 0xa, 0x199],
+        ("Mount" | "Feeder" | "240", false, _) => return Some(None),
+        _ => return None,
+    };
+    Some(Some(crop))
+}
+
+/// The optical resolution divided by the 35mm prescan resolution. This is 14 on a 4000 dpi
+/// unit and 10 on the 2900 dpi LS-40 (LS4000.md3 `10034dc8`)
+pub(crate) fn prescan_divisor(caps: &Capabilities) -> u16 {
+    if caps.address.x_axis.optical_dpi == 4000 {
+        14
+    } else {
+        10
     }
 }
 
@@ -421,9 +454,43 @@ mod tests {
         thumbnail::base_density(&image, ratio).expect("a base density")
     }
 
-    /// On a 2900 dpi LS-40, the 135 crop measures the same area of film as on a 4000 dpi unit
+    /// A 35mm unit selects the crop from its adapter, its holder and the film (LS5000.md3 `1003c1f0`)
     #[test]
-    fn the_135_crop_is_rescaled_to_the_units_optical_resolution() {
+    fn a_35mm_unit_crops_by_adapter_holder_and_film() {
+        let planes = vec![vec![0u16; 281 * 425]; 3];
+        let image = Image {
+            colors: planes.iter().map(Vec::as_slice).collect(),
+            ir: &[],
+            rows: 281,
+            cols: 425,
+            stride: 425,
+            bits: 14,
+        };
+        let w = windows(&[1])[0].clone();
+        let crop = |adapter: &str, holder: Option<&str>, film| {
+            let mut caps = unit();
+            caps.identity.product = "LS-50 ED".into();
+            caps.adapter = Some(adapter.into());
+            caps.holder = holder.map(Into::into);
+            let c = Metering::new(film).crop(&caps, &w, &image);
+            (c.x, c.y)
+        };
+        let whole = ((0, 280), (0, 424));
+        assert_eq!(crop("6Strip", None, Film::Negative), ((36, 245), (50, 375)));
+        assert_eq!(crop("Mount", None, Film::Negative), ((36, 245), (50, 375)));
+        assert_eq!(crop("6Strip", None, Film::Positive), ((0, 280), (19, 406)));
+        assert_eq!(
+            crop("Mount", Some("FH-3"), Film::Positive),
+            ((0, 280), (9, 402))
+        );
+        assert_eq!(crop("Mount", Some("FH-G1"), Film::Positive), whole);
+        assert_eq!(crop("Feeder", None, Film::Kodachrome), whole);
+        assert_eq!(crop("240", None, Film::Positive), whole);
+    }
+
+    /// The LS-40 has its own 135 crop (LS4000.md3 `10035021`)
+    #[test]
+    fn the_ls40_has_its_own_135_crop() {
         let planes = vec![vec![0u16; 400 * 600]; 3];
         let image = Image {
             colors: planes.iter().map(Vec::as_slice).collect(),
@@ -447,8 +514,7 @@ mod tests {
         ls40.address.y_axis.optical_dpi = 2900;
         w.resolution = (290, 290);
         let crop = metering.crop(&ls40, &w, &image);
-        // At 2900 dpi, the 4000 dpi bounds 504, 3430, 700 and 5250 are 365, 2487, 508 and 3806
-        assert_eq!((crop.x, crop.y), ((36, 248), (50, 380)));
+        assert_eq!((crop.x, crop.y), ((36, 249), (51, 381)));
     }
 
     /// `coolscan_v_frame_test` gets Nikon Scan's exposures to the count

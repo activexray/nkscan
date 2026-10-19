@@ -944,6 +944,7 @@ mod tests {
             ccd: None,
             frames: None,
             adapter: None,
+            holder: None,
         }
     }
 

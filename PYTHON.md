@@ -74,7 +74,7 @@ if not caps.film_formats:
 `scan_frame` and `meter_frame` meter the frame as Nikon Scan does: a prescan, then the film curve for a negative or full scale for a positive. Give them the same values as `discover_frames`:
 
 - `film`: "positive" (the default), "slide", "negative", "kodachrome" or "mono".
-- `format`: the film format, which sets the part of the frame that is metered.
+- `format`: the film format. On the LS-8000 and LS-9000, the format sets the part of the frame that is metered. On a 35mm unit, the adapter, the holder and the film set that part, and the format is used only when the adapter is not known.
 - `base_density`: `Discovery.base_density`, the film base density off the thumbnail. `None` uses Nikon Scan's defaults.
 
 `lock_white_balance` decides whether the channels are metered together or one at a time. It defaults to `Capabilities.locks_white_balance(film)`. Color negative meters each channel separately, which takes the orange mask off before the ADC. Slide, Kodachrome and black and white keep the factory balance. `caps.hardware_metering` is `False` on every unit seen, so metering happens here and not in the scanner.

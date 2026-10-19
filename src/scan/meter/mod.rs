@@ -253,13 +253,22 @@ impl Metering {
             return Crop::whole(image);
         };
         let (pixels, lines) = (image.rows - 1, image.cols - 1);
+        let (ox, oy) = (
+            caps.address.x_axis.optical_dpi,
+            caps.address.y_axis.optical_dpi,
+        );
         let reduce = |optical: u16, dpi: u16| u32::from(optical / dpi.max(1)).max(1);
-        let rx = reduce(caps.address.x_axis.optical_dpi, window.resolution.0);
-        let ry = reduce(caps.address.y_axis.optical_dpi, window.resolution.1);
-        let at = |v: u32, r: u32, last: usize| ((v / r) as usize).min(last);
+        let (rx, ry) = (
+            reduce(ox, window.resolution.0),
+            reduce(oy, window.resolution.1),
+        );
+        let at = |v: u32, optical: u16, r: u32, last: usize| {
+            let dots = (u64::from(v) * u64::from(optical) + 2000) / 4000;
+            ((dots / u64::from(r)) as usize).min(last)
+        };
         Crop {
-            x: (at(x0, rx, pixels), at(x1, rx, pixels)),
-            y: (at(y0, ry, lines), at(y1, ry, lines)),
+            x: (at(x0, ox, rx, pixels), at(x1, ox, rx, pixels)),
+            y: (at(y0, oy, ry, lines), at(y1, oy, ry, lines)),
         }
     }
 
@@ -410,6 +419,36 @@ mod tests {
         };
         let ratio = std::array::from_fn(|c| f64::from(base[c]) / f64::from(taken[c]));
         thumbnail::base_density(&image, ratio).expect("a base density")
+    }
+
+    /// On a 2900 dpi LS-40, the 135 crop measures the same area of film as on a 4000 dpi unit
+    #[test]
+    fn the_135_crop_is_rescaled_to_the_units_optical_resolution() {
+        let planes = vec![vec![0u16; 400 * 600]; 3];
+        let image = Image {
+            colors: planes.iter().map(Vec::as_slice).collect(),
+            ir: &[],
+            rows: 400,
+            cols: 600,
+            stride: 600,
+            bits: 14,
+        };
+        let metering = Metering {
+            format: Some(FilmFormat::F135),
+            ..Metering::new(Film::Positive)
+        };
+        let mut w = windows(&[1])[0].clone();
+        w.resolution = (400, 400);
+        let four = metering.crop(&unit(), &w, &image);
+        assert_eq!((four.x, four.y), ((50, 343), (70, 525)));
+
+        let mut ls40 = unit();
+        ls40.address.x_axis.optical_dpi = 2900;
+        ls40.address.y_axis.optical_dpi = 2900;
+        w.resolution = (290, 290);
+        let crop = metering.crop(&ls40, &w, &image);
+        // At 2900 dpi, the 4000 dpi bounds 504, 3430, 700 and 5250 are 365, 2487, 508 and 3806
+        assert_eq!((crop.x, crop.y), ((36, 248), (50, 380)));
     }
 
     /// `coolscan_v_frame_test` gets Nikon Scan's exposures to the count

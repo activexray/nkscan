@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The metering crop for 135 and IX240 film now changes from Nikon's 4000 dpi dots to dots at the optical resolution of the unit. Before this change, the crop on a 2900 dpi LS-40 was not at the center of the frame.
+
 ## [0.14.2]
 
 ### Fixed

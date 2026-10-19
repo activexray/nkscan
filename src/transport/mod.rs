@@ -168,8 +168,9 @@ impl From<u8> for Status {
     }
 }
 
-/// What one READ asks for by default. On an LS-4000 with the SA-30, Nikon Scan
-/// reads a thumbnail in READs of 130752 bytes, which is 227 lines
+/// The usual size of one READ. Nikon Scan does not use this size. It is the
+/// limit that nkscan used before READs ended on whole lines. The READs of Nikon
+/// Scan are 128 KB to 786 KB, and they change with the unit and the pass
 const PREFERRED_TRANSFER: usize = 128 * 1024;
 
 /// What one platform backend has to implement to carry a CDB and its data phase

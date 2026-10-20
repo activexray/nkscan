@@ -10,7 +10,7 @@
 //! # pollster::block_on(async {
 //! let devices = device::list().await;
 //! let device = devices.first().expect("no scanner found");
-//! let mut session = Session::open(device.open()?).await?;
+//! let mut session = Session::open(device.open().await?).await?;
 //!
 //! session.stage().await?; // homes the mechanism once a holder is loaded
 //! let caps = session.capabilities();
@@ -18,7 +18,6 @@
 //! # });
 //! ```
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod device;
 pub mod dust;
 pub mod error;

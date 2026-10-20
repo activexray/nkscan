@@ -59,6 +59,11 @@ impl Model {
             .map(|(model, _, _)| *model)
     }
 
+    /// The USB product ID of every model that is a USB unit
+    pub fn usb_products() -> impl Iterator<Item = u16> {
+        MODELS.iter().filter_map(|(_, _, pid)| *pid)
+    }
+
     /// This model's USB product ID, where it is a USB unit at all
     pub fn usb(self) -> Option<u16> {
         MODELS

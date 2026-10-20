@@ -14,11 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `Session::close` releases the unit and stops a pass that was left unread. Dropping a session still does this natively. In a browser build `Drop` cannot send a command, so `close` is how a session gives the unit back there.
-- The library builds for `wasm32-unknown-unknown`. The `device` module and the native USB transport are not in that build yet, and `.cargo/config.toml` sets the cfg that nusb's WebUSB backend needs.
+- The library builds for `wasm32-unknown-unknown` and drives a USB scanner over WebUSB. The USB transport runs the same phase handshake on both, and only the bulk transfers differ: WebUSB cannot cancel a transfer, so a read that timed out takes the unit's next answer rather than a second read queueing behind it. `.cargo/config.toml` sets the cfg that nusb's WebUSB backend needs.
+- `device::request` asks the person for a USB scanner. In a browser it opens the WebUSB chooser, and the unit picked is then in `device::list` as well. Natively it answers the first USB scanner attached.
+- `Model::usb_products` gives the USB product ID of every USB model.
 
 ### Changed
 
-- **Breaking:** the Rust API that talks to a unit is async. `Transport::execute` returns a boxed future, and `device::list`, `device::Selector::open`, `Session::open`, the `Session` methods that send a command, `session::probe`, and the `scan::frame` and `scan::framing` entry points are `async fn`. The native transports do their IO inside the future, so `pollster::block_on` runs them. The CLI and the Python API do not change.
+- **Breaking:** the Rust API that talks to a unit is async. `Transport::execute` returns a boxed future, and `device::list`, `device::Device::open`, `device::Selector::open`, `Session::open`, the `Session` methods that send a command, `session::probe`, and the `scan::frame` and `scan::framing` entry points are `async fn`. The native transports do their IO inside the future, so `pollster::block_on` runs them. The CLI and the Python API do not change.
 - **Breaking:** `dust::Options` has no `metering_target`, and `dust::theta_for_metering_target` is removed.
 - On the LS-8000 and LS-9000, negatives are metered with the default film base density, as in Nikon Scan. LS9000.md3 has no base density measurement from the thumbnail. `Discovery.base_density` is `None` on these units.
 

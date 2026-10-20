@@ -559,7 +559,7 @@ impl PySession {
     #[staticmethod]
     fn open(py: Python<'_>, device: &PyDevice) -> PyResult<Self> {
         let dev = device.0.clone();
-        py.detach(move || open_session(dev.open()?))
+        py.detach(move || open_session(block_on(dev.open())?))
             .map_err(PyErr::from)
     }
 

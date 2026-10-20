@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let devices = device::list().await;
         let device = devices.first().ok_or("no scanner")?;
-        let mut session = Session::open(device.open()?).await?;
+        let mut session = Session::open(device.open().await?).await?;
         session.stage().await?;
         let caps = session.capabilities();
         println!(

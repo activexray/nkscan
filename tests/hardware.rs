@@ -69,7 +69,7 @@ fn a_frame_scanned_twice_comes_back_in_the_same_place() {
     pollster::block_on(async {
         let devices = device::list().await;
         let device = devices.first().expect("a scanner");
-        let mut session = Session::open(device.open().expect("open"))
+        let mut session = Session::open(device.open().await.expect("open"))
             .await
             .expect("session");
         if Framing::choose(session.capabilities()) != Framing::Perforation {
@@ -136,7 +136,7 @@ fn a_frame_scans_at_the_exposures_metered_for_it() {
     pollster::block_on(async {
         let devices = device::list().await;
         let device = devices.first().expect("a scanner");
-        let mut session = Session::open(device.open().expect("open"))
+        let mut session = Session::open(device.open().await.expect("open"))
             .await
             .expect("session");
         session.stage().await.expect("stage");

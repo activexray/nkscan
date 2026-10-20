@@ -4,10 +4,13 @@
 use crate::transport::linux::SgTransport;
 use crate::{
     error::Error,
-    protocol::{caps::identity::Identity, cdbs::Inquiry, model::Model},
+    protocol::{
+        caps::identity::Identity,
+        cdbs::Inquiry,
+        model::{self, Model},
+    },
     transport::{Data, Status, Transport, usb::UsbTransport},
 };
-use nusb::MaybeFuture;
 /// Only the two platforms with a SCSI node to open name one
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use std::path::PathBuf;
@@ -20,12 +23,16 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Where a scanner is
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Attach {
+    #[cfg(not(target_arch = "wasm32"))]
     Usb {
         /// nusb's bus identifier
         bus: String,
         /// Hub port chain, which survives a replug into the same port
         ports: Vec<u8>,
     },
+    /// A unit the page was granted. A browser gives no bus or port
+    #[cfg(target_arch = "wasm32")]
+    WebUsb(WebUsb),
     #[cfg(target_os = "linux")]
     Sg(PathBuf), // /dev/sgN
     #[cfg(target_os = "windows")]
@@ -39,16 +46,58 @@ impl fmt::Display for Attach {
     /// The form `list` prints and a [`Selector`] accepts
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Attach::Usb { bus, ports } => {
                 let chain: Vec<_> = ports.iter().map(u8::to_string).collect();
                 write!(f, "usb:{bus}-{}", chain.join("."))
             }
+            #[cfg(target_arch = "wasm32")]
+            Attach::WebUsb(unit) => write!(f, "{unit}"),
             #[cfg(target_os = "linux")]
             Attach::Sg(p) => write!(f, "{}", p.display()),
             #[cfg(target_os = "windows")]
             Attach::Scanner(p) => write!(f, "{}", p.display()),
             #[cfg(target_os = "macos")]
             Attach::ScsiTask(id) => write!(f, "scsi:{id:#x}"),
+        }
+    }
+}
+
+/// A USB unit a page was granted
+///
+/// WebUSB hands out no bus or port to tell two units apart by, so this holds
+/// what it does hand out, and two of them are the same unit when nusb says so
+#[cfg(target_arch = "wasm32")]
+#[derive(Debug, Clone)]
+pub struct WebUsb {
+    info: nusb::DeviceInfo,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl PartialEq for WebUsb {
+    fn eq(&self, other: &Self) -> bool {
+        self.info.id() == other.info.id()
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Eq for WebUsb {}
+
+/// `webusb:` and the vendor and product IDs, then the serial number where the
+/// unit has one. Two units of one model without serial numbers print alike,
+/// and a [`Selector`] naming that location is then ambiguous
+#[cfg(target_arch = "wasm32")]
+impl fmt::Display for WebUsb {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "webusb:{:04x}:{:04x}",
+            self.info.vendor_id(),
+            self.info.product_id()
+        )?;
+        match self.info.serial_number() {
+            Some(serial) => write!(f, ":{serial}"),
+            None => Ok(()),
         }
     }
 }
@@ -85,18 +134,23 @@ impl Device {
         }
     }
 
-    /// Open one of the devices we found and box it into a transport.
-    /// This trait object needs to be object-safe and Send, which it is
-    pub fn open(&self) -> Result<Box<dyn Transport>, Error> {
+    /// Open one of the devices we found and box it into a transport
+    pub async fn open(&self) -> Result<Box<dyn Transport>, Error> {
         let io = |e: std::io::Error| Error::Transport(e.into());
         match &self.attach {
+            #[cfg(not(target_arch = "wasm32"))]
             Attach::Usb { bus, ports } => {
                 let info = usb_devices()
+                    .await
                     .into_iter()
                     .find(|d| d.bus_id() == bus && d.port_chain() == ports)
                     .ok_or(Error::NotFound)?;
-                Ok(Box::new(UsbTransport::open(info).map_err(io)?))
+                Ok(Box::new(UsbTransport::open(info).await.map_err(io)?))
             }
+            #[cfg(target_arch = "wasm32")]
+            Attach::WebUsb(unit) => Ok(Box::new(
+                UsbTransport::open(unit.info.clone()).await.map_err(io)?,
+            )),
             #[cfg(target_os = "linux")]
             Attach::Sg(path) => Ok(Box::new(SgTransport::open(path).map_err(io)?)),
             #[cfg(target_os = "windows")]
@@ -129,45 +183,77 @@ pub async fn list() -> Vec<Device> {
         .collect()
 }
 
+/// Ask the person for a USB scanner, answering the one they picked
+///
+/// In a browser this is how a page gets a unit at all: WebUSB lists only the
+/// units the page was granted, and this opens the browser's chooser for the
+/// rest. The browser takes it only from a click or a key press. Once a unit is
+/// granted, [`list`] finds it as well, in this visit and the next.
+///
+/// Natively nothing is asked, and this is the first USB scanner attached.
+/// `None` is nothing picked, or nothing attached
+pub async fn request() -> Result<Option<Device>, Error> {
+    let selectors: Vec<_> = Model::usb_products()
+        .map(|product| nusb::DeviceSelector::all().with_vid_pid(model::VENDOR, product))
+        .collect();
+    let picked = nusb::request_device(&selectors)
+        .await
+        .map_err(|e| Error::Transport(std::io::Error::from(e).into()))?;
+    Ok(match picked {
+        Some(info) => Some(usb_device(info).await.0),
+        None => None,
+    })
+}
+
 /// The same as [`list`], keeping each transport open
 async fn probed() -> Vec<Probed> {
     let mut found: Vec<Probed> = Vec::new();
-    for info in usb_devices() {
-        let attach = Attach::Usb {
-            bus: info.bus_id().to_string(),
-            ports: info.port_chain().to_vec(),
-        };
-        let model = Model::from_usb(info.vendor_id(), info.product_id());
-        // A unit another process holds, and a unit that does not answer,
-        // both stay in the list under the name the bus gives them
-        let (identity, transport) = match UsbTransport::open(info) {
-            Ok(mut transport) => (
-                probe(&mut transport).await,
-                Some(Box::new(transport) as Box<dyn Transport>),
-            ),
-            Err(e) => {
-                debug!(%e, "could not open a unit to ask who it is");
-                (None, None)
-            }
-        };
-        let device = Device {
-            attach,
-            model,
-            identity,
-            opened: transport.is_some(),
-        };
-        found.push((device, transport));
+    for info in usb_devices().await {
+        found.push(usb_device(info).await);
     }
     found.extend(scsi_devices().await);
     found
 }
 
+/// Open a USB unit and ask it who it is
+///
+/// A unit another process holds, and a unit that does not answer, both come
+/// back under the name the bus gives them
+async fn usb_device(info: nusb::DeviceInfo) -> Probed {
+    #[cfg(not(target_arch = "wasm32"))]
+    let attach = Attach::Usb {
+        bus: info.bus_id().to_string(),
+        ports: info.port_chain().to_vec(),
+    };
+    #[cfg(target_arch = "wasm32")]
+    let attach = Attach::WebUsb(WebUsb { info: info.clone() });
+    let model = Model::from_usb(info.vendor_id(), info.product_id());
+    let (identity, transport) = match UsbTransport::open(info).await {
+        Ok(mut transport) => (
+            probe(&mut transport).await,
+            Some(Box::new(transport) as Box<dyn Transport>),
+        ),
+        Err(e) => {
+            debug!(%e, "could not open a unit to ask who it is");
+            (None, None)
+        }
+    };
+    let device = Device {
+        attach,
+        model,
+        identity,
+        opened: transport.is_some(),
+    };
+    (device, transport)
+}
+
 /// The USB units, filtered on vendor and product before anything is opened
 ///
 /// Which product IDs are scanners is this layer's business rather than the
-/// transport's, whose job stops at moving bytes
-fn usb_devices() -> Vec<nusb::DeviceInfo> {
-    let all = match nusb::list_devices().wait() {
+/// transport's, whose job stops at moving bytes. In a browser these are the
+/// units the page was granted
+async fn usb_devices() -> Vec<nusb::DeviceInfo> {
+    let all = match nusb::list_devices().await {
         Ok(all) => all,
         Err(e) => {
             debug!(%e, "could not enumerate USB");
@@ -328,7 +414,7 @@ impl Selector {
         let (device, transport) = found.swap_remove(i);
         let transport = match transport {
             Some(transport) => transport,
-            None => device.open()?,
+            None => device.open().await?,
         };
         Ok((device, transport))
     }

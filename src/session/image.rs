@@ -385,6 +385,13 @@ impl Drop for Chunks<'_> {
         self.spent = true;
         self.closed = true;
         info!(remaining = self.remaining, "stopping the scan");
+        // A browser thread cannot wait here, so the session stops the scan
+        // before the next command it sends instead
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.session.stale_scan = true;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         match super::block_on(self.session.abort()) {
             Ok(true) => {}
             // Nothing in either spec's command list is optional here, but

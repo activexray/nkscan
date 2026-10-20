@@ -1,0 +1,4 @@
+# web-sys keeps its WebUSB bindings behind this cfg, and nusb's WebUSB backend needs them.
+# `wide` only takes its SIMD paths with simd128 on, and dust.rs relies on it to vectorize
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg=web_sys_unstable_apis", "-C", "target-feature=+simd128"]

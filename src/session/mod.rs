@@ -13,6 +13,7 @@ pub mod probe;
 pub mod scan;
 pub mod window;
 
+use crate::time::{Instant, sleep};
 use crate::{
     error::Error,
     protocol::{
@@ -28,11 +29,7 @@ use crate::{
     transport::{self, Completion, Data, Transport},
 };
 use std::sync::Arc;
-use std::{
-    io,
-    thread::sleep,
-    time::{Duration, Instant},
-};
+use std::{io, time::Duration};
 use tracing::*;
 
 pub struct Session {
@@ -46,6 +43,9 @@ pub struct Session {
     curves: Option<Arc<Curves>>,
     /// Whether we hold the unit, so [`Drop`] only releases what it took
     reserved: bool,
+    /// A pass was dropped before it was read to the end and nothing has stopped
+    /// it yet. Only a browser build sets this: natively the drop stops it
+    stale_scan: bool,
 }
 
 /// What a command that asks the unit something, rather than moves anything,
@@ -116,6 +116,7 @@ impl Session {
             reserved: false,
             frames: None,
             curves: None,
+            stale_scan: false,
         };
         // INQUIRY answers while the unit is still initializing, so probing says
         // nothing about readiness. Everything below is a real command, and a
@@ -362,6 +363,21 @@ impl Session {
         }
     }
 
+    /// Give the unit back, stopping a pass that was left unread first
+    ///
+    /// Dropping a session does the same natively. In a browser `Drop` cannot
+    /// send a command, so this is how a session releases the unit there
+    pub async fn close(mut self) -> Result<(), Error> {
+        if std::mem::take(&mut self.stale_scan) {
+            self.abandon_scan().await;
+        }
+        if std::mem::take(&mut self.reserved) {
+            self.run(&ReleaseUnit.cdb(), Data::None, PROBE_TIMEOUT)
+                .await?;
+        }
+        Ok(())
+    }
+
     /// What the scanner says it can do
     pub fn capabilities(&self) -> &Capabilities {
         &self.caps
@@ -465,6 +481,12 @@ impl Session {
         mut data: Data<'_>,
         timeout: Duration,
     ) -> Result<(Completion, Vec<CooperativeAction>), Error> {
+        // Every command but a basic one is refused while that pass is still
+        // valid, so it is stopped first. Boxed: stopping it is a command too
+        if std::mem::take(&mut self.stale_scan) {
+            Box::pin(self.abandon_scan()).await;
+        }
+
         // One budget for the command, re-issues included, rather than one each:
         // a fresh timeout per round would let 16 cooperative requests run for 16
         // times what the caller allowed
@@ -566,7 +588,7 @@ impl Session {
                     if reported.replace(activity) != Some(activity) {
                         debug!(?activity, "waiting");
                     }
-                    sleep(POLL_INTERVAL);
+                    sleep(POLL_INTERVAL).await;
                 }
 
                 // Unit attention: the command did not run. Several queue up --
@@ -608,8 +630,12 @@ impl Drop for Session {
         if !self.reserved {
             return;
         }
+        #[cfg(not(target_arch = "wasm32"))]
         if let Err(e) = block_on(self.run(&ReleaseUnit.cdb(), Data::None, PROBE_TIMEOUT)) {
             warn!(%e, "could not release the scanner");
         }
+        // Only SBP-2 has another initiator to lock out, and a browser has no SBP-2
+        #[cfg(target_arch = "wasm32")]
+        debug!("the session was dropped without `close`, so the reservation is left");
     }
 }

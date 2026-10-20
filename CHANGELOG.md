@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Discovery.row_addresses` gives the X address of each thumbnail row, as `column_addresses` gives the Y address of each column. Use both to find a frame on the thumbnail.
 
+### Added
+
+- `Session::close` releases the unit and stops a pass that was left unread. Dropping a session still does this natively. In a browser build `Drop` cannot send a command, so `close` is how a session gives the unit back there.
+- The library builds for `wasm32-unknown-unknown`. The `device` module and the native USB transport are not in that build yet, and `.cargo/config.toml` sets the cfg that nusb's WebUSB backend needs.
+
 ### Changed
 
 - **Breaking:** the Rust API that talks to a unit is async. `Transport::execute` returns a boxed future, and `device::list`, `device::Selector::open`, `Session::open`, the `Session` methods that send a command, `session::probe`, and the `scan::frame` and `scan::framing` entry points are `async fn`. The native transports do their IO inside the future, so `pollster::block_on` runs them. The CLI and the Python API do not change.

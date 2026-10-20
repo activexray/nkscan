@@ -71,6 +71,9 @@ name = "nkscan"
 path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"] # For python support
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = "0.4"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.31", features = ["ioctl"] }
 

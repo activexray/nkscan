@@ -222,14 +222,14 @@ pub fn frames(caps: &Capabilities) -> Result<Boundary, Error> {
 /// Answers whether a table was written. The caller must put the measured table
 /// back, because [`BoundaryType2::register`](crate::protocol::data::BoundaryType2::register)
 /// replaces an entry and does not add one
-pub fn register(session: &mut Session, frame: Rect) -> Result<bool, Error> {
+pub async fn register(session: &mut Session, frame: Rect) -> Result<bool, Error> {
     if Framing::choose(session.capabilities()) != Framing::Perforation {
         return Ok(false);
     }
     let mut table = match session.frames_type2() {
         Some(table) => table.clone(),
         // Nothing measured this strip, so ask the unit what it is holding
-        None => match session.boundaries_type2() {
+        None => match session.boundaries_type2().await {
             Ok(table) => table,
             Err(e) => {
                 debug!(%e, "no frame table to register against");
@@ -242,7 +242,7 @@ pub fn register(session: &mut Session, frame: Rect) -> Result<bool, Error> {
     }
 
     // Use a record of the pass: a calculated record needs a length that only the pass measures
-    let perfs = session.read_perforations()?;
+    let perfs = session.read_perforations().await?;
     let optical = session.capabilities().address.y_axis.optical_dpi;
     let entry = boundary::perforation::record_at(&perfs, optical, frame.top).ok_or_else(|| {
         Error::Unsupported {
@@ -255,7 +255,7 @@ pub fn register(session: &mut Session, frame: Rect) -> Result<bool, Error> {
     })?;
     table.register(entry);
     debug!(top = frame.top, ?entry, "registered a frame off the table");
-    session.set_boundaries_type2_for_pass(&table)?;
+    session.set_boundaries_type2_for_pass(&table).await?;
     Ok(true)
 }
 
@@ -286,7 +286,7 @@ pub struct Discovery {
 /// metering (`1003e040`) reads the value from the color capabilities 102h to
 /// 104h and uses the default when it is out of range. LS8000.md3 has a sampler
 /// (`100844b0`), but we use the newer module on the LS-8000 too.
-fn base_density(session: &mut Session, image: &Image, film: Film) -> Option<[f64; 3]> {
+async fn base_density(session: &mut Session, image: &Image<'_>, film: Film) -> Option<[f64; 3]> {
     if session.capabilities().address.holder_id.is_some() {
         return None;
     }
@@ -296,7 +296,7 @@ fn base_density(session: &mut Session, image: &Image, film: Film) -> Option<[f64
         .into_iter()
         .enumerate()
     {
-        let base = session.white_balance(channel).ok()?;
+        let base = session.white_balance(channel).await.ok()?;
         let thumbnail = super::meter::scale(base, factors[c]);
         ratio[c] = f64::from(base) / f64::from(thumbnail.max(1));
     }
@@ -304,7 +304,7 @@ fn base_density(session: &mut Session, image: &Image, film: Film) -> Option<[f64
 }
 
 /// Find every frame on whatever is loaded, driving whatever pass the chosen mechanism needs
-pub fn discover(
+pub async fn discover(
     session: &mut Session,
     format: Option<FilmFormat>,
     film: Film,
@@ -317,6 +317,7 @@ pub fn discover(
         samples,
         |_| ControlFlow::Continue(()),
     )
+    .await
 }
 
 /// The same as [`discover`], letting `on` cancel a thumbnail pass by returning `Break`
@@ -325,7 +326,7 @@ pub fn discover(
 /// there only where [`FilmFormat::resolve`] cannot work it out from the loaded holder.
 /// `film` sets the thumbnail exposure, see [`thumbnail::exposure_factors`].
 /// `samples` is scratch, left holding the thumbnail where [`Discovery::thumbnail`] is `Some`
-pub fn discover_with(
+pub async fn discover_with(
     session: &mut Session,
     format: Option<FilmFormat>,
     film: Film,
@@ -345,8 +346,8 @@ pub fn discover_with(
             info!(frames = found.len(), "published frames");
             let (thumbnail, line_pitch, column_addresses, row_addresses, base_density) =
                 if mechanism.takes_thumbnail(session.capabilities()) {
-                    let pass = session.scan_thumbnail_with(samples, film, on)?;
-                    let base_density = base_density(session, &pass.image(samples)?, film);
+                    let pass = session.scan_thumbnail_with(samples, film, on).await?;
+                    let base_density = base_density(session, &pass.image(samples)?, film).await;
                     let caps = session.capabilities();
                     let pitch = thumbnail::LinePitch::of(&pass);
                     let columns = pitch.column_addresses(caps, pass.cols);
@@ -374,21 +375,21 @@ pub fn discover_with(
         }
         Framing::Thumbnail => {
             let format = need_format(session)?;
-            let pass = session.scan_thumbnail_with(samples, film, on)?;
+            let pass = session.scan_thumbnail_with(samples, film, on).await?;
             debug!(
                 rows = pass.rows,
                 cols = pass.cols,
                 complete = pass.complete,
                 "thumbnail"
             );
-            let base_density = base_density(session, &pass.image(samples)?, film);
+            let base_density = base_density(session, &pass.image(samples)?, film).await;
             let (measured, pitch, contrast) =
                 thumbnail::frames(session.capabilities(), &pass, samples, format, film)?;
             // Nothing measured is nothing to tell the unit, and it refuses an
             // empty record. The caller gets the pass either way, which is the
             // only evidence of why the strip measured empty
             if !measured.frames.is_empty() {
-                session.set_boundaries(&measured)?;
+                session.set_boundaries(&measured).await?;
             }
             let found = measured.frames.clone();
             info!(frames = found.len(), "detected frames");
@@ -420,19 +421,19 @@ pub fn discover_with(
         Framing::Perforation => {
             let format = need_format(session)?;
             // Discard whatever a previous strip left behind
-            let _ = session.read_perforations()?;
-            let _ = session.read_boundaries_type2();
+            let _ = session.read_perforations().await?;
+            let _ = session.read_boundaries_type2().await;
 
-            let mut pass = session.scan_thumbnail_with(samples, film, on)?;
+            let mut pass = session.scan_thumbnail_with(samples, film, on).await?;
             debug!(
                 rows = pass.rows,
                 cols = pass.cols,
                 complete = pass.complete,
                 "thumbnail"
             );
-            let perfs = session.read_perforations()?;
+            let perfs = session.read_perforations().await?;
             // Measure before the resample
-            let base_density = base_density(session, &pass.image(samples)?, film);
+            let base_density = base_density(session, &pass.image(samples)?, film).await;
             let caps = session.capabilities();
             let optical = caps.address.y_axis.optical_dpi;
             let length = super::window::reachable_blocks(caps, format.height_dots(optical));
@@ -464,7 +465,7 @@ pub fn discover_with(
                 boundary::perforation::addresses(&perfs, optical, &kept)
             });
             if !measured.frames.is_empty() {
-                session.set_boundaries_type2(&measured)?;
+                session.set_boundaries_type2(&measured).await?;
             }
 
             let caps = session.capabilities();

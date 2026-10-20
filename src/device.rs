@@ -121,42 +121,44 @@ impl fmt::Display for Device {
 type Probed = (Device, Option<Box<dyn Transport>>);
 
 /// List all the devices this library thinks it can drive
-pub fn list() -> Vec<Device> {
-    probed().into_iter().map(|(device, _)| device).collect()
+pub async fn list() -> Vec<Device> {
+    probed()
+        .await
+        .into_iter()
+        .map(|(device, _)| device)
+        .collect()
 }
 
 /// The same as [`list`], keeping each transport open
-fn probed() -> Vec<Probed> {
-    let mut found: Vec<Probed> = usb_devices()
-        .into_iter()
-        .map(|info| {
-            let attach = Attach::Usb {
-                bus: info.bus_id().to_string(),
-                ports: info.port_chain().to_vec(),
-            };
-            let model = Model::from_usb(info.vendor_id(), info.product_id());
-            // A unit another process holds, and a unit that does not answer,
-            // both stay in the list under the name the bus gives them
-            let (identity, transport) = match UsbTransport::open(info) {
-                Ok(mut transport) => (
-                    probe(&mut transport),
-                    Some(Box::new(transport) as Box<dyn Transport>),
-                ),
-                Err(e) => {
-                    debug!(%e, "could not open a unit to ask who it is");
-                    (None, None)
-                }
-            };
-            let device = Device {
-                attach,
-                model,
-                identity,
-                opened: transport.is_some(),
-            };
-            (device, transport)
-        })
-        .collect();
-    found.extend(scsi_devices());
+async fn probed() -> Vec<Probed> {
+    let mut found: Vec<Probed> = Vec::new();
+    for info in usb_devices() {
+        let attach = Attach::Usb {
+            bus: info.bus_id().to_string(),
+            ports: info.port_chain().to_vec(),
+        };
+        let model = Model::from_usb(info.vendor_id(), info.product_id());
+        // A unit another process holds, and a unit that does not answer,
+        // both stay in the list under the name the bus gives them
+        let (identity, transport) = match UsbTransport::open(info) {
+            Ok(mut transport) => (
+                probe(&mut transport).await,
+                Some(Box::new(transport) as Box<dyn Transport>),
+            ),
+            Err(e) => {
+                debug!(%e, "could not open a unit to ask who it is");
+                (None, None)
+            }
+        };
+        let device = Device {
+            attach,
+            model,
+            identity,
+            opened: transport.is_some(),
+        };
+        found.push((device, transport));
+    }
+    found.extend(scsi_devices().await);
     found
 }
 
@@ -177,11 +179,12 @@ fn usb_devices() -> Vec<nusb::DeviceInfo> {
 }
 
 /// Ask a transport who it is, and nothing else
-fn probe(transport: &mut dyn Transport) -> Option<Identity> {
+async fn probe(transport: &mut dyn Transport) -> Option<Identity> {
     let cmd = Inquiry::standard();
     let mut buf = vec![0u8; cmd.allocation_length()];
     let completion = transport
         .execute(&cmd.cdb(), Data::In(&mut buf), PROBE_TIMEOUT)
+        .await
         .ok()?;
     if completion.status != Status::Good {
         return None;
@@ -191,92 +194,97 @@ fn probe(transport: &mut dyn Transport) -> Option<Identity> {
 }
 
 #[cfg(target_os = "linux")]
-fn scsi_devices() -> Vec<Probed> {
+async fn scsi_devices() -> Vec<Probed> {
     use crate::transport::linux::SgTransport;
 
     let Ok(entries) = std::fs::read_dir("/dev") else {
         return Vec::new();
     };
-    entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|path| {
-            path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-                n.starts_with("sg") && n.len() > 2 && n[2..].bytes().all(|b| b.is_ascii_digit())
-            })
+    let paths = entries.flatten().map(|e| e.path()).filter(|path| {
+        path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+            n.starts_with("sg") && n.len() > 2 && n[2..].bytes().all(|b| b.is_ascii_digit())
         })
-        .filter_map(|path| {
-            // Most of these are disks and optical drives. Opening one is
-            // harmless, and the INQUIRY tells us to leave it alone.
-            let mut transport = SgTransport::open(&path).ok()?;
-            let identity = probe(&mut transport)?;
-            Some((
-                Device {
-                    attach: Attach::Sg(path),
-                    model: identity.model(),
-                    identity: Some(identity),
-                    opened: true,
-                },
-                Some(Box::new(transport) as Box<dyn Transport>),
-            ))
-        })
-        .collect()
+    });
+    let mut found = Vec::new();
+    for path in paths {
+        // Most of these are disks and optical drives. Opening one is
+        // harmless, and the INQUIRY tells us to leave it alone.
+        let Ok(mut transport) = SgTransport::open(&path) else {
+            continue;
+        };
+        let Some(identity) = probe(&mut transport).await else {
+            continue;
+        };
+        found.push((
+            Device {
+                attach: Attach::Sg(path),
+                model: identity.model(),
+                identity: Some(identity),
+                opened: true,
+            },
+            Some(Box::new(transport) as Box<dyn Transport>),
+        ));
+    }
+    found
 }
 
 #[cfg(target_os = "windows")]
-fn scsi_devices() -> Vec<Probed> {
+async fn scsi_devices() -> Vec<Probed> {
     use crate::transport::windows::ScsiScanDevice;
 
     // The class driver numbers them from zero, so stop at the first that will
     // not open rather than probing a fixed range
-    (0..)
-        .map(|n| PathBuf::from(format!(r"\\.\Scanner{n}")))
-        .map_while(|path| {
-            let mut transport = ScsiScanDevice::open(&path).ok()?;
-            let identity = probe(&mut transport);
-            Some((path, identity, transport))
-        })
-        .filter_map(|(path, identity, transport)| {
-            let identity = identity?;
-            Some((
-                Device {
-                    attach: Attach::Scanner(path),
-                    model: identity.model(),
-                    identity: Some(identity),
-                    opened: true,
-                },
-                Some(Box::new(transport) as Box<dyn Transport>),
-            ))
-        })
-        .collect()
+    let mut found = Vec::new();
+    for n in 0.. {
+        let path = PathBuf::from(format!(r"\\.\Scanner{n}"));
+        let Ok(mut transport) = ScsiScanDevice::open(&path) else {
+            break;
+        };
+        let Some(identity) = probe(&mut transport).await else {
+            continue;
+        };
+        found.push((
+            Device {
+                attach: Attach::Scanner(path),
+                model: identity.model(),
+                identity: Some(identity),
+                opened: true,
+            },
+            Some(Box::new(transport) as Box<dyn Transport>),
+        ));
+    }
+    found
 }
 
 #[cfg(target_os = "macos")]
-fn scsi_devices() -> Vec<Probed> {
+async fn scsi_devices() -> Vec<Probed> {
     use crate::transport::darwin::ScsiTaskTransport;
 
     // Most peripheral nubs are disks a kernel driver owns; those refuse the
     // user client and drop out at `open`. The rest answer the INQUIRY
-    ScsiTaskTransport::entry_ids()
-        .into_iter()
-        .filter_map(|id| {
-            let mut transport = ScsiTaskTransport::open(id).ok()?;
-            let identity = probe(&mut transport)?;
-            Some((
-                Device {
-                    attach: Attach::ScsiTask(id),
-                    model: identity.model(),
-                    identity: Some(identity),
-                    opened: true,
-                },
-                Some(Box::new(transport) as Box<dyn Transport>),
-            ))
-        })
-        .collect()
+    let mut found = Vec::new();
+    for id in ScsiTaskTransport::entry_ids() {
+        let Ok(mut transport) = ScsiTaskTransport::open(id) else {
+            continue;
+        };
+        let Some(identity) = probe(&mut transport).await else {
+            continue;
+        };
+        found.push((
+            Device {
+                attach: Attach::ScsiTask(id),
+                model: identity.model(),
+                identity: Some(identity),
+                opened: true,
+            },
+            Some(Box::new(transport) as Box<dyn Transport>),
+        ));
+    }
+    found
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-fn scsi_devices() -> Vec<Probed> {
+async fn scsi_devices() -> Vec<Probed> {
     Vec::new()
 }
 
@@ -314,8 +322,8 @@ impl Selector {
     /// Open the one device this refers to, on the transport that probed it
     ///
     /// A FireWire unit on Windows can stop at a new open (#71), so this does not open it again
-    pub fn open(&self) -> Result<(Device, Box<dyn Transport>), SelectError> {
-        let mut found = probed();
+    pub async fn open(&self) -> Result<(Device, Box<dyn Transport>), SelectError> {
+        let mut found = probed().await;
         let i = self.position(found.iter().map(|(device, _)| device))?;
         let (device, transport) = found.swap_remove(i);
         let transport = match transport {

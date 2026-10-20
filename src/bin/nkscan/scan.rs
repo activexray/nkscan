@@ -42,20 +42,21 @@ const STILL_THERE: Duration = Duration::from_secs(5);
 const SPINNER_TICK: Duration = Duration::from_millis(120);
 
 /// Scan what the flags ask for
-pub fn run(args: cli::Scan) -> anyhow::Result<()> {
+pub async fn run(args: cli::Scan) -> anyhow::Result<()> {
     // First grab the requested device, or the first one
     let (_, transport) = (if let Some(d) = args.device.clone() {
         device::Selector::Location(d)
     } else {
         device::Selector::Only
     })
-    .open()?;
+    .open()
+    .await?;
 
     // Start up a scan session. The session is opened here rather than inside
     // the run below so that a cancel is caught while it is still open: a
     // stopped run has film in the gate, and giving it back is the one thing
     // that still has to happen
-    let mut session = Session::open(transport)?;
+    let mut session = Session::open(transport).await?;
     info!("connected to scanner");
 
     let no_eject = args.no_eject;
@@ -63,10 +64,10 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
     // Every checkpoint below reports a Ctrl-c the same way the library
     // already reports a cancelled pass, so this is the one place that turns
     // it back into a clean stop rather than a failure
-    match run_cancellable(&mut session, args) {
+    match run_cancellable(&mut session, args).await {
         Err(e) if matches!(e.downcast_ref::<Error>(), Some(Error::Cancelled)) => {
             if !no_eject {
-                give_the_film_back(&mut session);
+                give_the_film_back(&mut session).await;
             }
             info!("cancelled");
             Ok(())
@@ -85,15 +86,15 @@ pub fn run(args: cli::Scan) -> anyhow::Result<()> {
 /// to do one costs three minutes of nothing. Every answer but a transport
 /// failure means it is still there: a cancelled run leaves a scan open, and
 /// being refused out of sequence is that saying so
-fn give_the_film_back(session: &mut Session) {
-    if let Err(Error::Transport(e)) = session.test_unit_ready(STILL_THERE) {
+async fn give_the_film_back(session: &mut Session) {
+    if let Err(Error::Transport(e)) = session.test_unit_ready(STILL_THERE).await {
         warn!(%e, "the unit is not answering, so the film stays in the gate - power cycle it");
         return;
     }
     // A Ctrl-c while waiting for a strip has nothing to give back, and UNLOAD
     // against an empty gate still runs the mechanism for the best part of ten
     // seconds before saying so
-    match session.media_loaded() {
+    match session.media_loaded().await {
         Ok(false) => {
             debug!("nothing was loaded, so there is nothing to give back");
             return;
@@ -101,14 +102,14 @@ fn give_the_film_back(session: &mut Session) {
         Ok(true) => {}
         Err(e) => debug!(%e, "could not tell whether anything is loaded, trying the eject anyway"),
     }
-    match session.eject() {
+    match session.eject().await {
         Ok(true) => info!("ejected"),
         Ok(false) => debug!("this unit cannot give the medium back"),
         Err(e) => warn!(%e, "could not eject on the way out, so the film is still loaded"),
     }
 }
 
-fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()> {
+async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()> {
     let cli::Scan {
         device: _,
         basename,
@@ -188,7 +189,8 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
             if uses_adapter { "strip" } else { "holder" }
         ),
         true,
-    )?;
+    )
+    .await?;
 
     // One buffer for every strip
     let mut samples = Samples::default();
@@ -230,7 +232,8 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
             } else {
                 ControlFlow::Continue(())
             }
-        })?;
+        })
+        .await?;
         if let Some(bar) = bar {
             crate::progress::done(bar);
         }
@@ -334,7 +337,8 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
                         ControlFlow::Continue(())
                     }
                 },
-            )?;
+            )
+            .await?;
             if let Some(bar) = meter_bar {
                 crate::progress::done(bar);
             }
@@ -393,7 +397,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         // the refresh after it shows the empty gate
         let self_feeding = framing::self_feeding(session.capabilities());
         let cartridge = framing::cartridge(session.capabilities());
-        let ejected = session.eject()?;
+        let ejected = session.eject().await?;
         if ejected {
             info!("ejected");
         }
@@ -407,13 +411,13 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         // A unit with a supply behind the gate takes the next medium in itself,
         // and is also the only one that can say when it has run out
         if self_feeding {
-            session.refresh()?;
-            if !ready(session, true)? {
+            session.refresh().await?;
+            if !ready(session, true).await? {
                 info!("nothing left to load");
                 break;
             }
             info!("film loaded");
-            session.stage()?;
+            session.stage().await?;
             continue;
         }
 
@@ -433,7 +437,7 @@ fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Result<()>
         } else {
             "load the next strip"
         };
-        wait_for_film(session, prompt, cartridge)?;
+        wait_for_film(session, prompt, cartridge).await?;
     }
     Ok(())
 }
@@ -478,22 +482,22 @@ fn hold_white_balance(film: Film, unlock: bool, lock: bool) -> bool {
 /// loaded until the unit is told to take some in. `take_in` is whether it may:
 /// false once a medium has been scanned and ejected, where loading again would
 /// only bring the same film back
-fn ready(session: &mut Session, take_in: bool) -> Result<bool, Error> {
-    if session.media_loaded()? {
+async fn ready(session: &mut Session, take_in: bool) -> Result<bool, Error> {
+    if session.media_loaded().await? {
         return Ok(true);
     }
-    if !take_in || !session.load()? {
+    if !take_in || !session.load().await? {
         return Ok(false);
     }
     // The address page now describes the medium that came in
-    session.refresh()?;
-    session.media_loaded()
+    session.refresh().await?;
+    session.media_loaded().await
 }
 
 /// The same, counting anything the operator can put right as "not yet": an open
 /// door is what the prompt is for
-fn waiting(session: &mut Session, take_in: bool) -> Result<bool, Error> {
-    match ready(session, take_in) {
+async fn waiting(session: &mut Session, take_in: bool) -> Result<bool, Error> {
+    match ready(session, take_in).await {
         Err(Error::Media(condition)) => {
             debug!(%condition, "waiting on the operator");
             Ok(false)
@@ -505,20 +509,20 @@ fn waiting(session: &mut Session, take_in: bool) -> Result<bool, Error> {
 /// [`Session::refresh`], tolerating the medium-not-present it can itself hit:
 /// a strip feeder's gate sits empty between strips, and that is the state this
 /// is called from a loop to wait out, not a failure of the refresh
-fn refresh_while_empty(session: &mut Session) -> Result<(), Error> {
-    match session.refresh() {
+async fn refresh_while_empty(session: &mut Session) -> Result<(), Error> {
+    match session.refresh().await {
         Ok(()) | Err(Error::Media(_)) => Ok(()),
         Err(e) => Err(e),
     }
 }
 
 /// Wait until a holder is loaded, then put the unit in a state to scan from
-fn wait_for_film(session: &mut Session, prompt: &str, take_in: bool) -> anyhow::Result<()> {
+async fn wait_for_film(session: &mut Session, prompt: &str, take_in: bool) -> anyhow::Result<()> {
     // An eject leaves what we know about the holder behind, so ask again before
     // believing anything is in there
-    refresh_while_empty(session)?;
+    refresh_while_empty(session).await?;
 
-    if !waiting(session, take_in)? {
+    if !waiting(session, take_in).await? {
         // The spinner is the affordance on a terminal, and hidden anywhere else, so the log says it too
         info!("{prompt}");
         let spinner = ProgressBar::with_draw_target(None, ProgressDrawTarget::hidden());
@@ -532,16 +536,16 @@ fn wait_for_film(session: &mut Session, prompt: &str, take_in: bool) -> anyhow::
                 return Err(Error::Cancelled.into());
             }
             std::thread::sleep(HOLDER_POLL);
-            refresh_while_empty(session)?;
+            refresh_while_empty(session).await?;
             // Retrying the load is what picks up a supply that was refilled
-            if waiting(session, take_in)? {
+            if waiting(session, take_in).await? {
                 crate::progress::done(spinner);
                 break;
             }
         }
     }
     info!("film loaded");
-    session.stage()?;
+    session.stage().await?;
     Ok(())
 }
 

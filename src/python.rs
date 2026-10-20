@@ -28,7 +28,7 @@ use crate::{
         profile::{self, Film},
         window::{MAX_SAMPLES, Recipe},
     },
-    session::Session as RustSession,
+    session::{Session as RustSession, block_on},
     transport::Transport,
 };
 use numpy::{IntoPyArray, PyArray2, PyArrayMethods};
@@ -155,7 +155,7 @@ impl PyDevice {
 #[gen_stub_pyfunction]
 #[pyfunction]
 fn list_devices() -> Vec<PyDevice> {
-    device::list().into_iter().map(PyDevice).collect()
+    block_on(device::list()).into_iter().map(PyDevice).collect()
 }
 
 // ----- logging -----
@@ -534,7 +534,7 @@ impl PySession {
 }
 
 fn open_session(transport: Box<dyn Transport>) -> Result<PySession, Error> {
-    let session = RustSession::open(transport)?;
+    let session = block_on(RustSession::open(transport))?;
     Ok(PySession(Mutex::new(Some(session))))
 }
 
@@ -547,12 +547,10 @@ impl PySession {
         let location = location.to_string();
         py.detach(move || {
             let (_, transport) =
-                device::Selector::Location(location)
-                    .open()
-                    .map_err(|e| match e {
-                        device::SelectError::Open(e) => PyErr::from(e),
-                        e => DeviceNotFound::new_err(e.to_string()),
-                    })?;
+                block_on(device::Selector::Location(location).open()).map_err(|e| match e {
+                    device::SelectError::Open(e) => PyErr::from(e),
+                    e => DeviceNotFound::new_err(e.to_string()),
+                })?;
             open_session(transport).map_err(PyErr::from)
         })
     }
@@ -573,22 +571,22 @@ impl PySession {
 
     /// Whether a holder is loaded
     fn media_loaded(&self, py: Python<'_>) -> PyResult<bool> {
-        py.detach(|| self.with(RustSession::media_loaded))
+        py.detach(|| self.with(|s| block_on(s.media_loaded())))
     }
 
     /// Put the unit in the state a scan expects
     fn stage(&self, py: Python<'_>) -> PyResult<()> {
-        py.detach(|| self.with(RustSession::stage))
+        py.detach(|| self.with(|s| block_on(s.stage())))
     }
 
     /// Give back whatever is loaded, answering whether the unit did anything
     fn eject(&self, py: Python<'_>) -> PyResult<bool> {
-        py.detach(|| self.with(RustSession::eject))
+        py.detach(|| self.with(|s| block_on(s.eject())))
     }
 
     /// Take in whatever the adapter has waiting, answering whether anything came
     fn load(&self, py: Python<'_>) -> PyResult<bool> {
-        py.detach(|| self.with(RustSession::load))
+        py.detach(|| self.with(|s| block_on(s.load())))
     }
 
     /// Find every frame on whatever is loaded
@@ -631,9 +629,13 @@ impl PySession {
         ) = py.detach(move || {
             self.with(|session| {
                 let mut samples = Samples::default();
-                let discovery = framing::discover_with(session, format, film, &mut samples, |p| {
-                    report(&progress, "discover", 0, p)
-                })?;
+                let discovery = block_on(framing::discover_with(
+                    session,
+                    format,
+                    film,
+                    &mut samples,
+                    |p| report(&progress, "discover", 0, p),
+                ))?;
                 let frames: Vec<_> = discovery
                     .frames
                     .into_iter()
@@ -774,7 +776,7 @@ impl PySession {
                     clean,
                     focus,
                 };
-                let scanned = frame::scan_frame_with(
+                let scanned = block_on(frame::scan_frame_with(
                     session,
                     &recipe,
                     frame,
@@ -784,7 +786,7 @@ impl PySession {
                         Phase::Meter(pass) => report(&progress, "meter", pass, p),
                         Phase::Scan => report(&progress, "scan", 0, p),
                     },
-                )?;
+                ))?;
 
                 let ids: Vec<u8> = scanned.pass.layout.colors().collect();
                 let (rows, cols) = (scanned.pass.rows, scanned.pass.cols);
@@ -853,10 +855,13 @@ impl PySession {
                 // Metering takes its own resolution and reading mode from the
                 // recipe's `metering`, so only the channels matter here
                 let recipe = Recipe::new(session.capabilities(), None, 1, false, infrared);
-                let exposures =
-                    frame::meter_frame_with(session, &recipe, frame, &metering, |pass, p| {
-                        report(&progress, "meter", pass, p)
-                    })?;
+                let exposures = block_on(frame::meter_frame_with(
+                    session,
+                    &recipe,
+                    frame,
+                    &metering,
+                    |pass, p| report(&progress, "meter", pass, p),
+                ))?;
                 Ok(exposures
                     .iter()
                     .map(|(c, e)| (channel_name(c.id()), e))
@@ -890,8 +895,9 @@ impl PySession {
     ) -> PyResult<(String, Option<u16>)> {
         let focus = focus_from(focus.as_ref())?;
         let frame = rect(frame);
-        let (focused, position) =
-            py.detach(move || self.with(|session| frame::focus_frame(session, frame, focus)))?;
+        let (focused, position) = py.detach(move || {
+            self.with(|session| block_on(frame::focus_frame(session, frame, focus)))
+        })?;
         Ok((focused_name(focused), position))
     }
 
@@ -903,18 +909,18 @@ impl PySession {
     /// raise in that case
     #[pyo3(signature = (x, y, color=None))]
     fn autofocus(&self, py: Python<'_>, x: u32, y: u32, color: Option<u8>) -> PyResult<()> {
-        py.detach(|| self.with(|s| s.autofocus(x, y, color)))
+        py.detach(|| self.with(|s| block_on(s.autofocus(x, y, color))))
     }
 
     /// Move the lens to `position`. The position must be in
     /// `Capabilities.focus_range`
     fn focus_to(&self, py: Python<'_>, position: u16) -> PyResult<()> {
-        py.detach(|| self.with(|s| s.focus_to(position)))
+        py.detach(|| self.with(|s| block_on(s.focus_to(position))))
     }
 
     /// The current lens position, in the units that `focus_to` uses
     fn focus_position(&self, py: Python<'_>) -> PyResult<u16> {
-        py.detach(|| self.with(RustSession::focus_position))
+        py.detach(|| self.with(|s| block_on(s.focus_position())))
     }
 
     /// Nikon's ICC profile for this unit and `film`, as the bytes of the .icc

@@ -28,8 +28,8 @@ impl Session {
     /// Answers how much arrived. Short of `buf` means the unit ran out, either
     /// by transferring less than asked or by answering `05h-2Ch` once the image
     /// is spent
-    pub fn read_image(&mut self, layout: &Layout, buf: &mut [u8]) -> Result<usize, Error> {
-        self.read_image_within(layout, buf, MOVE_TIMEOUT)
+    pub async fn read_image(&mut self, layout: &Layout, buf: &mut [u8]) -> Result<usize, Error> {
+        self.read_image_within(layout, buf, MOVE_TIMEOUT).await
     }
 
     /// The same, on a budget the caller sets
@@ -39,7 +39,7 @@ impl Session {
     /// such waiting to do, and giving it a stage move's worth of budget is how
     /// a unit that has stopped answering holds the program for three minutes
     /// instead of saying so
-    pub fn read_image_within(
+    pub async fn read_image_within(
         &mut self,
         layout: &Layout,
         buf: &mut [u8],
@@ -55,7 +55,7 @@ impl Session {
 
         trace!(cdb = ?cmd.cdb(), want, "executing image READ");
 
-        match self.run(&cmd.cdb(), Data::In(buf), timeout) {
+        match self.run(&cmd.cdb(), Data::In(buf), timeout).await {
             Ok(completion) => {
                 trace!(
                     transferred = completion.transferred,
@@ -211,7 +211,7 @@ impl Chunks<'_> {
     /// `buf` is sized to the chunk (or what is left of it) and truncated to
     /// what actually arrived, so one buffer can be reused for every chunk
     /// without reallocating
-    pub fn fill(&mut self, buf: &mut Vec<u8>) -> Option<Result<usize, Error>> {
+    pub async fn fill(&mut self, buf: &mut Vec<u8>) -> Option<Result<usize, Error>> {
         if self.spent {
             return None;
         }
@@ -222,7 +222,7 @@ impl Chunks<'_> {
             // answer a READ it was never going to get: some just stop
             // answering the handle entirely
             if self.layout.multiline_registered {
-                self.drain();
+                self.drain().await;
             } else {
                 self.spent = true;
                 self.closed = true;
@@ -242,7 +242,7 @@ impl Chunks<'_> {
             buf_len = buf.len(),
             "issuing image READ from fill"
         );
-        match self.session.read_image(layout, &mut buf[..want]) {
+        match self.session.read_image(layout, &mut buf[..want]).await {
             Err(e) => {
                 self.spent = true;
                 Some(Err(e))
@@ -276,7 +276,7 @@ impl Chunks<'_> {
     /// and that is what ends a scan. Stopping at the layout's own arithmetic
     /// instead leaves it open, and the next command that is not a basic one is
     /// refused with the same code
-    fn drain(&mut self) {
+    async fn drain(&mut self) {
         self.spent = true;
         self.closed = true;
         // The surplus is the seams of a re-registered pass, a fraction of it. A
@@ -303,11 +303,11 @@ impl Chunks<'_> {
             // A stage move's budget here is what turns a unit that has stopped
             // answering into three silent minutes. The pass is already running,
             // so a chunk is either on its way or it is never coming
-            match self.session.read_image_within(
-                &self.layout.clone(),
-                &mut buf[..want],
-                DRAIN_TIMEOUT,
-            ) {
+            match self
+                .session
+                .read_image_within(&self.layout.clone(), &mut buf[..want], DRAIN_TIMEOUT)
+                .await
+            {
                 Ok(0) => break,
                 Ok(got) => {
                     self.at = self.layout.granules.advance(self.at, got);
@@ -385,7 +385,7 @@ impl Drop for Chunks<'_> {
         self.spent = true;
         self.closed = true;
         info!(remaining = self.remaining, "stopping the scan");
-        match self.session.abort() {
+        match super::block_on(self.session.abort()) {
             Ok(true) => {}
             // Nothing in either spec's command list is optional here, but
             // `abort` tolerates a unit that has never heard of it, and reading
@@ -393,7 +393,7 @@ impl Drop for Chunks<'_> {
             Ok(false) => {
                 debug!("no ABORT on this unit, so reading the remainder off instead");
                 self.closed = false;
-                self.drain();
+                super::block_on(self.drain());
             }
             Err(e) => warn!(
                 %e,

@@ -28,18 +28,19 @@ impl Session {
     /// Builds its own metering windows from `recipe`, so the exposures come off
     /// the frame rather than off whatever the last pass left in the unit, and
     /// cover the channels `recipe` will scan
-    pub fn autoexpose_frame(
+    pub async fn autoexpose_frame(
         &mut self,
         frame: Rect,
         recipe: &Recipe,
         metering: &Metering,
     ) -> Result<Exposures, Error> {
         self.autoexpose_frame_with(frame, recipe, metering, |_, _| ControlFlow::Continue(()))
+            .await
     }
 
     /// The same as [`Self::autoexpose_frame`], with `on` given which metering pass is running
     /// (counting from one) and letting it cancel by returning `Break`
-    pub fn autoexpose_frame_with(
+    pub async fn autoexpose_frame_with(
         &mut self,
         frame: Rect,
         recipe: &Recipe,
@@ -54,7 +55,7 @@ impl Session {
         if metering.format.is_none() {
             metering.format = FilmFormat::resolve(None, self.capabilities()).ok();
         }
-        self.autoexpose_with(&windows, &metering, on)
+        self.autoexpose_with(&windows, &metering, on).await
     }
 
     /// Meter `windows` and answer their new exposures
@@ -62,19 +63,20 @@ impl Session {
     /// A set is what gets metered rather than a channel: one descriptor per
     /// channel, one exposure in each, and a lock that decides them against one
     /// another. Which mechanism runs is the unit's to advertise.
-    pub fn autoexpose(
+    pub async fn autoexpose(
         &mut self,
         windows: &[Window],
         metering: &Metering,
     ) -> Result<Exposures, Error> {
         self.autoexpose_with(windows, metering, |_, _| ControlFlow::Continue(()))
+            .await
     }
 
     /// The same as [`Self::autoexpose`], letting `on` cancel by returning `Break`
     ///
     /// A unit that meters for itself takes a pass we never read, so `on` never
     /// runs and cannot cancel that mechanism
-    pub fn autoexpose_with(
+    pub async fn autoexpose_with(
         &mut self,
         windows: &[Window],
         metering: &Metering,
@@ -93,12 +95,12 @@ impl Session {
                 }
                 // Its own numbers are the point, not the image, so the pass is
                 // stopped rather than read out
-                self.start_pass(&metering, PASS_TIMEOUT)?;
-                self.abort()?;
+                self.start_pass(&metering, PASS_TIMEOUT).await?;
+                self.abort().await?;
 
                 // Only the channels we asked it to meter: the unit holds a
                 // descriptor for every channel it has, metered or not
-                let held = self.windows()?;
+                let held = self.windows().await?;
                 let mut exposures = Exposures::read(windows);
                 for w in windows {
                     if let Some(metered) = held.iter().find(|h| h.id == w.id) {
@@ -113,7 +115,7 @@ impl Session {
                 // whatever is in the descriptors compounds run over run.
                 // `DataType::WhiteBalanceExposure` is the unit's own neutral,
                 // measured at start-up, and Nikon Scan meters from it
-                let seeded = self.seed_white_balance(windows)?;
+                let seeded = self.seed_white_balance(windows).await?;
                 let base: Vec<u32> = seeded.iter().map(|w| w.exposure).collect();
 
                 let mut windows = prescan_windows(self.capabilities(), &seeded);
@@ -122,8 +124,9 @@ impl Session {
                 }
                 let mut samples = Samples::default();
                 for pass in 1.. {
-                    let taken =
-                        self.scan_pass_with(&windows, PASS_TIMEOUT, &mut samples, |p| on(pass, p))?;
+                    let taken = self
+                        .scan_pass_with(&windows, PASS_TIMEOUT, &mut samples, |p| on(pass, p))
+                        .await?;
                     let image = Image::new(&taken.layout, &samples)?;
                     let step = metering.step(self.capabilities(), &image, &windows, &base, pass)?;
                     debug!(pass, ?step, "metering pass");
@@ -150,11 +153,11 @@ impl Session {
     /// defaults to rather than at the level the film base asks for.
     ///
     /// A channel the unit has no reading for keeps what it came with
-    pub fn seed_white_balance(&mut self, windows: &[Window]) -> Result<Vec<Window>, Error> {
+    pub async fn seed_white_balance(&mut self, windows: &[Window]) -> Result<Vec<Window>, Error> {
         let mut seeded = Vec::with_capacity(windows.len());
         for w in windows {
             let mut w = w.clone();
-            match self.white_balance(w.channel()) {
+            match self.white_balance(w.channel()).await {
                 Ok(exposure) => w.exposure = exposure,
                 Err(e) => debug!(id = w.id, %e, "no start-up exposure for this channel"),
             }

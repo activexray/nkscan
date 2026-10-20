@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** the Rust API that talks to a unit is async. `Transport::execute` returns a boxed future, and `device::list`, `device::Selector::open`, `Session::open`, the `Session` methods that send a command, `session::probe`, and the `scan::frame` and `scan::framing` entry points are `async fn`. The native transports do their IO inside the future, so `pollster::block_on` runs them. The CLI and the Python API do not change.
 - **Breaking:** `dust::Options` has no `metering_target`, and `dust::theta_for_metering_target` is removed.
 - On the LS-8000 and LS-9000, negatives are metered with the default film base density, as in Nikon Scan. LS9000.md3 has no base density measurement from the thumbnail. `Discovery.base_density` is `None` on these units.
 

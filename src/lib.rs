@@ -1,15 +1,21 @@
 //! A cross-platform driver for Nikon (Coolscan) film scanners
 //!
+//! Every call that talks to the unit is async. On the native platforms the
+//! transports do their IO inside the future, so any executor runs them, and
+//! `pollster::block_on` is enough
+//!
 //! ```no_run
 //! use nkscan::{device, session::Session};
 //!
-//! let devices = device::list();
+//! # pollster::block_on(async {
+//! let devices = device::list().await;
 //! let device = devices.first().expect("no scanner found");
-//! let mut session = Session::open(device.open()?)?;
+//! let mut session = Session::open(device.open()?).await?;
 //!
-//! session.stage()?; // homes the mechanism once a holder is loaded
+//! session.stage().await?; // homes the mechanism once a holder is loaded
 //! let caps = session.capabilities();
 //! # Ok::<(), nkscan::error::Error>(())
+//! # });
 //! ```
 
 pub mod device;

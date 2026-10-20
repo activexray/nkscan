@@ -16,9 +16,11 @@ use tracing::*;
 
 impl Session {
     /// One GET WINDOW, exactly as asked: header plus descriptors, unparsed
-    fn get_window_raw(&mut self, cmd: GetWindow) -> Result<Vec<u8>, Error> {
+    async fn get_window_raw(&mut self, cmd: GetWindow) -> Result<Vec<u8>, Error> {
         let mut buf = vec![0u8; cmd.allocation_length()];
-        let completion = self.run(&cmd.cdb(), Data::In(&mut buf), PROBE_TIMEOUT)?;
+        let completion = self
+            .run(&cmd.cdb(), Data::In(&mut buf), PROBE_TIMEOUT)
+            .await?;
         buf.truncate(completion.transferred);
         Ok(buf)
     }
@@ -27,12 +29,16 @@ impl Session {
     ///
     /// Two passes: a transfer longer than what is there gets refused, so the
     /// header has to say how much there is first
-    pub fn windows(&mut self) -> Result<Vec<Window>, Error> {
-        let probe = self.get_window_raw(GetWindow::all(window::HEADER as u32))?;
+    pub async fn windows(&mut self) -> Result<Vec<Window>, Error> {
+        let probe = self
+            .get_window_raw(GetWindow::all(window::HEADER as u32))
+            .await?;
         let (probe, _) =
             GetWindowHeader::from_bytes(&probe).map_err(|e| malformed(e.to_string()))?;
 
-        let data = self.get_window_raw(GetWindow::all(2 + u32::from(probe.data_length)))?;
+        let data = self
+            .get_window_raw(GetWindow::all(2 + u32::from(probe.data_length)))
+            .await?;
         let (header, descriptors) =
             GetWindowHeader::from_bytes(&data).map_err(|e| malformed(e.to_string()))?;
         let stride = usize::from(header.descriptor_length);
@@ -78,7 +84,7 @@ impl Session {
     /// An image window inside a known frame steps straight to it; one no frame
     /// holds sends the mechanism out to its home stop first. The unit takes it
     /// either way and the image is the same, so this says so rather than refusing
-    pub fn set_window(&mut self, window: &Window) -> Result<(), Error> {
+    pub async fn set_window(&mut self, window: &Window) -> Result<(), Error> {
         window.validate(&self.caps)?;
         if self.homes_to_reach(window) {
             warn!(
@@ -111,7 +117,8 @@ impl Session {
         }
         // setting windows is not a cooperative action
         self.transport
-            .execute(&cmd.cdb(), Data::Out(&payload), MOVE_TIMEOUT)?;
+            .execute(&cmd.cdb(), Data::Out(&payload), MOVE_TIMEOUT)
+            .await?;
 
         Ok(())
     }
@@ -128,7 +135,7 @@ impl Session {
     /// the *data*, not what has to happen before the scan runs. Whatever it
     /// asks for comes back on [`Started::cooperations`] for the caller to honor
     /// once the image is read.
-    pub fn scan(&mut self, windows: &[Window]) -> Result<Started, Error> {
+    pub async fn scan(&mut self, windows: &[Window]) -> Result<Started, Error> {
         // Checks every rule spanning the set on the way
         let ids: Vec<u8> = windows.iter().map(|w| w.id).collect();
         let cmd = Scan::new(ids.len() as u8);
@@ -139,7 +146,9 @@ impl Session {
         // `run_handshake` reads the `DataType::Cooperation` record, sends SCAN
         // again with nothing in between, and hands the record back so the
         // caller can honor it once the image is read
-        let (_, cooperations) = self.run_handshake(&cmd.cdb(), Data::Out(&ids), MOVE_TIMEOUT)?;
+        let (_, cooperations) = self
+            .run_handshake(&cmd.cdb(), Data::Out(&ids), MOVE_TIMEOUT)
+            .await?;
         debug!(?ids, ?cooperations, "scanning");
 
         let truncation = cooperations.iter().find_map(|c| match c {
@@ -152,7 +161,7 @@ impl Session {
         let mut layout = match Layout::new(&self.caps, windows, self.divisor, truncation) {
             Ok(layout) => layout,
             Err(e) => {
-                self.abandon_scan();
+                self.abandon_scan().await;
                 return Err(e);
             }
         };

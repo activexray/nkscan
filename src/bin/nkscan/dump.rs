@@ -16,28 +16,34 @@ use nkscan::{
 };
 
 /// Dump every INQUIRY page the named unit carries
-pub fn run(args: cli::Dump) -> anyhow::Result<()> {
-    let (device, mut transport) = (if let Some(d) = args.device {
-        device::Selector::Location(d)
-    } else {
-        device::Selector::Only
-    })
-    .open()
-    .map_err(|e| {
-        let list: Vec<_> = device::list().iter().map(ToString::to_string).collect();
-        anyhow!("{e}\n\nattached:\n  {}", list.join("\n  "))
-    })?;
+pub async fn run(args: cli::Dump) -> anyhow::Result<()> {
+    let selector = match args.device {
+        Some(d) => device::Selector::Location(d),
+        None => device::Selector::Only,
+    };
+    let (device, mut transport) = match selector.open().await {
+        Ok(opened) => opened,
+        Err(e) => {
+            let list: Vec<_> = device::list()
+                .await
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            return Err(anyhow!("{e}\n\nattached:\n  {}", list.join("\n  ")));
+        }
+    };
 
     println!("{device}\n");
 
     // Standard INQUIRY: who is this, and is it even a scanner
-    let Some(identity) = read(transport.as_mut(), Inquiry::standard()) else {
+    let Some(identity) = read(transport.as_mut(), Inquiry::standard()).await else {
         bail!("standard INQUIRY was refused");
     };
     println!("== standard INQUIRY ==");
     hexdump(&identity);
 
     let codes = probe::page_codes(transport.as_mut())
+        .await
         .map_err(|e| anyhow!("page 00h gave nothing to enumerate: {e}"))?;
     println!(
         "\n  {} pages: {}",
@@ -56,7 +62,7 @@ pub fn run(args: cli::Dump) -> anyhow::Result<()> {
             false => "",
         };
         println!("\n== page {code:02X}h{unlisted} ==");
-        match read(transport.as_mut(), Inquiry::vpd(code)) {
+        match read(transport.as_mut(), Inquiry::vpd(code)).await {
             Some(bytes) => {
                 page_hexdump(&bytes);
                 // Everything a parser prints can be diffed against the
@@ -100,8 +106,8 @@ fn decode(code: u8, bytes: &[u8]) -> Option<String> {
 /// 2-2 note 4: a CHECK CONDITION to INQUIRY means the unit cannot produce what
 /// was asked for, which when probing arbitrary page codes is the expected
 /// answer rather than a failure
-fn read(transport: &mut dyn Transport, cmd: Inquiry) -> Option<Vec<u8>> {
-    match probe::inquiry(transport, cmd) {
+async fn read(transport: &mut dyn Transport, cmd: Inquiry) -> Option<Vec<u8>> {
+    match probe::inquiry(transport, cmd).await {
         Ok(bytes) => Some(bytes),
         Err(e) => {
             println!("  {e}");

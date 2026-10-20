@@ -66,58 +66,64 @@ fn shift(a: &[f64], b: &[f64], most: usize) -> isize {
 #[test]
 #[ignore = "needs a perforation-framed scanner with 35mm film loaded"]
 fn a_frame_scanned_twice_comes_back_in_the_same_place() {
-    let devices = device::list();
-    let device = devices.first().expect("a scanner");
-    let mut session = Session::open(device.open().expect("open")).expect("session");
-    if Framing::choose(session.capabilities()) != Framing::Perforation {
-        eprintln!("not a perforation-framed unit, nothing to test");
-        return;
-    }
-    session.stage().expect("stage");
+    pollster::block_on(async {
+        let devices = device::list().await;
+        let device = devices.first().expect("a scanner");
+        let mut session = Session::open(device.open().expect("open"))
+            .await
+            .expect("session");
+        if Framing::choose(session.capabilities()) != Framing::Perforation {
+            eprintln!("not a perforation-framed unit, nothing to test");
+            return;
+        }
+        session.stage().await.expect("stage");
 
-    let mut samples = Samples::default();
-    let discovery =
-        framing::discover(&mut session, None, Film::default(), &mut samples).expect("discovery");
-    let frame = *discovery
-        .frames
-        .get(3)
-        .or(discovery.frames.first())
-        .expect("a frame");
+        let mut samples = Samples::default();
+        let discovery = framing::discover(&mut session, None, Film::default(), &mut samples)
+            .await
+            .expect("discovery");
+        let frame = *discovery
+            .frames
+            .get(3)
+            .or(discovery.frames.first())
+            .expect("a frame");
 
-    let recipe = Recipe {
-        dpi: 500,
-        samples: 1,
-        interleaving: ColorInterleaving::LINE_WITHOUT_DISTANCE,
-        infrared: false,
-    };
+        let recipe = Recipe {
+            dpi: 500,
+            samples: 1,
+            interleaving: ColorInterleaving::LINE_WITHOUT_DISTANCE,
+            infrared: false,
+        };
 
-    let mut round = || {
-        let scanned = frame::scan_frame_with(
-            &mut session,
-            &recipe,
-            frame,
-            Options::default(),
-            &mut samples,
-            |_, _| ControlFlow::Continue(()),
-        )
-        .expect("scan");
-        let image = Image::new(&scanned.pass.layout, &samples).expect("image");
-        profile(&image)
-    };
+        let mut round = async || {
+            let scanned = frame::scan_frame_with(
+                &mut session,
+                &recipe,
+                frame,
+                Options::default(),
+                &mut samples,
+                |_, _| ControlFlow::Continue(()),
+            )
+            .await
+            .expect("scan");
+            let image = Image::new(&scanned.pass.layout, &samples).expect("image");
+            profile(&image)
+        };
 
-    let first = round();
-    let second = round();
-    assert_eq!(
-        first.len(),
-        second.len(),
-        "the passes are different lengths"
-    );
+        let first = round().await;
+        let second = round().await;
+        assert_eq!(
+            first.len(),
+            second.len(),
+            "the passes are different lengths"
+        );
 
-    let moved = shift(&first, &second, 40);
-    assert!(
-        moved.abs() <= 4,
-        "the film moved {moved} columns between the two passes"
-    );
+        let moved = shift(&first, &second, 40);
+        assert!(
+            moved.abs() <= 4,
+            "the film moved {moved} columns between the two passes"
+        );
+    })
 }
 
 /// A frame scanned at the exposures metered for it is scanned at those
@@ -127,45 +133,52 @@ fn a_frame_scanned_twice_comes_back_in_the_same_place() {
 #[test]
 #[ignore = "needs a scanner with film loaded"]
 fn a_frame_scans_at_the_exposures_metered_for_it() {
-    let devices = device::list();
-    let device = devices.first().expect("a scanner");
-    let mut session = Session::open(device.open().expect("open")).expect("session");
-    session.stage().expect("stage");
+    pollster::block_on(async {
+        let devices = device::list().await;
+        let device = devices.first().expect("a scanner");
+        let mut session = Session::open(device.open().expect("open"))
+            .await
+            .expect("session");
+        session.stage().await.expect("stage");
 
-    let mut samples = Samples::default();
-    let discovery =
-        framing::discover(&mut session, None, Film::default(), &mut samples).expect("discovery");
-    let frame = *discovery
-        .frames
-        .get(1)
-        .or(discovery.frames.first())
-        .expect("a frame");
+        let mut samples = Samples::default();
+        let discovery = framing::discover(&mut session, None, Film::default(), &mut samples)
+            .await
+            .expect("discovery");
+        let frame = *discovery
+            .frames
+            .get(1)
+            .or(discovery.frames.first())
+            .expect("a frame");
 
-    let recipe = Recipe {
-        dpi: 500,
-        samples: 1,
-        interleaving: ColorInterleaving::LINE_WITHOUT_DISTANCE,
-        infrared: false,
-    };
+        let recipe = Recipe {
+            dpi: 500,
+            samples: 1,
+            interleaving: ColorInterleaving::LINE_WITHOUT_DISTANCE,
+            infrared: false,
+        };
 
-    let metering = nkscan::scan::meter::Metering::new(Film::Negative);
-    let metered = frame::meter_frame_with(&mut session, &recipe, frame, &metering, |_, _| {
-        ControlFlow::Continue(())
+        let metering = nkscan::scan::meter::Metering::new(Film::Negative);
+        let metered = frame::meter_frame_with(&mut session, &recipe, frame, &metering, |_, _| {
+            ControlFlow::Continue(())
+        })
+        .await
+        .expect("metering");
+        assert_eq!(metered.iter().count(), 3, "every color channel is metered");
+
+        let scanned = frame::scan_frame_with(
+            &mut session,
+            &recipe,
+            frame,
+            Options {
+                exposures: Some(&metered),
+                ..Options::default()
+            },
+            &mut samples,
+            |_, _| ControlFlow::Continue(()),
+        )
+        .await
+        .expect("scan");
+        assert_eq!(scanned.exposures, metered);
     })
-    .expect("metering");
-    assert_eq!(metered.iter().count(), 3, "every color channel is metered");
-
-    let scanned = frame::scan_frame_with(
-        &mut session,
-        &recipe,
-        frame,
-        Options {
-            exposures: Some(&metered),
-            ..Options::default()
-        },
-        &mut samples,
-        |_, _| ControlFlow::Continue(()),
-    )
-    .expect("scan");
-    assert_eq!(scanned.exposures, metered);
 }

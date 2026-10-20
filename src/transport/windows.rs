@@ -1,6 +1,6 @@
 //! SCSI transport on Windows, via the scanner class driver scsiscan.sys, which will be any scanner that talks via scsi
 
-use super::{Completion, Data, Error, Status, Transport, sense_from_fixed};
+use super::{BoxFuture, Completion, Data, Error, Status, Transport, sense_from_fixed};
 use std::{io, os::windows::ffi::OsStrExt, path::Path, ptr, thread::sleep, time::Duration};
 use tracing::*;
 use windows_sys::Win32::{
@@ -99,14 +99,15 @@ impl Drop for ScsiScanDevice {
     }
 }
 
-impl Transport for ScsiScanDevice {
-    fn max_transfer(&self) -> usize {
-        MAX_TRANSFER
-    }
-
-    // `timeout` is ignored: `SCSISCAN_CMD` has no timeout field
+impl ScsiScanDevice {
+    /// One SCSI transaction, run to completion on this thread
     #[instrument(skip_all, fields(cdb = ?cdb, ?data))]
-    fn execute(&mut self, cdb: &[u8], data: Data, _timeout: Duration) -> Result<Completion, Error> {
+    fn execute_blocking(
+        &mut self,
+        cdb: &[u8],
+        data: Data,
+        _timeout: Duration,
+    ) -> Result<Completion, Error> {
         if cdb.len() > 16 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -228,5 +229,22 @@ impl Transport for ScsiScanDevice {
             sense,
             transferred: returned as usize,
         })
+    }
+}
+
+impl Transport for ScsiScanDevice {
+    fn max_transfer(&self) -> usize {
+        MAX_TRANSFER
+    }
+
+    // `timeout` is ignored: `SCSISCAN_CMD` has no timeout field
+
+    fn execute<'a>(
+        &'a mut self,
+        cdb: &'a [u8],
+        data: Data<'a>,
+        timeout: Duration,
+    ) -> BoxFuture<'a, Result<Completion, Error>> {
+        Box::pin(async move { self.execute_blocking(cdb, data, timeout) })
     }
 }

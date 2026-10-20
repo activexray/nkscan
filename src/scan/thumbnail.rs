@@ -364,11 +364,24 @@ mod tests {
             65536
         }
 
-        fn execute(
+        fn execute<'a>(
+            &'a mut self,
+            cdb: &'a [u8],
+            data: crate::transport::Data<'a>,
+            _: std::time::Duration,
+        ) -> crate::transport::BoxFuture<
+            'a,
+            Result<crate::transport::Completion, crate::transport::Error>,
+        > {
+            Box::pin(std::future::ready(self.answer(cdb, data)))
+        }
+    }
+
+    impl Replay {
+        fn answer(
             &mut self,
             cdb: &[u8],
             data: crate::transport::Data,
-            _: std::time::Duration,
         ) -> Result<crate::transport::Completion, crate::transport::Error> {
             use crate::transport::{Completion, Data, Sense, Status};
             let key = match cdb[1] & 1 {
@@ -415,7 +428,9 @@ mod tests {
                 Some((code, std::fs::read(dir.join(&name)).ok()?))
             })
             .collect();
-        let caps = crate::session::probe::capabilities(&mut Replay(pages)).expect("capabilities");
+        let caps =
+            crate::session::block_on(crate::session::probe::capabilities(&mut Replay(pages)))
+                .expect("capabilities");
         let factors = exposure_factors(&caps, film).expect("factors");
         let mut wrong = Vec::new();
         for (c, mut w) in windows(&caps).expect("windows").into_iter().enumerate() {

@@ -1,6 +1,6 @@
 //! SCSI-over-USB transport implemented with nusb
 
-use super::{Completion, Data, Error, Sense, Status, Transport};
+use super::{BoxFuture, Completion, Data, Error, Sense, Status, Transport};
 use nusb::{
     DeviceInfo, Endpoint, Interface, MaybeFuture,
     transfer::{Buffer, Bulk, BulkOrInterrupt, EndpointDirection, In, Out, TransferError},
@@ -478,13 +478,9 @@ impl UsbTransport {
     }
 }
 
-impl Transport for UsbTransport {
-    fn max_transfer(&self) -> usize {
-        // A cap on what one READ asks for, not a limit of the unit
-        1024 * 1024
-    }
-
-    fn execute(
+impl UsbTransport {
+    /// One SCSI transaction, run to completion on this thread
+    fn execute_blocking(
         &mut self,
         cdb: &[u8],
         mut data: Data,
@@ -535,6 +531,22 @@ impl Transport for UsbTransport {
                 }
             }
         }
+    }
+}
+
+impl Transport for UsbTransport {
+    fn max_transfer(&self) -> usize {
+        // A cap on what one READ asks for, not a limit of the unit
+        1024 * 1024
+    }
+
+    fn execute<'a>(
+        &'a mut self,
+        cdb: &'a [u8],
+        data: Data<'a>,
+        timeout: Duration,
+    ) -> BoxFuture<'a, Result<Completion, Error>> {
+        Box::pin(async move { self.execute_blocking(cdb, data, timeout) })
     }
 }
 

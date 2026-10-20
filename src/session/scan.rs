@@ -126,15 +126,19 @@ impl Session {
     ///
     /// The caller owes the unit a read: a scan whose data is never read locks
     /// out every command that follows
-    pub fn start_pass(&mut self, windows: &[Window], timeout: Duration) -> Result<Started, Error> {
+    pub async fn start_pass(
+        &mut self,
+        windows: &[Window],
+        timeout: Duration,
+    ) -> Result<Started, Error> {
         for w in windows {
-            self.set_window(w)?;
+            self.set_window(w).await?;
         }
-        let started = self.scan(windows)?;
+        let started = self.scan(windows).await?;
         // Whether the unit reports ready as soon as it is streaming or only
         // once the whole pass is taken decides what this budget has to cover
         let waited = Instant::now();
-        self.test_unit_ready(timeout)?;
+        self.test_unit_ready(timeout).await?;
         debug!(ready_in = ?waited.elapsed(), "scan ready");
         Ok(started)
     }
@@ -146,13 +150,14 @@ impl Session {
     /// one. `samples.color` is row-major, channels interleaved per pixel, and
     /// `samples.ir` is likewise but only `Some` where the windows carried
     /// infrared. See [`Samples`].
-    pub fn scan_pass(
+    pub async fn scan_pass(
         &mut self,
         windows: &[Window],
         timeout: Duration,
         samples: &mut Samples,
     ) -> Result<Pass, Error> {
         self.scan_pass_with(windows, timeout, samples, |_| ControlFlow::Continue(()))
+            .await
     }
 
     /// The same as [`Self::scan_pass`], telling `on` how far along the pass is
@@ -164,14 +169,14 @@ impl Session {
     /// drained by [`Chunks`](super::image::Chunks)'s own `Drop`, the same path
     /// a consumer that simply stops reading already takes, so nothing here has
     /// to wait for the mechanism or send `ABORT`
-    pub fn scan_pass_with(
+    pub async fn scan_pass_with(
         &mut self,
         windows: &[Window],
         timeout: Duration,
         samples: &mut Samples,
         mut on: impl FnMut(Progress) -> ControlFlow<()>,
     ) -> Result<Pass, Error> {
-        let started = self.start_pass(windows, timeout)?;
+        let started = self.start_pass(windows, timeout).await?;
         let layout = started.layout.clone();
 
         let total = layout.total_bytes();
@@ -182,7 +187,7 @@ impl Session {
         let mut decoder = match pass::decoder(&layout, curves.as_deref()) {
             Ok(decoder) => decoder,
             Err(e) => {
-                self.abandon_scan();
+                self.abandon_scan().await;
                 return Err(e);
             }
         };
@@ -198,7 +203,15 @@ impl Session {
             let (full_tx, full_rx) = mpsc::channel::<Chunk>();
             let (empty_tx, empty_rx) = mpsc::channel::<Vec<u8>>();
             let timing = &timing;
-            scope.spawn(move || read_chunks(self, &reader_layout, &full_tx, &empty_rx, timing));
+            scope.spawn(move || {
+                super::block_on(read_chunks(
+                    self,
+                    &reader_layout,
+                    &full_tx,
+                    &empty_rx,
+                    timing,
+                ))
+            });
 
             let mut out = Ok(());
             let mut bytes = 0u64;
@@ -277,12 +290,17 @@ impl Session {
     ///
     /// Builds its own windows from the capabilities (whole strip, lowest dpi,
     /// one channel per color), exposed as Nikon Scan exposes them for `film`
-    pub fn scan_thumbnail(&mut self, samples: &mut Samples, film: Film) -> Result<Pass, Error> {
+    pub async fn scan_thumbnail(
+        &mut self,
+        samples: &mut Samples,
+        film: Film,
+    ) -> Result<Pass, Error> {
         self.scan_thumbnail_with(samples, film, |_| ControlFlow::Continue(()))
+            .await
     }
 
     /// The same as [`Self::scan_thumbnail`], letting `on` cancel by returning `Break`
-    pub fn scan_thumbnail_with(
+    pub async fn scan_thumbnail_with(
         &mut self,
         samples: &mut Samples,
         film: Film,
@@ -296,7 +314,7 @@ impl Session {
         }
 
         let windows = crate::scan::thumbnail::windows(self.capabilities())?;
-        let mut windows = self.seed_white_balance(&windows)?;
+        let mut windows = self.seed_white_balance(&windows).await?;
         let factors = crate::scan::thumbnail::exposure_factors(self.capabilities(), film);
         for w in &mut windows {
             if let (Some(f), Some(c)) = (factors, meter::color(w)) {
@@ -305,6 +323,7 @@ impl Session {
         }
         debug!(?film, ?factors, "thumbnail exposure");
         self.scan_pass_with(&windows, THUMBNAIL_TIMEOUT, samples, on)
+            .await
     }
 }
 
@@ -341,7 +360,7 @@ impl Timing {
 
 /// Read the whole stream off the unit a chunk at a time, forwarding each chunk
 /// down `full` and drawing the buffer to fill from the pool `empty` keeps up
-fn read_chunks(
+async fn read_chunks(
     session: &mut Session,
     layout: &Layout,
     full: &Sender<Chunk>,
@@ -377,7 +396,7 @@ fn read_chunks(
         };
 
         let reading = Instant::now();
-        let filled = chunks.fill(&mut buf);
+        let filled = chunks.fill(&mut buf).await;
         Timing::add(&timing.read, reading.elapsed().as_nanos() as u64);
 
         match filled {

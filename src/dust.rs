@@ -170,9 +170,6 @@ pub struct Options {
     pub quality: Quality,
     /// scan resolution
     pub dpi: u32,
-    /// Fraction of full scale this crate's AE metered the IR channel to.
-    /// Tracks [`crate::scan::meter::INFRARED_TARGET`]
-    pub metering_target: f32,
 }
 
 /// All the parameters needed to complete the pass
@@ -214,7 +211,11 @@ impl Params {
         Self {
             c: cal.c,
             ir_ref: cal.ir_ref,
-            theta: profile.theta + theta_for_metering_target(opts.metering_target),
+            // The gate is read against this frame's own clear film, `ir_ref`,
+            // so how far up the IR channel was exposed cancels out. Nikon Scan
+            // meters IR to the same 85% this crate does, and its bias is all
+            // there is to add
+            theta: profile.theta,
             ramp_bias: cal.ir_ref + density(anchor(B_ANCHOR)) - M,
             ramp_s: 1.0 / profile.ramp,
             phi: density(anchor(PHI_ANCHOR)),
@@ -238,13 +239,6 @@ impl Params {
 /// `floor(fraction * M)`
 fn anchor(fraction: f32) -> u16 {
     (M * fraction) as u16
-}
-
-/// Compute the gate-bias term for our AE target.
-/// This is important because we intentionally don't AE to hit the upper limit of u16 to avoid clipping.
-/// The ref doc values assume that the exprapolated brightest intensity is u16::MAX, so we'd end up flagging way more than we should.
-pub fn theta_for_metering_target(target: f32) -> f32 {
-    density(anchor(target.clamp(0.0, 1.0))) - M
 }
 
 // ----- density calculations
@@ -855,4 +849,87 @@ pub fn clean(
         }
     }
     patch.at.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fixed noise in `[-0.5, 0.5)` per pixel and stream
+    fn noise(i: usize, stream: usize) -> f32 {
+        uniform(i, stream) - 0.5
+    }
+
+    /// Flat film with 1% noise and infrared metered to 85%, crossed by
+    /// scratches three columns wide that block `depths` of the light in every
+    /// channel. Answers how much of the lost red each scratch got back
+    fn recovered(depths: &[f32]) -> Vec<f64> {
+        const ROWS: usize = 200;
+        const PITCH: usize = 100;
+        let cols = PITCH * depths.len();
+        let depth = |x: usize| (x % PITCH >= 50 && x % PITCH < 53).then(|| depths[x / PITCH]);
+
+        let scene = [30_000.0, 20_000.0, 15_000.0];
+        let truth: [Vec<u16>; 3] = std::array::from_fn(|c| {
+            (0..ROWS * cols)
+                .map(|i| (scene[c] * (1.0 + 0.01 * noise(i, c))) as u16)
+                .collect()
+        });
+        let mut ir: Vec<u16> = (0..ROWS * cols)
+            .map(|i| (M * 0.85 * (1.0 + 0.01 * noise(i, 3))) as u16)
+            .collect();
+        let mut planes = truth.clone();
+        for i in 0..ROWS * cols {
+            if let Some(d) = depth(i % cols) {
+                for plane in &mut planes {
+                    plane[i] = (f32::from(plane[i]) * (1.0 - d)) as u16;
+                }
+                ir[i] = (f32::from(ir[i]) * (1.0 - d)) as u16;
+            }
+        }
+        let dirty = planes[0].clone();
+
+        let cal = calibrate(&Prescan {
+            red: &planes[0],
+            ir: &ir,
+            rows: ROWS,
+            cols,
+        })
+        .expect("clear film");
+        let opts = Options {
+            model: Model::Ls5000,
+            quality: Quality::Normal,
+            dpi: 4000,
+        };
+        let [r, g, b] = &mut planes;
+        clean([r, g, b], &ir, &cal, ROWS, cols, &opts);
+
+        (0..depths.len())
+            .map(|n| {
+                let (mut lost, mut back) = (0.0, 0.0);
+                for y in 10..ROWS - 10 {
+                    for x in n * PITCH + 50..n * PITCH + 53 {
+                        let i = y * cols + x;
+                        lost += f64::from(truth[0][i]) - f64::from(dirty[i]);
+                        back += f64::from(planes[0][i]) - f64::from(dirty[i]);
+                    }
+                }
+                back / lost
+            })
+            .collect()
+    }
+
+    /// A scratch that takes 3% off the infrared is rebuilt, with the infrared
+    /// metered to 85% as the host meter does. Before, the gate moved with the
+    /// metering target and let through anything under about 17%
+    #[test]
+    fn shallow_scratches_are_rebuilt() {
+        let depths = [0.03, 0.05, 0.10, 0.30];
+        for (depth, back) in depths.into_iter().zip(recovered(&depths)) {
+            assert!(
+                back > 0.9,
+                "a {depth} scratch got {back:.2} of its light back"
+            );
+        }
+    }
 }

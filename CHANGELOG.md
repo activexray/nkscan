@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking:** `dust::Options` has no `metering_target`, and `dust::theta_for_metering_target` is removed.
+
+### Fixed
+
+- `--clean` now removes fine scratches. The gate bias no longer changes with the infrared metering target: the gate is read against the clear film of the frame, so the exposure cancels, and Nikon Scan meters infrared to the same 85%. Before this change, a pixel was rebuilt only where the infrared was about 17% below clear film, not about 2%, so dust was removed and most scratches stayed.
+
 ## [0.15.0]
 
 ### Changed

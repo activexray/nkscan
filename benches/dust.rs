@@ -25,14 +25,12 @@ fn plane(n: usize) -> Vec<u16> {
     (0..n).map(|i| (i % 65536) as u16).collect()
 }
 
-/// What the fixtures are: an LS-9000 frame at 4000 DPI, metered where this
-/// crate's AE puts it
+/// What the fixtures are: an LS-9000 frame at 4000 DPI
 fn options() -> Options {
     Options {
         model: dust::Model::Ls9000,
         quality: dust::Quality::Normal,
         dpi: 4000,
-        metering_target: nkscan::scan::meter::INFRARED_TARGET,
     }
 }
 

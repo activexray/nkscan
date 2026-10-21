@@ -375,7 +375,10 @@ impl Session {
             self.run(&ReleaseUnit.cdb(), Data::None, PROBE_TIMEOUT)
                 .await?;
         }
-        Ok(())
+        // `Drop` has nothing left to do, and the transport is closed rather
+        // than dropped so the unit can be opened again at once
+        let transport = std::mem::replace(&mut self.transport, Box::new(transport::Closed));
+        Ok(transport.close().await?)
     }
 
     /// What the scanner says it can do

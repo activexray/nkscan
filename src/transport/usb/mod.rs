@@ -158,6 +158,18 @@ fn transfer_err(e: TransferError, timeout: Duration) -> Error {
     Error::Io(io::Error::new(kind, e))
 }
 
+/// What a nusb call gives
+///
+/// Natively nusb's calls are blocking syscalls, and awaiting one panics
+/// without an async runtime, so they are waited for. In a browser they are
+/// promises and are awaited
+pub(crate) async fn settle<F: nusb::MaybeFuture>(call: F) -> F::Output {
+    #[cfg(not(target_arch = "wasm32"))]
+    return call.wait();
+    #[cfg(target_arch = "wasm32")]
+    call.await
+}
+
 /// Clear an endpoint the unit halted
 ///
 /// A stall stands until CLEAR_FEATURE, which 1-1-6-1-1 has this unit
@@ -170,7 +182,7 @@ async fn clear_stall<T: BulkOrInterrupt, D: EndpointDirection>(
     if e != TransferError::Stall {
         return;
     }
-    match ep.clear_halt().await {
+    match settle(ep.clear_halt()).await {
         Ok(()) => warn!("the unit halted the endpoint, cleared it for the next command"),
         Err(e) => warn!(%e, "the unit halted the endpoint and it would not clear"),
     }
@@ -212,20 +224,19 @@ enum Attempt {
 
 impl UsbTransport {
     pub async fn open(info: DeviceInfo) -> io::Result<Self> {
-        let device = info.open().await?;
+        let device = settle(info.open()).await?;
         // Unlike other platforms, macOS only sets a configuration itself for
         // composite-class devices, so a vendor-class scanner opens unconfigured
         // there. Windows and Linux always report an active configuration, which
         // is what keeps `set_configuration` (unsupported on Windows) out of
         // reach of the platforms that cannot take it
         if device.active_configuration().is_err() {
-            device
-                .set_configuration(1)
+            settle(device.set_configuration(1))
                 .await
                 .map_err(io::Error::other)?;
         }
         // From the spec, the interface is 0
-        let interface = device.claim_interface(0).await?;
+        let interface = settle(device.claim_interface(0)).await?;
         // Endpoint addresses from LS5K spec table 1-1-6-2-4
         let ep_out = interface.endpoint::<Bulk, Out>(0x01)?;
         let ep_in = interface.endpoint::<Bulk, In>(0x82)?;
@@ -583,6 +594,23 @@ impl Transport for UsbTransport {
         timeout: Duration,
     ) -> BoxFuture<'a, Result<Completion, Error>> {
         Box::pin(self.phases.execute(cdb, data, timeout))
+    }
+
+    fn close(self: Box<Self>) -> BoxFuture<'static, Result<(), Error>> {
+        // The interface goes back only once nothing else holds it, and the
+        // endpoints do
+        let Pipes { interface, .. } = self.phases.link;
+        Box::pin(async move {
+            match settle(interface.release()).await {
+                // A transfer that timed out is still queued and holds it. The
+                // release then happens when that transfer finishes
+                Err(e) if e.kind() == nusb::ErrorKind::Busy => {
+                    debug!(%e, "the interface is still held, leaving it to the drop");
+                    Ok(())
+                }
+                r => r.map_err(|e| Error::Io(e.into())),
+            }
+        })
     }
 }
 

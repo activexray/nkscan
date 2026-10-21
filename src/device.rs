@@ -9,7 +9,10 @@ use crate::{
         cdbs::Inquiry,
         model::{self, Model},
     },
-    transport::{Data, Status, Transport, usb::UsbTransport},
+    transport::{
+        Data, Status, Transport,
+        usb::{UsbTransport, settle},
+    },
 };
 /// Only the two platforms with a SCSI node to open name one
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -176,11 +179,12 @@ type Probed = (Device, Option<Box<dyn Transport>>);
 
 /// List all the devices this library thinks it can drive
 pub async fn list() -> Vec<Device> {
-    probed()
-        .await
-        .into_iter()
-        .map(|(device, _)| device)
-        .collect()
+    let mut devices = Vec::new();
+    for (device, transport) in probed().await {
+        closed(transport).await;
+        devices.push(device);
+    }
+    devices
 }
 
 /// Ask the person for a USB scanner, answering the one they picked
@@ -196,13 +200,26 @@ pub async fn request() -> Result<Option<Device>, Error> {
     let selectors: Vec<_> = Model::usb_products()
         .map(|product| nusb::DeviceSelector::all().with_vid_pid(model::VENDOR, product))
         .collect();
-    let picked = nusb::request_device(&selectors)
+    let picked = settle(nusb::request_device(&selectors))
         .await
         .map_err(|e| Error::Transport(std::io::Error::from(e).into()))?;
     Ok(match picked {
-        Some(info) => Some(usb_device(info).await.0),
+        Some(info) => {
+            let (device, transport) = usb_device(info).await;
+            closed(transport).await;
+            Some(device)
+        }
         None => None,
     })
+}
+
+/// Close a transport that probed, so the unit can be opened again at once
+async fn closed(transport: Option<Box<dyn Transport>>) {
+    if let Some(transport) = transport
+        && let Err(e) = transport.close().await
+    {
+        debug!(%e, "could not close a probe's transport");
+    }
 }
 
 /// The same as [`list`], keeping each transport open
@@ -253,7 +270,7 @@ async fn usb_device(info: nusb::DeviceInfo) -> Probed {
 /// transport's, whose job stops at moving bytes. In a browser these are the
 /// units the page was granted
 async fn usb_devices() -> Vec<nusb::DeviceInfo> {
-    let all = match nusb::list_devices().await {
+    let all = match settle(nusb::list_devices()).await {
         Ok(all) => all,
         Err(e) => {
             debug!(%e, "could not enumerate USB");
@@ -412,6 +429,9 @@ impl Selector {
         let mut found = probed().await;
         let i = self.position(found.iter().map(|(device, _)| device))?;
         let (device, transport) = found.swap_remove(i);
+        for (_, other) in found {
+            closed(other).await;
+        }
         let transport = match transport {
             Some(transport) => transport,
             None => device.open().await?,

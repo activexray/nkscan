@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The library builds for `wasm32-unknown-unknown` and drives a USB scanner over WebUSB. The USB transport runs the same phase handshake on both, and only the bulk transfers differ: WebUSB cannot cancel a transfer, so a read that timed out takes the unit's next answer rather than a second read queueing behind it. `.cargo/config.toml` sets the cfg that nusb's WebUSB backend needs.
 - `device::request` asks the person for a USB scanner. In a browser it opens the WebUSB chooser, and the unit picked is then in `device::list` as well. Natively it answers the first USB scanner attached.
 - `Model::usb_products` gives the USB product ID of every USB model.
+- `Transport::close` gives the unit back and finishes once it has. `device::list`, `device::request`, `device::Selector::open` and `Session::close` close the transports they are done with, because a browser releases a USB interface asynchronously and refuses to open the unit again until the release is through. Before this, `list` followed by `Device::open` failed every time in a browser.
 
 ### Changed
 

@@ -190,6 +190,24 @@ pub trait MaybeSend {}
 #[cfg(target_arch = "wasm32")]
 impl<T> MaybeSend for T {}
 
+/// What a session holds once its own transport was closed. Nothing reaches it
+pub(crate) struct Closed;
+
+impl Transport for Closed {
+    fn max_transfer(&self) -> usize {
+        0
+    }
+
+    fn execute<'a>(
+        &'a mut self,
+        _: &'a [u8],
+        _: Data<'a>,
+        _: Duration,
+    ) -> BoxFuture<'a, Result<Completion, Error>> {
+        Box::pin(async { Err(io::Error::from(io::ErrorKind::NotConnected).into()) })
+    }
+}
+
 /// What one platform backend has to implement to carry a CDB and its data phase
 pub trait Transport: MaybeSend {
     /// The maximum size in bytes we can transfer in a single operation.
@@ -215,4 +233,14 @@ pub trait Transport: MaybeSend {
         data: Data<'a>,
         timeout: Duration,
     ) -> BoxFuture<'a, Result<Completion, Error>>;
+
+    /// Give the unit back, finishing once it is
+    ///
+    /// Dropping a transport does the same, and natively that is synchronous.
+    /// A browser releases a USB interface asynchronously and refuses to open
+    /// the unit again until the release is through, so a transport that is
+    /// about to be opened again is closed rather than dropped
+    fn close(self: Box<Self>) -> BoxFuture<'static, Result<(), Error>> {
+        Box::pin(async { Ok(()) })
+    }
 }

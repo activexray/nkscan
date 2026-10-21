@@ -13,6 +13,7 @@ use crate::{
     protocol::{
         caps::{
             Capabilities,
+            address::Axis,
             film::FilmFormat,
             set_window::{ColorInterleaving, ScanKind, ScanMode},
         },
@@ -95,8 +96,13 @@ fn top_of(caps: &Capabilities, middle: u32, format: u32) -> Option<u32> {
 
 /// Nikon Scan's thumbnail exposure factors on the start-up exposure, by film and holder or adapter
 ///
-/// `CNkThumbSourceData::SetDataInfo` (LS5000.md3 Mac `1012b430`, LS9000.md3 `10017a60`).
+/// `CNkThumbSourceData::SetDataInfo` (LS5000.md3 Mac `1012b430`, LS9000.md3 `10017910`).
 /// `None` if Nikon Scan takes no thumbnail.
+///
+/// LS4000.md3 (`10011dc0`) and LS8000.md3 (`100161d0`) have other positive and
+/// Kodachrome rows. We use the rows of the newer modules on all units. A
+/// factor only sets the brightness of the thumbnail, because
+/// [`framing`](super::framing) divides it out of the base density.
 pub fn exposure_factors(caps: &Capabilities, film: Film) -> Option<[f64; 3]> {
     const POSITIVE: [f64; 3] = [1.186, 1.21, 1.259];
     const NEGATIVE: [f64; 3] = [1.231, 2.844, 3.839];
@@ -108,8 +114,9 @@ pub fn exposure_factors(caps: &Capabilities, film: Film) -> Option<[f64; 3]> {
             (0x13, _) => [1.0; 3],
             (0x12..=0x18, Film::Positive) => POSITIVE,
             (0x12..=0x18, Film::MonochromeNegative) => MONO,
-            (0x12 | 0x14 | 0x15, Film::Negative) => DENSE_NEGATIVE,
-            (0x16..=0x18, Film::Negative) => NEGATIVE,
+            // FH-869M is code 8400h in Nikon Scan, which takes the dense row
+            (0x12 | 0x14..=0x16, Film::Negative) => DENSE_NEGATIVE,
+            (0x17 | 0x18, Film::Negative) => NEGATIVE,
             _ => return None,
         },
         None => {
@@ -131,6 +138,8 @@ pub fn exposure_factors(caps: &Capabilities, film: Film) -> Option<[f64; 3]> {
 }
 
 /// Nikon Scan's film base density off a thumbnail (`GetBaseDensity`, LS5000.md3 Mac `10139370`)
+///
+/// The same function is in LS4000.md3 (`100794a0`) and LS5000.md3 (`10088810`).
 ///
 /// `ratio` is the start-up exposure over the thumbnail exposure. `None` if the thumbnail is short.
 pub(crate) fn base_density(image: &Image, ratio: [f64; 3]) -> Option<[f64; 3]> {
@@ -255,9 +264,59 @@ fn opening(caps: &Capabilities) -> (u32, u32) {
     }
 }
 
+/// The origin and size of Nikon Scan's thumbnail window
+///
+/// Nikon Scan selects the window by holder or adapter:
+/// - FH-869S and FH-869G: from the left of the first image, as wide as the
+///   opening, to the Y maximum address. LS9000.md3 `1008d6b0`, LS8000.md3
+///   `1008a4d0`. These are the holders that take Boundary Information after
+///   the thumbnail (LS9000 2-11-6).
+/// - All other holders: the full addressable area, one pass for all frames
+///   and strips. LS9000.md3 `1008dd50`, LS8000.md3 `10088560`.
+/// - IA-20: the X boundary wide, and one Y boundary for each loaded frame.
+///   LS5000.md3 `10083ba0`. This is the Y maximum address plus one (LS5000
+///   2-2-2-3, note 3).
+/// - Strip adapters: the X boundary wide, to the Y maximum address.
+///   `CSAThumbManager::CreateRect`, LS5000.md3 Mac `10047270`.
+fn area(caps: &Capabilities) -> ((u32, u32), (u32, u32)) {
+    let (x, y) = (&caps.address.x_axis, &caps.address.y_axis);
+    let full = |axis: &Axis| axis.address_range.last - axis.address_range.start + 1;
+    let top = y.address_range.start;
+    match (caps.address.holder_id, caps.adapter.as_deref()) {
+        (Some(holder), _) if !matches!(holder, 0x17 | 0x18) => {
+            ((x.address_range.start, top), (full(x), full(y)))
+        }
+        (None, Some("240")) => {
+            let frames = u32::from(caps.address.loaded_frames);
+            (
+                (x.address_range.start, top),
+                (x.boundary, frames * y.boundary),
+            )
+        }
+        _ => {
+            let (left, width) = opening(caps);
+            ((left, top), (width, y.address_range.last))
+        }
+    }
+}
+
+/// The X address of each row of a thumbnail
+///
+/// The CCD reads out opposite to increasing X, so the first row has the
+/// highest address (see `protocol::decode`).
+pub(crate) fn row_addresses(caps: &Capabilities, pass: &Pass) -> Vec<u32> {
+    addresses_of_rows(caps, pass.rows, pass.layout.pitch)
+}
+
+/// The X address of each of `rows` rows, `pitch` addresses apart
+fn addresses_of_rows(caps: &Capabilities, rows: usize, pitch: u32) -> Vec<u32> {
+    let ((left, _), _) = area(caps);
+    let pitch = pitch.max(1);
+    (0..rows as u32).rev().map(|r| left + r * pitch).collect()
+}
+
 /// Windows over everything the adapter can reach, one per channel
 pub(crate) fn windows(caps: &Capabilities) -> Result<Vec<Window>, Error> {
-    let y = &caps.address.y_axis;
     let unsupported = |reason: String| Error::Unsupported {
         op: "thumbnail window",
         reason,
@@ -272,7 +331,7 @@ pub(crate) fn windows(caps: &Capabilities) -> Result<Vec<Window>, Error> {
         )));
     }
 
-    let (left, width) = opening(caps);
+    let (origin, size) = area(caps);
     let mut windows = window::blank(caps, &window::color_channels(caps))?;
     for w in &mut windows {
         w.resolution = (
@@ -281,8 +340,8 @@ pub(crate) fn windows(caps: &Capabilities) -> Result<Vec<Window>, Error> {
         );
         // Y starts at the axis rather than the first frame, so the leading
         // edge of the film is in the pass and can be found
-        w.origin = (left, y.address_range.start);
-        w.size = (width, y.address_range.last);
+        w.origin = origin;
+        w.size = size;
         w.scanning_kind = ScanKind::THUMBNAIL;
         w.scanning_mode = ScanMode::NORMAL_QUALITY;
         // Nikon Scan's flags for all units and films
@@ -386,6 +445,68 @@ mod tests {
     #[test]
     fn an_ls9000_thumbnail_window_is_nikons() {
         windows_match_nikon("ls9000", Film::Positive, [326754, 234030, 192099]);
+    }
+
+    /// The test capabilities with the C1, C8 and D1 pages of an LS-9000 with an FH-835S
+    fn fh835s() -> Capabilities {
+        use crate::protocol::caps::{
+            Page, address::Address, frames::Frames, set_window::SetWindowFunction,
+        };
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/thumbnail_window/ls9000_fh835s");
+        let page = |code: u8| {
+            let bytes = std::fs::read(dir.join(format!("page_{code:02x}.bin"))).expect("fixture");
+            Page::new(code, bytes).expect("page")
+        };
+        let mut caps = caps();
+        caps.address = Address::try_from(&page(Address::PAGE_CODE)).expect("address");
+        caps.frames = Some(Frames::try_from(&page(Frames::PAGE_CODE)).expect("frames"));
+        caps.set_window =
+            SetWindowFunction::try_from(&page(SetWindowFunction::PAGE_CODE)).expect("set window");
+        caps
+    }
+
+    /// One pass over the full addressable area, so the second strip is in the thumbnail
+    #[test]
+    fn an_fh835s_thumbnail_covers_both_strips() {
+        let caps = fh835s();
+        assert_eq!(caps.address.holder_id, Some(0x15));
+        let (origin, size) = area(&caps);
+        assert_eq!((origin, size), ((0, 0), (10000, 36220)));
+        let frames = &caps.frames.as_ref().expect("frames").images;
+        assert_eq!(frames.len(), 12);
+        assert!(frames.iter().all(|f| f.left + f.width <= size.0));
+        for w in windows(&caps).expect("windows") {
+            w.validate(&caps).expect("a window the unit takes");
+        }
+    }
+
+    /// The first row has the highest X address, and the second strip is in the rows
+    #[test]
+    fn an_fh835s_thumbnail_row_has_an_x_address() {
+        let caps = fh835s();
+        // 83 dpi from 4000 is pitch 48, and 10000 addresses are 208 rows
+        let rows = addresses_of_rows(&caps, 208, 48);
+        assert_eq!((rows[0], rows[207]), (207 * 48, 0));
+        let second = caps.frames.as_ref().expect("frames").images[6];
+        assert_eq!(second.left, 5834);
+        assert!(
+            rows.iter()
+                .any(|&x| (second.left..second.left + second.width).contains(&x))
+        );
+    }
+
+    /// One Y boundary for each loaded frame, which is one more than the Y maximum address
+    #[test]
+    fn an_ia20_thumbnail_reaches_past_the_last_address() {
+        let mut caps = caps();
+        caps.address.holder_id = None;
+        caps.adapter = Some("240".into());
+        caps.address.loaded_frames = 25;
+        caps.address.y_axis.boundary = 4453;
+        caps.address.y_axis.address_range = (0..=25 * 4453 - 1).into();
+        let (_, size) = area(&caps);
+        assert_eq!(size, (caps.address.x_axis.boundary, 25 * 4453));
     }
 
     /// Nikon Scan's thumbnail exposures in two captures, from the start-up exposures

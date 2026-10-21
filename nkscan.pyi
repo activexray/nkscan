@@ -191,6 +191,15 @@ class Discovery:
         thumbnail line has a perforation record
         """
     @property
+    def row_addresses(self) -> typing.Optional[builtins.list[builtins.int]]:
+        r"""
+        The X address of each row of `thumbnail`. The addresses decrease
+        
+        Use this with `column_addresses` to find a frame on the thumbnail. On a
+        holder with more than one strip the thumbnail shows all strips, and the
+        strips are at different X addresses. `None` without a thumbnail
+        """
+    @property
     def contrast(self) -> typing.Optional[builtins.float]:
         r"""
         The quality of the fallback frame fit; `None` where Nikon Scan's search found the frames
@@ -210,7 +219,8 @@ class Discovery:
     @property
     def base_density(self) -> typing.Optional[tuple[builtins.float, builtins.float, builtins.float]]:
         r"""
-        The film base density off the thumbnail, for `scan_frame`; `None` without a thumbnail
+        The film base density off the thumbnail, for `scan_frame`. `None` without a
+        thumbnail, and on the LS-8000 and LS-9000, where `scan_frame` uses the default
         """
 
 class MediaError(ScannerError):

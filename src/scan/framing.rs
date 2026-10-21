@@ -270,6 +270,9 @@ pub struct Discovery {
     /// The feed address of each [`thumbnail`](Self::thumbnail) column. The addresses never decrease.
     /// `None` without a thumbnail, or where no thumbnail line has a perforation record
     pub column_addresses: Option<Vec<u32>>,
+    /// The X address of each [`thumbnail`](Self::thumbnail) row. The addresses decrease.
+    /// `None` without a thumbnail
+    pub row_addresses: Option<Vec<u32>>,
     /// The [`contrast`](crate::scan::strip::Strip::contrast) of a `strip::find` fit that found frames
     pub contrast: Option<f32>,
     /// The film base density off the thumbnail, for [`crate::scan::meter::Metering::base_density`]
@@ -277,7 +280,15 @@ pub struct Discovery {
 }
 
 /// The thumbnail's film base density at the unit's start-up exposures
+///
+/// `None` on a unit with holders. LS9000.md3 has no base density sampler: its
+/// metering (`1003e040`) reads the value from the color capabilities 102h to
+/// 104h and uses the default when it is out of range. LS8000.md3 has a sampler
+/// (`100844b0`), but we use the newer module on the LS-8000 too.
 fn base_density(session: &mut Session, image: &Image, film: Film) -> Option<[f64; 3]> {
+    if session.capabilities().address.holder_id.is_some() {
+        return None;
+    }
     let factors = thumbnail::exposure_factors(session.capabilities(), film).unwrap_or([1.0; 3]);
     let mut ratio = [1.0; 3];
     for (c, channel) in [Channel::Red, Channel::Green, Channel::Blue]
@@ -331,15 +342,23 @@ pub fn discover_with(
             let boundary = table(session.capabilities())?;
             let found = boundary.frames.clone();
             info!(frames = found.len(), "published frames");
-            let (thumbnail, line_pitch, column_addresses, base_density) =
+            let (thumbnail, line_pitch, column_addresses, row_addresses, base_density) =
                 if mechanism.takes_thumbnail(session.capabilities()) {
                     let pass = session.scan_thumbnail_with(samples, film, on)?;
                     let base_density = base_density(session, &pass.image(samples)?, film);
+                    let caps = session.capabilities();
                     let pitch = thumbnail::LinePitch::of(&pass);
-                    let columns = pitch.column_addresses(session.capabilities(), pass.cols);
-                    (Some(pass), Some(pitch), Some(columns), base_density)
+                    let columns = pitch.column_addresses(caps, pass.cols);
+                    let rows = thumbnail::row_addresses(caps, &pass);
+                    (
+                        Some(pass),
+                        Some(pitch),
+                        Some(columns),
+                        Some(rows),
+                        base_density,
+                    )
                 } else {
-                    (None, None, None, None)
+                    (None, None, None, None, None)
                 };
             Ok(Discovery {
                 table: FrameTable::Boundary(boundary),
@@ -347,6 +366,7 @@ pub fn discover_with(
                 thumbnail,
                 line_pitch,
                 column_addresses,
+                row_addresses,
                 contrast: None,
                 base_density,
             })
@@ -375,6 +395,7 @@ pub fn discover_with(
                 table: FrameTable::Boundary(measured),
                 frames: found,
                 column_addresses: Some(pitch.column_addresses(session.capabilities(), pass.cols)),
+                row_addresses: Some(thumbnail::row_addresses(session.capabilities(), &pass)),
                 thumbnail: Some(pass),
                 line_pitch: Some(pitch),
                 contrast,
@@ -390,6 +411,7 @@ pub fn discover_with(
                 thumbnail: None,
                 line_pitch: None,
                 column_addresses: None,
+                row_addresses: None,
                 contrast: None,
                 base_density: None,
             })
@@ -458,6 +480,7 @@ pub fn discover_with(
             Ok(Discovery {
                 table: FrameTable::BoundaryType2(measured),
                 frames: found,
+                row_addresses: Some(thumbnail::row_addresses(caps, &pass)),
                 thumbnail: Some(pass),
                 // The resampled columns are not evenly spaced
                 line_pitch: None,

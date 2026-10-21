@@ -81,6 +81,18 @@ pub fn page_codes(t: &mut dyn Transport) -> Result<Vec<u8>, Error> {
     Ok(codes)
 }
 
+/// The images of C8h and of the pages after it, while the unit has more
+fn frames(t: &mut dyn Transport) -> Result<Frames, Error> {
+    let mut frames = Frames::try_from(&vpd(t, Frames::PAGE_CODE)?)?;
+    for code in Frames::NEXT_PAGES {
+        if !frames.incomplete() {
+            break;
+        }
+        frames.extend(&vpd(t, code)?)?;
+    }
+    Ok(frames)
+}
+
 /// Ask the scanner what it can do
 ///
 /// Safe to call with a unit attention outstanding: 2-2 note 5 says INQUIRY is
@@ -101,7 +113,7 @@ pub fn capabilities(t: &mut dyn Transport) -> Result<Capabilities, Error> {
         .coordinate_base
         .contains(CoordinateBase::FRAME_RECTS)
     {
-        true => Some(Frames::try_from(&vpd(t, Frames::PAGE_CODE)?)?),
+        true => Some(frames(t)?),
         false => None,
     };
 

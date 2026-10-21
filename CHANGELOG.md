@@ -7,11 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Discovery.row_addresses` gives the X address of each thumbnail row, as `column_addresses` gives the Y address of each column. Use both to find a frame on the thumbnail.
+
 ### Changed
 
 - **Breaking:** `dust::Options` has no `metering_target`, and `dust::theta_for_metering_target` is removed.
+- On the LS-8000 and LS-9000, negatives are metered with the default film base density, as in Nikon Scan. LS9000.md3 has no base density measurement from the thumbnail. `Discovery.base_density` is `None` on these units.
 
 ### Fixed
+
+- On the LS-8000 and LS-9000, the thumbnail now covers all strips in the holder. For all holders other than the FH-869S and FH-869G, Nikon Scan reads the full addressable area in one pass. Before this change, the thumbnail of an FH-835S had only the first strip, and the frames of the second strip were at the same place on the thumbnail as the frames of the first strip.
+- With an FH-816 that has more than 15 frames, the frames after the fifteenth are now read from INQUIRY pages C9h to CBh. Before this change, the probe failed.
+- On the IA-20, the thumbnail now has one Y boundary for each loaded frame, as in Nikon Scan. Before this change, it was one address shorter.
+- For negatives in the FH-869M, the thumbnail exposure is now Nikon Scan's dense negative exposure. Before this change, it was the exposure for negatives in the FH-869S.
 
 - `--clean` now removes fine scratches. The gate bias no longer changes with the infrared metering target: the gate is read against the clear film of the frame, so the exposure cancels, and Nikon Scan meters infrared to the same 85%. Before this change, a pixel was rebuilt only where the infrared was about 17% below clear film, not about 2%, so dust was removed and most scratches stayed.
 

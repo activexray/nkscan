@@ -499,6 +499,12 @@ pub struct PyDiscovery {
     /// the first column at or after its bottom. `None` without a thumbnail, or where no
     /// thumbnail line has a perforation record
     column_addresses: Option<Vec<u32>>,
+    /// The X address of each row of `thumbnail`. The addresses decrease
+    ///
+    /// Use this with `column_addresses` to find a frame on the thumbnail. On a
+    /// holder with more than one strip the thumbnail shows all strips, and the
+    /// strips are at different X addresses. `None` without a thumbnail
+    row_addresses: Option<Vec<u32>>,
     /// The quality of the fallback frame fit; `None` where Nikon Scan's search found the frames
     contrast: Option<f32>,
     /// True if all blocks of the thumbnail pass arrived. `None` if there is no
@@ -507,7 +513,8 @@ pub struct PyDiscovery {
     /// The number of blocks of the thumbnail pass that arrived. `None` if there
     /// is no thumbnail
     thumbnail_blocks: Option<usize>,
-    /// The film base density off the thumbnail, for `scan_frame`; `None` without a thumbnail
+    /// The film base density off the thumbnail, for `scan_frame`. `None` without a
+    /// thumbnail, and on the LS-8000 and LS-9000, where `scan_frame` uses the default
     base_density: Option<(f64, f64, f64)>,
 }
 
@@ -617,6 +624,7 @@ impl PySession {
             shape,
             pitch,
             columns,
+            row_addresses,
             contrast,
             arrived,
             base_density,
@@ -633,6 +641,7 @@ impl PySession {
                     .collect();
                 let pitch = discovery.line_pitch.map(|p| p.addresses_per_column());
                 let columns = discovery.column_addresses;
+                let row_addresses = discovery.row_addresses;
                 let contrast = discovery.contrast;
                 let base_density = discovery.base_density.map(|[r, g, b]| (r, g, b));
                 match discovery.thumbnail {
@@ -648,6 +657,7 @@ impl PySession {
                             shape,
                             pitch,
                             columns,
+                            row_addresses,
                             contrast,
                             arrived,
                             base_density,
@@ -661,6 +671,7 @@ impl PySession {
                         (0, 0),
                         pitch,
                         columns,
+                        row_addresses,
                         contrast,
                         None,
                         base_density,
@@ -678,6 +689,7 @@ impl PySession {
             thumbnail,
             addresses_per_column: pitch,
             column_addresses: columns,
+            row_addresses,
             contrast,
             thumbnail_complete: arrived.map(|(complete, _)| complete),
             thumbnail_blocks: arrived.map(|(_, blocks)| blocks),

@@ -75,7 +75,7 @@ if not caps.film_formats:
 
 - `film`: "positive" (the default), "slide", "negative", "kodachrome" or "mono".
 - `format`: the film format. On the LS-8000 and LS-9000, the format sets the part of the frame that is metered. On a 35mm unit, the adapter, the holder and the film set that part, and the format is used only when the adapter is not known.
-- `base_density`: `Discovery.base_density`, the film base density off the thumbnail. `None` uses Nikon Scan's defaults.
+- `base_density`: `Discovery.base_density`, the film base density off the thumbnail. `None` uses Nikon Scan's defaults. On the LS-8000 and LS-9000, `Discovery.base_density` is always `None`, because Nikon Scan uses the defaults on these units.
 
 `lock_white_balance` decides whether the channels are metered together or one at a time. It defaults to `Capabilities.locks_white_balance(film)`. Color negative meters each channel separately, which takes the orange mask off before the ADC. Slide, Kodachrome and black and white keep the factory balance. `caps.hardware_metering` is `False` on every unit seen, so metering happens here and not in the scanner.
 
@@ -135,8 +135,9 @@ cropped, is put in the unit's frame table before the pass, so it reaches the fil
 it asks for.
 
 `discover_frames` returns its thumbnail pass, keyed the same way
-`ScanResult.colors` is, and the feed address of each thumbnail column. Where the
-holder publishes its frames, the pass is only a preview:
+`ScanResult.colors` is, the feed (Y) address of each thumbnail column, and the X
+address of each thumbnail row. Where the holder publishes its frames, the pass is
+only a preview:
 
 ```python
 discovery = session.discover_frames(film=film)
@@ -144,25 +145,30 @@ if discovery.thumbnail is not None:
     show_to_operator(discovery.thumbnail)  # dict[str, NDArray[uint16]]
 ```
 
-Use `discovery.column_addresses` to go between the two, so the rectangle the
-operator sees is the rectangle that gets scanned:
+Use `discovery.column_addresses` and `discovery.row_addresses` to go between the
+two, so the rectangle the operator sees is the rectangle that gets scanned. On the
+LS-8000 and LS-9000, the thumbnail shows all strips in the holder, for example both
+strips of an FH-835S, so a frame has its own rows as well as its own columns:
 
 ```python
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 
 columns = discovery.column_addresses           # one feed address per column
+rows = discovery.row_addresses                 # one X address per row, highest first
 top, left, bottom, right = discovery.frames[3]
 
-# the frame's own columns of the thumbnail, to draw or slice a preview tile
+# the frame's own columns and rows of the thumbnail, to draw or slice a preview tile
 first, last = bisect_left(columns, top), bisect_left(columns, bottom)
-tile = {name: plane[:, first:last] for name, plane in discovery.thumbnail.items()}
+down = [-x for x in rows]                       # increasing, for bisect
+upper, lower = bisect_right(down, -right), bisect_right(down, -left)
+tile = {name: plane[upper:lower, first:last] for name, plane in discovery.thumbnail.items()}
 
 # and back, for a frame the operator moved by `n` columns
 moved = (columns[first + n], left, columns[first + n] + bottom - top, right)
 result = session.scan_frame(moved, film=film)
 ```
 
-The addresses never decrease. On a unit that counts perforations
+The column addresses never decrease, and the row addresses decrease. On a unit that counts perforations
 (`caps.framing == "perforation"`) the columns are not evenly spaced: the thumbnail
 is resampled as Nikon Scan resamples it. A column has the address of the film that
 Nikon Scan shows in that column. On these units, Nikon Scan lets a frame move

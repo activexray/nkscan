@@ -275,7 +275,8 @@ pub struct Discovery {
     pub row_addresses: Option<Vec<u32>>,
     /// The [`contrast`](crate::scan::strip::Strip::contrast) of a `strip::find` fit that found frames
     pub contrast: Option<f32>,
-    /// The film base density off the thumbnail, for [`crate::scan::meter::Metering::base_density`]
+    /// The film base density off the thumbnail, for [`crate::scan::meter::Metering::base_density`].
+    /// `None` without a thumbnail, and on a unit with holders
     pub base_density: Option<[f64; 3]>,
 }
 

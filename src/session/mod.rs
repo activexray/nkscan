@@ -43,9 +43,8 @@ pub struct Session {
     curves: Option<Arc<Curves>>,
     /// Whether we hold the unit, so [`Drop`] only releases what it took
     reserved: bool,
-    /// A pass was dropped before it was read to the end and nothing has stopped
-    /// it yet. Only a browser build sets this: natively the drop stops it
-    stale_scan: bool,
+    /// A pass that was dropped unread and is not stopped yet. Only a browser build sets this
+    unread: Option<image::Unread>,
 }
 
 /// What a command that asks the unit something, rather than moves anything,
@@ -85,11 +84,7 @@ pub(crate) const READY_TIMEOUT: Duration = Duration::from_secs(180);
 /// Polling needs no cap: it sleeps, and the deadline already bounds it
 const MAX_CHANGES: usize = 16;
 
-/// Run a session future to its end from code that cannot `.await`: a `Drop`,
-/// or the thread that reads a pass while this one decodes it
-///
-/// The native transports do their IO inside the future, so it is ready the
-/// first time it is polled and nothing here waits on another thread
+/// Run a session future from a `Drop` or the reader thread. Natively it is ready at the first poll
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
     pollster::block_on(future)
@@ -116,7 +111,7 @@ impl Session {
             reserved: false,
             frames: None,
             curves: None,
-            stale_scan: false,
+            unread: None,
         };
         // INQUIRY answers while the unit is still initializing, so probing says
         // nothing about readiness. Everything below is a real command, and a
@@ -363,22 +358,24 @@ impl Session {
         }
     }
 
-    /// Give the unit back, stopping a pass that was left unread first
-    ///
-    /// Dropping a session does the same natively. In a browser `Drop` cannot
-    /// send a command, so this is how a session releases the unit there
+    /// Stop an unread pass and release the unit. A browser cannot do this in `Drop`
     pub async fn close(mut self) -> Result<(), Error> {
-        if std::mem::take(&mut self.stale_scan) {
-            self.abandon_scan().await;
+        if let Err(e) = self.stop_unread().await {
+            warn!(%e, "could not stop the scan, so it is left open");
         }
-        if std::mem::take(&mut self.reserved) {
+        // Close the transport even if the release fails, so the interface is not left claimed
+        let released = if std::mem::take(&mut self.reserved) {
             self.run(&ReleaseUnit.cdb(), Data::None, PROBE_TIMEOUT)
-                .await?;
-        }
-        // `Drop` has nothing left to do, and the transport is closed rather
-        // than dropped so the unit can be opened again at once
+                .await
+                .map(drop)
+        } else {
+            Ok(())
+        };
+        // Close rather than drop the transport, so a new session can open the unit at once
         let transport = std::mem::replace(&mut self.transport, Box::new(transport::Closed));
-        Ok(transport.close().await?)
+        let closed = transport.close().await;
+        released?;
+        Ok(closed?)
     }
 
     /// What the scanner says it can do
@@ -484,10 +481,9 @@ impl Session {
         mut data: Data<'_>,
         timeout: Duration,
     ) -> Result<(Completion, Vec<CooperativeAction>), Error> {
-        // Every command but a basic one is refused while that pass is still
-        // valid, so it is stopped first. Boxed: stopping it is a command too
-        if std::mem::take(&mut self.stale_scan) {
-            Box::pin(self.abandon_scan()).await;
+        // The unit refuses most commands while a pass is open, so stop it first. Boxed because stopping sends a command
+        if self.unread.is_some() {
+            Box::pin(self.stop_unread()).await?;
         }
 
         // One budget for the command, re-issues included, rather than one each:

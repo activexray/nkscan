@@ -1,8 +1,6 @@
 //! A cross-platform driver for Nikon (Coolscan) film scanners
 //!
-//! Every call that talks to the unit is async. On the native platforms the
-//! transports do their IO inside the future, so any executor runs them, and
-//! `pollster::block_on` is enough
+//! Calls that talk to the unit are async but block natively. Use `pollster::block_on`, or `spawn_blocking` under tokio
 //!
 //! ```no_run
 //! use nkscan::{device, session::Session};

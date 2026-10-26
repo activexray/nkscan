@@ -148,8 +148,7 @@ jobs:
             - name: Clippy
               run: cargo clippy --target ${{ matrix.target }} --all-targets --features cli -- --deny warnings
 
-    # The browser build is the library alone: the CLI, the Python bindings and the OS transports
-    # behind `device` are native. `.cargo/config.toml` adds the WebUSB cfg and simd128
+    # The browser build is the library only, because the CLI, the Python bindings and the OS transports are native
     wasm:
         name: Cross-check wasm32-unknown-unknown
         runs-on: ubuntu-latest

@@ -33,7 +33,7 @@ pub enum Attach {
         /// Hub port chain, which survives a replug into the same port
         ports: Vec<u8>,
     },
-    /// A unit the page was granted. A browser gives no bus or port
+    /// A USB unit that the page can use. WebUSB gives no bus or port
     #[cfg(target_arch = "wasm32")]
     WebUsb(WebUsb),
     #[cfg(target_os = "linux")]
@@ -66,10 +66,7 @@ impl fmt::Display for Attach {
     }
 }
 
-/// A USB unit a page was granted
-///
-/// WebUSB hands out no bus or port to tell two units apart by, so this holds
-/// what it does hand out, and two of them are the same unit when nusb says so
+/// A USB unit that the page can use. Two are the same unit if nusb gives them the same ID
 #[cfg(target_arch = "wasm32")]
 #[derive(Debug, Clone)]
 pub struct WebUsb {
@@ -86,9 +83,7 @@ impl PartialEq for WebUsb {
 #[cfg(target_arch = "wasm32")]
 impl Eq for WebUsb {}
 
-/// `webusb:` and the vendor and product IDs, then the serial number where the
-/// unit has one. Two units of one model without serial numbers print alike,
-/// and a [`Selector`] naming that location is then ambiguous
+/// `webusb:`, the vendor and product IDs, and the serial number if the unit has one
 #[cfg(target_arch = "wasm32")]
 impl fmt::Display for WebUsb {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -187,15 +182,7 @@ pub async fn list() -> Vec<Device> {
     devices
 }
 
-/// Ask the person for a USB scanner, answering the one they picked
-///
-/// In a browser this is how a page gets a unit at all: WebUSB lists only the
-/// units the page was granted, and this opens the browser's chooser for the
-/// rest. The browser takes it only from a click or a key press. Once a unit is
-/// granted, [`list`] finds it as well, in this visit and the next.
-///
-/// Natively nothing is asked, and this is the first USB scanner attached.
-/// `None` is nothing picked, or nothing attached
+/// Ask the person for a USB scanner. A browser shows the WebUSB chooser, and natively this gives the first one attached
 pub async fn request() -> Result<Option<Device>, Error> {
     let selectors: Vec<_> = Model::usb_products()
         .map(|product| nusb::DeviceSelector::all().with_vid_pid(model::VENDOR, product))
@@ -267,8 +254,7 @@ async fn usb_device(info: nusb::DeviceInfo) -> Probed {
 /// The USB units, filtered on vendor and product before anything is opened
 ///
 /// Which product IDs are scanners is this layer's business rather than the
-/// transport's, whose job stops at moving bytes. In a browser these are the
-/// units the page was granted
+/// transport's, whose job stops at moving bytes
 async fn usb_devices() -> Vec<nusb::DeviceInfo> {
     let all = match settle(nusb::list_devices()).await {
         Ok(all) => all,

@@ -1,9 +1,4 @@
-//! The bulk pipes over a native USB stack, which blocks with a timeout
-//!
-//! nusb cancels a transfer when its timeout runs out, so a read that timed out
-//! is gone and the next one starts fresh. The futures here do their IO before
-//! they return, which is what keeps a session future ready the first time it is
-//! polled
+//! The bulk pipes over native USB. nusb cancels a transfer at its timeout, so the next read starts fresh
 
 use super::{Link, Pipes, clear_stall, transfer_err};
 use crate::transport::Error;

@@ -1,9 +1,4 @@
-//! SCSI-over-USB transport implemented with nusb
-//!
-//! The LS5K 1-1-2 phase handshake is the same on every platform, so it is
-//! written once against [`Link`]. Only moving bytes over the two bulk pipes
-//! differs: a native USB stack blocks with a timeout, and WebUSB is async with
-//! no way to cancel a transfer
+//! SCSI-over-USB transport implemented with nusb, with the LS5K 1-1-2 phase handshake written once against `Link`
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
@@ -89,11 +84,7 @@ impl Budget {
     }
 }
 
-/// Moving bytes over the two bulk pipes
-///
-/// A timeout is reported as [`Error::Timeout`], and the handshake reads it as
-/// the unit not answering. What happens to the transfer that timed out is the
-/// link's business
+/// The two bulk pipes. A timeout is [`Error::Timeout`], and the link decides what happens to that transfer
 trait Link {
     /// The bulk IN endpoint's packet size: 512 for USB 2.0, 64 for USB 1.1 (LS-40)
     fn in_max_packet(&self) -> usize;
@@ -105,8 +96,7 @@ trait Link {
         timeout: Duration,
     ) -> impl Future<Output = Result<(), Error>> + MaybeSend;
 
-    /// One read off the bulk IN endpoint of no more than `len` bytes, a whole
-    /// number of packets. A short packet ends it
+    /// Read at most `len` bytes, a whole number of packets, from bulk IN. A short packet ends the read
     fn transfer_in(
         &mut self,
         len: usize,
@@ -119,6 +109,9 @@ struct Pipes {
     ep_out: Endpoint<Bulk, Out>,
     ep_in: Endpoint<Bulk, In>,
     in_max_packet: usize,
+    /// The last write submitted, which is still queued if a write timed out
+    #[cfg(target_arch = "wasm32")]
+    late_out: Vec<u8>,
     /// We have to keep a handle to the interface here as the lifetime of the endpoints are attached to it
     #[allow(dead_code)]
     interface: Interface,
@@ -158,11 +151,7 @@ fn transfer_err(e: TransferError, timeout: Duration) -> Error {
     Error::Io(io::Error::new(kind, e))
 }
 
-/// What a nusb call gives
-///
-/// Natively nusb's calls are blocking syscalls, and awaiting one panics
-/// without an async runtime, so they are waited for. In a browser they are
-/// promises and are awaited
+/// Wait for a nusb call. Natively awaiting it panics without a runtime, so it blocks, and in a browser it is awaited
 pub(crate) async fn settle<F: nusb::MaybeFuture>(call: F) -> F::Output {
     #[cfg(not(target_arch = "wasm32"))]
     return call.wait();
@@ -254,6 +243,8 @@ impl UsbTransport {
             ep_out,
             ep_in,
             in_max_packet,
+            #[cfg(target_arch = "wasm32")]
+            late_out: Vec::new(),
             interface,
         };
         Ok(Self {
@@ -597,13 +588,12 @@ impl Transport for UsbTransport {
     }
 
     fn close(self: Box<Self>) -> BoxFuture<'static, Result<(), Error>> {
-        // The interface goes back only once nothing else holds it, and the
-        // endpoints do
+        // The interface is released only when the endpoints are dropped too
         let Pipes { interface, .. } = self.phases.link;
         Box::pin(async move {
             match settle(interface.release()).await {
-                // A transfer that timed out is still queued and holds it. The
-                // release then happens when that transfer finishes
+                // A native transfer that timed out can keep the interface busy, and the last drop releases it
+                #[cfg(not(target_arch = "wasm32"))]
                 Err(e) if e.kind() == nusb::ErrorKind::Busy => {
                     debug!(%e, "the interface is still held, leaving it to the drop");
                     Ok(())
@@ -619,7 +609,7 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
 
-    /// One thing the unit does, in the order the handshake should meet it
+    /// One step of the unit, in the order the handshake expects it
     #[derive(Debug)]
     enum Step {
         /// The host writes these bytes and the unit takes them
@@ -630,8 +620,7 @@ mod tests {
         Silent,
     }
 
-    /// A unit that does exactly what the script says, and fails the test the
-    /// moment the host does something else
+    /// A unit that follows a script and fails the test if the host does anything else
     struct Script {
         steps: VecDeque<Step>,
     }
@@ -714,8 +703,7 @@ mod tests {
         assert!(!unit.dirty);
     }
 
-    /// The LS-40 answers BUSY to the first check of every command. The command
-    /// is the same one, so only the check is asked again
+    /// The LS-40 answers BUSY to the first phase check of each command, so only the check is sent again
     #[test]
     fn busy_asks_the_phase_again_without_sending_the_command_again() {
         let mut unit = Script::new([
@@ -781,8 +769,7 @@ mod tests {
         );
     }
 
-    /// A phase check that reads more than its byte is an answer to an earlier
-    /// command. The pipe is drained until it is empty and the command goes out again
+    /// More than one byte on a phase check is an earlier answer, so drain the pipe and send the command again
     #[test]
     fn a_stale_answer_is_drained_and_the_command_sent_again() {
         let mut unit = Script::new([
@@ -802,9 +789,7 @@ mod tests {
         assert!(!unit.dirty);
     }
 
-    /// The unit holds the command and says nothing. Over WebUSB the check that
-    /// timed out is still outstanding, and the late answer to it is what the
-    /// drain reads off before the command goes out again
+    /// The drain reads the late answer to a phase check that timed out, then sends the command again
     #[test]
     fn a_silent_unit_is_drained_of_its_late_answer_and_asked_again() {
         let mut unit = Script::new([
@@ -822,8 +807,7 @@ mod tests {
         run(&mut unit, &TEST_UNIT_READY, Data::None).expect("command");
     }
 
-    /// One drain is the whole recovery. A second phase byte we cannot read
-    /// is the unit saying something we do not understand
+    /// Drain only once: a second unreadable phase byte is an error
     #[test]
     fn a_second_desync_is_an_error() {
         let mut unit = Script::new([
@@ -842,8 +826,7 @@ mod tests {
         assert!(unit.dirty);
     }
 
-    /// A command that fails partway leaves its answer on the pipe, so the next
-    /// one drains before it starts rather than reading that as its own phases
+    /// A command that fails partway leaves its answer on the pipe, so the next command drains it first
     #[test]
     fn the_command_after_a_failed_one_drains_first() {
         let mut unit = Script::new([

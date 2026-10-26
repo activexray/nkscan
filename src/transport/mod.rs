@@ -173,8 +173,7 @@ impl From<u8> for Status {
 /// Scan are 128 KB to 786 KB, and they change with the unit and the pass
 const PREFERRED_TRANSFER: usize = 128 * 1024;
 
-/// A transport's future. It is `Send` where the platform's IO is: a WebUSB
-/// transfer holds JavaScript values, which stay on their thread
+/// A transport's future. It is not `Send` in a browser, because a WebUSB transfer contains JavaScript values
 #[cfg(not(target_arch = "wasm32"))]
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 #[cfg(target_arch = "wasm32")]
@@ -190,7 +189,7 @@ pub trait MaybeSend {}
 #[cfg(target_arch = "wasm32")]
 impl<T> MaybeSend for T {}
 
-/// What a session holds once its own transport was closed. Nothing reaches it
+/// The transport of a session after its own transport closes. It sends nothing
 pub(crate) struct Closed;
 
 impl Transport for Closed {
@@ -224,9 +223,6 @@ pub trait Transport: MaybeSend {
     /// Errors are link-layer only; a failed command still comes back `Ok` as
     /// a [`Completion`] carrying its sense. `timeout` is best-effort: some
     /// backends, Windows among them, have no way to enforce it
-    ///
-    /// The native backends do their IO inside the future and are ready the
-    /// first time it is polled
     fn execute<'a>(
         &'a mut self,
         cdb: &'a [u8],
@@ -234,12 +230,7 @@ pub trait Transport: MaybeSend {
         timeout: Duration,
     ) -> BoxFuture<'a, Result<Completion, Error>>;
 
-    /// Give the unit back, finishing once it is
-    ///
-    /// Dropping a transport does the same, and natively that is synchronous.
-    /// A browser releases a USB interface asynchronously and refuses to open
-    /// the unit again until the release is through, so a transport that is
-    /// about to be opened again is closed rather than dropped
+    /// Release the unit. A browser releases asynchronously, so close rather than drop before the unit opens again
     fn close(self: Box<Self>) -> BoxFuture<'static, Result<(), Error>> {
         Box::pin(async { Ok(()) })
     }

@@ -199,11 +199,6 @@ impl Session {
 
         let timing = Timing::default();
         let mut decoding = Duration::ZERO;
-        // Time the decoder spent waiting on the reader thread, which a browser does not have
-        #[cfg(not(target_arch = "wasm32"))]
-        let mut idle = Duration::ZERO;
-        #[cfg(target_arch = "wasm32")]
-        let idle = Duration::ZERO;
         let mut truncation = TruncationState::new();
         let reader_layout = layout.clone();
 
@@ -223,8 +218,7 @@ impl Session {
             })
         };
 
-        // Natively the unit is read on a thread of its own, so it is never
-        // kept waiting while a chunk decodes
+        // Natively a separate thread reads the unit, so the unit does not wait while a chunk decodes
         #[cfg(not(target_arch = "wasm32"))]
         thread::scope(|scope| {
             let (full_tx, full_rx) = mpsc::channel::<Chunk>();
@@ -243,7 +237,7 @@ impl Session {
             loop {
                 let waited = Instant::now();
                 let msg = full_rx.recv();
-                idle += waited.elapsed();
+                Timing::add(&timing.idle, waited.elapsed().as_nanos() as u64);
 
                 let mut chunk = match msg {
                     Ok(Chunk::Data(buf)) => buf,
@@ -258,8 +252,7 @@ impl Session {
             }
         })?;
 
-        // A browser has no thread to read on, so each chunk is read and then
-        // decoded before the next is asked for
+        // A browser has no reader thread, so it reads and decodes one chunk at a time
         #[cfg(target_arch = "wasm32")]
         {
             let mut chunks = self.image_chunks(&reader_layout)?;
@@ -292,7 +285,7 @@ impl Session {
             read_ms = Timing::get(&timing.read) / 1_000_000,
             starved_ms = Timing::get(&timing.starved) / 1_000_000,
             decode_ms = decoding.as_millis(),
-            idle_ms = idle.as_millis(),
+            idle_ms = Timing::get(&timing.idle) / 1_000_000,
             "pass"
         );
         if !decoder.complete() {
@@ -370,6 +363,8 @@ struct Timing {
     read: AtomicU64,
     /// Waiting for the decoder to give a buffer back
     starved: AtomicU64,
+    /// The decoder waiting for the reader thread, which a browser does not have
+    idle: AtomicU64,
     chunks: AtomicU64,
     bytes: AtomicU64,
 }

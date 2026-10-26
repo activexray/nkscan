@@ -1,13 +1,4 @@
-//! The bulk pipes over WebUSB, which is async and cannot cancel a transfer
-//!
-//! A transfer that times out here is still queued on its endpoint, and nothing
-//! takes it back: WebUSB has no cancellation (WICG/webusb#25). Whatever the
-//! unit sends next lands in it, and completions come back in the order the
-//! transfers went out. So a timed-out read is not dropped. The next read takes
-//! its answer instead of queueing behind it, and a write first waits for the
-//! one still ahead of it. The handshake above sees the same thing it sees from
-//! a native stack: a read that timed out, and later reads that carry on from
-//! wherever the unit is
+//! The bulk pipes over WebUSB, which cannot cancel a transfer (WICG/webusb#25), so the next call takes its result
 
 use super::{Link, Pipes, clear_stall, transfer_err};
 use crate::{time::sleep, transport::Error};
@@ -26,36 +17,37 @@ impl Link for Pipes {
     }
 
     async fn write_out(&mut self, bytes: &[u8], timeout: Duration) -> Result<(), Error> {
-        // A write that timed out is still ahead of this one, and its completion
-        // is the next to come back, so it has to finish before ours can be read
-        while self.ep_out.pending() > 0 {
-            let Some(earlier) = within(timeout, self.ep_out.next_complete()).await else {
-                return Err(Error::Timeout(timeout));
-            };
-            trace!("a write that timed out went through late");
-            if let Err(e) = earlier.into_result() {
-                clear_stall(&mut self.ep_out, e).await;
+        // A queued write with these bytes is this write sent late. Do not send it twice: the LS-40 refuses a repeated READ with 05h-2Ch
+        let ours = match self.ep_out.pending() {
+            0 => {
+                self.ep_out.submit(Buffer::from(bytes));
+                self.late_out.clear();
+                self.late_out.extend_from_slice(bytes);
+                true
             }
-        }
-
-        self.ep_out.submit(Buffer::from(bytes));
+            _ if self.late_out == bytes => {
+                trace!("a write that timed out is still queued, so it is this one");
+                true
+            }
+            _ => false,
+        };
         let Some(sent) = within(timeout, self.ep_out.next_complete()).await else {
             return Err(Error::Timeout(timeout));
         };
-        match sent.into_result() {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                clear_stall(&mut self.ep_out, e).await;
-                Err(transfer_err(e, timeout))
-            }
+        let sent = sent.into_result();
+        if let Err(e) = sent {
+            clear_stall(&mut self.ep_out, e).await;
         }
+        // A different write went late and ours did not go, so time out and the handshake drains and sends again
+        if !ours {
+            trace!("a write that timed out went through late, ours did not go");
+            return Err(Error::Timeout(timeout));
+        }
+        sent.map(drop).map_err(|e| transfer_err(e, timeout))
     }
 
     async fn transfer_in(&mut self, len: usize, timeout: Duration) -> Result<Vec<u8>, Error> {
-        // The unit's next bytes go to a read that timed out, so that read is
-        // this one. Its length can differ from `len`: what it returns is still
-        // no more than one short packet past what the unit had to say, which
-        // is what the handshake judges a read by
+        // A read that timed out gets the unit's next bytes, so take its result even if its length is not `len`
         if self.ep_in.pending() == 0 {
             self.ep_in.submit(Buffer::new(len));
         } else {
@@ -74,10 +66,7 @@ impl Link for Pipes {
     }
 }
 
-/// `future`'s output, or `None` once `timeout` passes first
-///
-/// Dropping a `next_complete` future leaves its transfer queued, which is what
-/// lets a timed-out transfer finish under a later call
+/// `future`'s output, or `None` after `timeout`. Dropping `next_complete` leaves its transfer queued
 async fn within<F: Future>(timeout: Duration, future: F) -> Option<F::Output> {
     let mut future = pin!(future);
     let mut timer = pin!(sleep(timeout));

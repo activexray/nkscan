@@ -145,6 +145,29 @@ impl Session {
 }
 
 impl Session {
+    /// Stop a pass that was dropped unread. A browser cannot do this in `Drop`, so the next command does it
+    pub(crate) async fn stop_unread(&mut self) -> Result<(), Error> {
+        let Some(unread) = self.unread.take() else {
+            return Ok(());
+        };
+        let mut chunks = Chunks {
+            session: self,
+            layout: unread.layout,
+            chunk: unread.chunk,
+            remaining: unread.remaining,
+            at: unread.at,
+            spent: true,
+            closed: true,
+            surplus: 0,
+        };
+        let stopped = chunks.stop().await;
+        // Then its drop stores the pass in the session to try again
+        if stopped.is_err() {
+            chunks.closed = false;
+        }
+        stopped
+    }
+
     /// Whether `Address` byte 4 makes the unit split a READ only on its own units
     fn requires_granules(&self) -> bool {
         self.caps
@@ -171,6 +194,15 @@ fn short(fault: &Fault) -> Option<u32> {
         return None;
     };
     sense.ili.then_some(sense.information).flatten()
+}
+
+/// The position of a dropped pass, so the session can read the rest
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) struct Unread {
+    layout: Layout,
+    chunk: usize,
+    remaining: u64,
+    at: usize,
 }
 
 /// Image data read off the unit a chunk at a time, into buffers the caller
@@ -268,6 +300,18 @@ impl Chunks<'_> {
                 Some(Ok(got))
             }
         }
+    }
+
+    /// Stop the scan, reading the rest off when the unit has no ABORT
+    async fn stop(&mut self) -> Result<(), Error> {
+        // Nothing in either spec's command list is optional here, but `abort`
+        // tolerates a unit that has never heard of it, and reading to the end
+        // is the only other way to close a scan
+        if !self.session.abort().await? {
+            debug!("no ABORT on this unit, so reading the remainder off instead");
+            self.drain().await;
+        }
+        Ok(())
     }
 
     /// Read off whatever the unit still holds, so the scan closes
@@ -385,29 +429,24 @@ impl Drop for Chunks<'_> {
         self.spent = true;
         self.closed = true;
         info!(remaining = self.remaining, "stopping the scan");
-        // A browser thread cannot wait here, so the session stops the scan
-        // before the next command it sends instead
+        // A browser cannot wait here, so the session stops the scan before its next command
         #[cfg(target_arch = "wasm32")]
         {
-            self.session.stale_scan = true;
+            self.session.unread = Some(Unread {
+                layout: self.layout.clone(),
+                chunk: self.chunk,
+                remaining: self.remaining,
+                at: self.at,
+            });
         }
         #[cfg(not(target_arch = "wasm32"))]
-        match super::block_on(self.session.abort()) {
-            Ok(true) => {}
-            // Nothing in either spec's command list is optional here, but
-            // `abort` tolerates a unit that has never heard of it, and reading
-            // to the end is the only other way to close a scan
-            Ok(false) => {
-                debug!("no ABORT on this unit, so reading the remainder off instead");
-                self.closed = false;
-                super::block_on(self.drain());
-            }
-            Err(e) => warn!(
+        if let Err(e) = super::block_on(self.stop()) {
+            warn!(
                 %e,
                 remaining = self.remaining,
                 "could not stop the scan, so it is left open - the next command \
                  will be refused out of sequence"
-            ),
+            );
         }
     }
 }

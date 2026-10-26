@@ -102,7 +102,7 @@ fn top_of(caps: &Capabilities, middle: u32, format: u32) -> Option<u32> {
 /// LS4000.md3 (`10011dc0`) and LS8000.md3 (`100161d0`) have other positive and
 /// Kodachrome rows. We use the rows of the newer modules on all units. A
 /// factor only sets the brightness of the thumbnail, because
-/// [`framing`](super::framing) divides it out of the base density.
+/// [`framing`] divides it out of the base density.
 pub fn exposure_factors(caps: &Capabilities, film: Film) -> Option<[f64; 3]> {
     const POSITIVE: [f64; 3] = [1.186, 1.21, 1.259];
     const NEGATIVE: [f64; 3] = [1.231, 2.844, 3.839];

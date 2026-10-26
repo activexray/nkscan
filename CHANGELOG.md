@@ -5,23 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0]
+
+### Added
+
+- The library builds for `wasm32-unknown-unknown` and drives USB scanners over WebUSB. `.cargo/config.toml` sets the cfg that nusb's WebUSB backend needs.
+- `device::request` asks the person for a USB scanner. In a browser it shows the WebUSB chooser. Natively it gives the first USB scanner attached.
+- `Session::close` stops an unread pass and releases the unit. In a browser, `Drop` cannot do this.
+- `Transport::close` releases the unit and finishes when the release is complete. A browser cannot open the unit again before then.
+- `Model::usb_products` gives the USB product IDs of the USB models.
+
+### Changed
+
+- **Breaking:** the Rust API that talks to a unit is async. `Transport::execute` returns a boxed future, and `device::list`, `device::Device::open`, `device::Selector::open`, `Session::open`, the `Session` methods that send a command, `session::probe`, and the `scan::frame` and `scan::framing` entry points are `async fn`. Natively the futures block, so `pollster::block_on` runs them. The CLI and the Python API do not change.
+
 ## [0.16.0]
 
 ### Added
 
 - `Discovery.row_addresses` gives the X address of each thumbnail row, as `column_addresses` gives the Y address of each column. Use both to find a frame on the thumbnail.
 
-### Added
-
-- `Session::close` releases the unit and stops a pass that was left unread. Dropping a session still does this natively. In a browser build `Drop` cannot send a command, so `close` is how a session gives the unit back there.
-- The library builds for `wasm32-unknown-unknown` and drives a USB scanner over WebUSB. The USB transport runs the same phase handshake on both, and only the bulk transfers differ: WebUSB cannot cancel a transfer, so a read that timed out takes the unit's next answer rather than a second read queueing behind it. `.cargo/config.toml` sets the cfg that nusb's WebUSB backend needs.
-- `device::request` asks the person for a USB scanner. In a browser it opens the WebUSB chooser, and the unit picked is then in `device::list` as well. Natively it answers the first USB scanner attached.
-- `Model::usb_products` gives the USB product ID of every USB model.
-- `Transport::close` gives the unit back and finishes once it has. `device::list`, `device::request`, `device::Selector::open` and `Session::close` close the transports they are done with, because a browser releases a USB interface asynchronously and refuses to open the unit again until the release is through. Before this, `list` followed by `Device::open` failed every time in a browser.
-
 ### Changed
 
-- **Breaking:** the Rust API that talks to a unit is async. `Transport::execute` returns a boxed future, and `device::list`, `device::Device::open`, `device::Selector::open`, `Session::open`, the `Session` methods that send a command, `session::probe`, and the `scan::frame` and `scan::framing` entry points are `async fn`. The native transports do their IO inside the future, so `pollster::block_on` runs them. The CLI and the Python API do not change.
 - **Breaking:** `dust::Options` has no `metering_target`, and `dust::theta_for_metering_target` is removed.
 - On the LS-8000 and LS-9000, negatives are metered with the default film base density, as in Nikon Scan. LS9000.md3 has no base density measurement from the thumbnail. `Discovery.base_density` is `None` on these units.
 

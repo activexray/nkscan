@@ -2,7 +2,7 @@
 //!
 //! No protocol-layer stuff in here, just a thin abstraction over the various platforms'/OSs' IO
 
-use std::{fmt, io, time::Duration};
+use std::{fmt, future::Future, io, pin::Pin, time::Duration};
 
 #[cfg(target_os = "macos")]
 pub mod darwin;
@@ -173,8 +173,42 @@ impl From<u8> for Status {
 /// Scan are 128 KB to 786 KB, and they change with the unit and the pass
 const PREFERRED_TRANSFER: usize = 128 * 1024;
 
+/// A transport's future. It is not `Send` in a browser, because a WebUSB transfer contains JavaScript values
+#[cfg(not(target_arch = "wasm32"))]
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+#[cfg(target_arch = "wasm32")]
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+
+/// `Send` on the platforms where a transport can move between threads
+#[cfg(not(target_arch = "wasm32"))]
+pub trait MaybeSend: Send {}
+#[cfg(not(target_arch = "wasm32"))]
+impl<T: Send> MaybeSend for T {}
+#[cfg(target_arch = "wasm32")]
+pub trait MaybeSend {}
+#[cfg(target_arch = "wasm32")]
+impl<T> MaybeSend for T {}
+
+/// The transport of a session after its own transport closes. It sends nothing
+pub(crate) struct Closed;
+
+impl Transport for Closed {
+    fn max_transfer(&self) -> usize {
+        0
+    }
+
+    fn execute<'a>(
+        &'a mut self,
+        _: &'a [u8],
+        _: Data<'a>,
+        _: Duration,
+    ) -> BoxFuture<'a, Result<Completion, Error>> {
+        Box::pin(async { Err(io::Error::from(io::ErrorKind::NotConnected).into()) })
+    }
+}
+
 /// What one platform backend has to implement to carry a CDB and its data phase
-pub trait Transport: Send {
+pub trait Transport: MaybeSend {
     /// The maximum size in bytes we can transfer in a single operation.
     fn max_transfer(&self) -> usize;
 
@@ -189,5 +223,15 @@ pub trait Transport: Send {
     /// Errors are link-layer only; a failed command still comes back `Ok` as
     /// a [`Completion`] carrying its sense. `timeout` is best-effort: some
     /// backends, Windows among them, have no way to enforce it
-    fn execute(&mut self, cdb: &[u8], data: Data, timeout: Duration) -> Result<Completion, Error>;
+    fn execute<'a>(
+        &'a mut self,
+        cdb: &'a [u8],
+        data: Data<'a>,
+        timeout: Duration,
+    ) -> BoxFuture<'a, Result<Completion, Error>>;
+
+    /// Release the unit. A browser releases asynchronously, so close rather than drop before the unit opens again
+    fn close(self: Box<Self>) -> BoxFuture<'static, Result<(), Error>> {
+        Box::pin(async { Ok(()) })
+    }
 }

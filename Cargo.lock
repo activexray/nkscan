@@ -377,6 +377,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "futures-channel"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f9e3d69d39e4862ffed03ed071a76f9a13ba1d9109d355b0f0aa6b15e393c4"
+dependencies = [
+ "futures-core",
+]
+
+[[package]]
 name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -418,6 +427,18 @@ dependencies = [
  "cfg-if",
  "libc",
  "wasi",
+]
+
+[[package]]
+name = "gloo-timers"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbb143cf96099802033e0d4f4963b19fd2e0b728bcf076cd9cf7f6634f092994"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -681,7 +702,7 @@ dependencies = [
 
 [[package]]
 name = "nkscan"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "bitflags",
@@ -689,12 +710,14 @@ dependencies = [
  "core-foundation-sys",
  "ctrlc",
  "divan",
+ "gloo-timers",
  "indicatif",
  "io-kit-sys",
  "moxcms",
  "nix",
  "numpy",
  "nusb",
+ "pollster",
  "pyo3",
  "pyo3-stub-gen",
  "rayon",
@@ -702,6 +725,7 @@ dependencies = [
  "tiff",
  "tracing",
  "tracing-subscriber",
+ "web-time",
  "wide",
  "windows-sys",
 ]
@@ -866,6 +890,12 @@ name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+
+[[package]]
+name = "pollster"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
 
 [[package]]
 name = "portable-atomic"

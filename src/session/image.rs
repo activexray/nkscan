@@ -28,8 +28,8 @@ impl Session {
     /// Answers how much arrived. Short of `buf` means the unit ran out, either
     /// by transferring less than asked or by answering `05h-2Ch` once the image
     /// is spent
-    pub fn read_image(&mut self, layout: &Layout, buf: &mut [u8]) -> Result<usize, Error> {
-        self.read_image_within(layout, buf, MOVE_TIMEOUT)
+    pub async fn read_image(&mut self, layout: &Layout, buf: &mut [u8]) -> Result<usize, Error> {
+        self.read_image_within(layout, buf, MOVE_TIMEOUT).await
     }
 
     /// The same, on a budget the caller sets
@@ -39,7 +39,7 @@ impl Session {
     /// such waiting to do, and giving it a stage move's worth of budget is how
     /// a unit that has stopped answering holds the program for three minutes
     /// instead of saying so
-    pub fn read_image_within(
+    pub async fn read_image_within(
         &mut self,
         layout: &Layout,
         buf: &mut [u8],
@@ -55,7 +55,7 @@ impl Session {
 
         trace!(cdb = ?cmd.cdb(), want, "executing image READ");
 
-        match self.run(&cmd.cdb(), Data::In(buf), timeout) {
+        match self.run(&cmd.cdb(), Data::In(buf), timeout).await {
             Ok(completion) => {
                 trace!(
                     transferred = completion.transferred,
@@ -145,6 +145,29 @@ impl Session {
 }
 
 impl Session {
+    /// Stop a pass that was dropped unread. A browser cannot do this in `Drop`, so the next command does it
+    pub(crate) async fn stop_unread(&mut self) -> Result<(), Error> {
+        let Some(unread) = self.unread.take() else {
+            return Ok(());
+        };
+        let mut chunks = Chunks {
+            session: self,
+            layout: unread.layout,
+            chunk: unread.chunk,
+            remaining: unread.remaining,
+            at: unread.at,
+            spent: true,
+            closed: true,
+            surplus: 0,
+        };
+        let stopped = chunks.stop().await;
+        // Then its drop stores the pass in the session to try again
+        if stopped.is_err() {
+            chunks.closed = false;
+        }
+        stopped
+    }
+
     /// Whether `Address` byte 4 makes the unit split a READ only on its own units
     fn requires_granules(&self) -> bool {
         self.caps
@@ -171,6 +194,15 @@ fn short(fault: &Fault) -> Option<u32> {
         return None;
     };
     sense.ili.then_some(sense.information).flatten()
+}
+
+/// The position of a dropped pass, so the session can read the rest
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) struct Unread {
+    layout: Layout,
+    chunk: usize,
+    remaining: u64,
+    at: usize,
 }
 
 /// Image data read off the unit a chunk at a time, into buffers the caller
@@ -211,7 +243,7 @@ impl Chunks<'_> {
     /// `buf` is sized to the chunk (or what is left of it) and truncated to
     /// what actually arrived, so one buffer can be reused for every chunk
     /// without reallocating
-    pub fn fill(&mut self, buf: &mut Vec<u8>) -> Option<Result<usize, Error>> {
+    pub async fn fill(&mut self, buf: &mut Vec<u8>) -> Option<Result<usize, Error>> {
         if self.spent {
             return None;
         }
@@ -222,7 +254,7 @@ impl Chunks<'_> {
             // answer a READ it was never going to get: some just stop
             // answering the handle entirely
             if self.layout.multiline_registered {
-                self.drain();
+                self.drain().await;
             } else {
                 self.spent = true;
                 self.closed = true;
@@ -242,7 +274,7 @@ impl Chunks<'_> {
             buf_len = buf.len(),
             "issuing image READ from fill"
         );
-        match self.session.read_image(layout, &mut buf[..want]) {
+        match self.session.read_image(layout, &mut buf[..want]).await {
             Err(e) => {
                 self.spent = true;
                 Some(Err(e))
@@ -270,13 +302,25 @@ impl Chunks<'_> {
         }
     }
 
+    /// Stop the scan, reading the rest off when the unit has no ABORT
+    async fn stop(&mut self) -> Result<(), Error> {
+        // Nothing in either spec's command list is optional here, but `abort`
+        // tolerates a unit that has never heard of it, and reading to the end
+        // is the only other way to close a scan
+        if !self.session.abort().await? {
+            debug!("no ABORT on this unit, so reading the remainder off instead");
+            self.drain().await;
+        }
+        Ok(())
+    }
+
     /// Read off whatever the unit still holds, so the scan closes
     ///
     /// 2-11-5: the unit answers a read past the end of the image with `05h-2Ch`,
     /// and that is what ends a scan. Stopping at the layout's own arithmetic
     /// instead leaves it open, and the next command that is not a basic one is
     /// refused with the same code
-    fn drain(&mut self) {
+    async fn drain(&mut self) {
         self.spent = true;
         self.closed = true;
         // The surplus is the seams of a re-registered pass, a fraction of it. A
@@ -303,11 +347,11 @@ impl Chunks<'_> {
             // A stage move's budget here is what turns a unit that has stopped
             // answering into three silent minutes. The pass is already running,
             // so a chunk is either on its way or it is never coming
-            match self.session.read_image_within(
-                &self.layout.clone(),
-                &mut buf[..want],
-                DRAIN_TIMEOUT,
-            ) {
+            match self
+                .session
+                .read_image_within(&self.layout.clone(), &mut buf[..want], DRAIN_TIMEOUT)
+                .await
+            {
                 Ok(0) => break,
                 Ok(got) => {
                     self.at = self.layout.granules.advance(self.at, got);
@@ -385,22 +429,24 @@ impl Drop for Chunks<'_> {
         self.spent = true;
         self.closed = true;
         info!(remaining = self.remaining, "stopping the scan");
-        match self.session.abort() {
-            Ok(true) => {}
-            // Nothing in either spec's command list is optional here, but
-            // `abort` tolerates a unit that has never heard of it, and reading
-            // to the end is the only other way to close a scan
-            Ok(false) => {
-                debug!("no ABORT on this unit, so reading the remainder off instead");
-                self.closed = false;
-                self.drain();
-            }
-            Err(e) => warn!(
+        // A browser cannot wait here, so the session stops the scan before its next command
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.session.unread = Some(Unread {
+                layout: self.layout.clone(),
+                chunk: self.chunk,
+                remaining: self.remaining,
+                at: self.at,
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(e) = super::block_on(self.stop()) {
+            warn!(
                 %e,
                 remaining = self.remaining,
                 "could not stop the scan, so it is left open - the next command \
                  will be refused out of sequence"
-            ),
+            );
         }
     }
 }

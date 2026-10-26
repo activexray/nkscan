@@ -1,0 +1,3 @@
+# The cfg turns on the web-sys WebUSB bindings that nusb needs, and simd128 turns on the SIMD paths in `wide`
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg=web_sys_unstable_apis", "-C", "target-feature=+simd128"]

@@ -23,12 +23,12 @@ impl Session {
     /// Only for the types the data header
     /// precedes. Image data carries none and goes through
     /// [`read_image`](Session::read_image)
-    pub fn read_data(
+    pub async fn read_data(
         &mut self,
         kind: data::DataType,
         color: u8,
     ) -> Result<(data::Header, data::Values), Error> {
-        let (header, valid) = self.read_record(kind, color)?;
+        let (header, valid) = self.read_record(kind, color).await?;
         Ok((header, data::Values::decode(kind.scalar(), &valid)))
     }
 
@@ -36,7 +36,7 @@ impl Session {
     ///
     /// The records with a structure of their own are easier to read this way
     /// than out of [`Values`](data::Values)
-    pub fn read_record(
+    pub async fn read_record(
         &mut self,
         kind: data::DataType,
         color: u8,
@@ -51,11 +51,13 @@ impl Session {
         let (width, qualifier, color) = self.addressing(kind, row.read, color, "read data type")?;
         let code = row.code;
 
-        let mut fetch = |len: u32| -> Result<Vec<u8>, Error> {
+        let mut fetch = async |len: u32| -> Result<Vec<u8>, Error> {
             let cmd = Read::new(code, color, qualifier, len);
             let mut buf = vec![0u8; cmd.allocation_length()];
             debug!("cdb for read {:02x} {:02x?}", code, &cmd.cdb());
-            let completion = self.run(&cmd.cdb(), Data::In(&mut buf), PROBE_TIMEOUT)?;
+            let completion = self
+                .run(&cmd.cdb(), Data::In(&mut buf), PROBE_TIMEOUT)
+                .await?;
             buf.truncate(completion.transferred);
             debug!("recv {:02x?}", buf);
             Ok(buf)
@@ -64,11 +66,11 @@ impl Session {
         // The header reports what the unit holds whatever we asked for, so one
         // short read is enough to size the real one. It reports the record's
         // own header only if the read includes it, so the probe takes both
-        let probe = fetch(data::HEADER as u32 + kind.head())?;
+        let probe = fetch(data::HEADER as u32 + kind.head()).await?;
         let (probe, _) = data::Header::from_bytes(&probe)
             .ok_or_else(|| malformed(format!("{kind:?} header was {} bytes", probe.len())))?;
 
-        let raw = fetch(data::HEADER as u32 + probe.length)?;
+        let raw = fetch(data::HEADER as u32 + probe.length).await?;
         let (header, payload) = data::Header::from_bytes(&raw)
             .ok_or_else(|| malformed(format!("{kind:?} header was {} bytes", raw.len())))?;
 
@@ -109,7 +111,12 @@ impl Session {
     }
 
     /// SEND one data type, 2-12
-    pub fn send_data(&mut self, kind: data::DataType, color: u8, body: &[u8]) -> Result<(), Error> {
+    pub async fn send_data(
+        &mut self,
+        kind: data::DataType,
+        color: u8,
+        body: &[u8],
+    ) -> Result<(), Error> {
         let (_, qualifier, color) =
             self.addressing(kind, kind.row().write, color, "send data type")?;
 
@@ -120,13 +127,13 @@ impl Session {
             &cmd.cdb(),
             &body
         );
-        self.run(&cmd.cdb(), Data::Out(body), PROBE_TIMEOUT)?;
+        self.run(&cmd.cdb(), Data::Out(body), PROBE_TIMEOUT).await?;
         Ok(())
     }
 
     /// Where the unit currently thinks each frame is, 2-11-6
-    pub fn boundaries(&mut self) -> Result<data::Boundary, Error> {
-        let (_, record) = self.read_record(data::DataType::Boundary, 0)?;
+    pub async fn boundaries(&mut self) -> Result<data::Boundary, Error> {
+        let (_, record) = self.read_record(data::DataType::Boundary, 0).await?;
         let boundary = data::Boundary::from_bytes(&record)
             .ok_or_else(|| malformed(format!("Boundary was {} bytes", record.len())))?;
 
@@ -148,8 +155,8 @@ impl Session {
         }
     }
 
-    pub fn boundaries_type2(&mut self) -> Result<data::BoundaryType2, Error> {
-        let (_, record) = self.read_record(data::DataType::Boundary2, 0)?;
+    pub async fn boundaries_type2(&mut self) -> Result<data::BoundaryType2, Error> {
+        let (_, record) = self.read_record(data::DataType::Boundary2, 0).await?;
         let boundary = data::BoundaryType2::from_bytes(&record)
             .ok_or_else(|| malformed(format!("BoundaryType2 was {} bytes", record.len())))?;
 
@@ -182,9 +189,10 @@ impl Session {
     /// the transfer length. Neither spec says how many frames the record holds.
     /// A four-frame table is accepted and this one was five, so report the size
     /// that was refused and leave the limit unstated
-    pub fn set_boundaries(&mut self, boundary: &data::Boundary) -> Result<(), Error> {
+    pub async fn set_boundaries(&mut self, boundary: &data::Boundary) -> Result<(), Error> {
         let bytes = boundary.to_bytes()?;
         self.send_data(data::DataType::Boundary, 0, &bytes)
+            .await
             .map_err(|e| match e {
                 Error::Device(fault)
                     if matches!(*fault, Fault::Rejected(Refusal::BadCdbField, _)) =>
@@ -205,9 +213,12 @@ impl Session {
     }
 
     /// 2-11-9: alternate Type2 indexing for roll feeders
-    pub fn set_boundaries_type2(&mut self, boundary: &data::BoundaryType2) -> Result<(), Error> {
+    pub async fn set_boundaries_type2(
+        &mut self,
+        boundary: &data::BoundaryType2,
+    ) -> Result<(), Error> {
         let bytes = boundary.to_bytes()?;
-        self.send_data(data::DataType::Boundary2, 0, &bytes)?;
+        self.send_data(data::DataType::Boundary2, 0, &bytes).await?;
         self.frames = Some(FrameTable::BoundaryType2(boundary.clone()));
         Ok(())
     }
@@ -217,24 +228,25 @@ impl Session {
     /// [`framing::register`](crate::scan::framing::register) makes a table for
     /// a rectangle the measured table has no entry for. The session keeps the
     /// measured table, because an entry is replaced and not added
-    pub fn set_boundaries_type2_for_pass(
+    pub async fn set_boundaries_type2_for_pass(
         &mut self,
         boundary: &data::BoundaryType2,
     ) -> Result<(), Error> {
         self.send_data(data::DataType::Boundary2, 0, &boundary.to_bytes()?)
+            .await
     }
 
-    pub fn read_perforations(&mut self) -> Result<data::PerfInformation, Error> {
-        let (_, record) = self.read_record(data::DataType::Perforation, 0)?;
-        self.test_unit_ready(Duration::from_millis(500))?;
+    pub async fn read_perforations(&mut self) -> Result<data::PerfInformation, Error> {
+        let (_, record) = self.read_record(data::DataType::Perforation, 0).await?;
+        self.test_unit_ready(Duration::from_millis(500)).await?;
 
         let perfs = PerfInformation::from_bytes(&record)
             .ok_or_else(|| malformed(format!("PerfInfo was {} bytes", record.len())))?;
         Ok(perfs)
     }
 
-    pub fn read_boundaries_type2(&mut self) -> Result<data::BoundaryType2, Error> {
-        let (_, record) = self.read_record(data::DataType::Boundary2, 0)?;
+    pub async fn read_boundaries_type2(&mut self) -> Result<data::BoundaryType2, Error> {
+        let (_, record) = self.read_record(data::DataType::Boundary2, 0).await?;
 
         let bounds = BoundaryType2::from_bytes(&record)
             .ok_or_else(|| malformed(format!("BoundaryType2 was {} bytes", record.len())))?;
@@ -251,9 +263,11 @@ impl Session {
     /// 2-11-3 lists only the default, R, G and B qualifiers, but the unit
     /// answers for infrared as well and Nikon Scan reads it in every capture.
     /// The qualifier is the window identifier
-    pub fn white_balance(&mut self, channel: Channel) -> Result<u32, Error> {
+    pub async fn white_balance(&mut self, channel: Channel) -> Result<u32, Error> {
         let color = channel.id();
-        let (_, values) = self.read_data(data::DataType::WhiteBalanceExposure, color)?;
+        let (_, values) = self
+            .read_data(data::DataType::WhiteBalanceExposure, color)
+            .await?;
         let data::Values::Longs(v) = values else {
             return Err(malformed(format!(
                 "WhiteBalanceExposure color {color} did not come back as longs"
@@ -270,8 +284,8 @@ impl Session {
     ///
     /// 2-11-7, `DataType::Setup`, per color. Holds the base level and, for each
     /// image, what a prescan decided. Survives across sessions
-    pub fn setup(&mut self, color: u8) -> Result<data::Setup, Error> {
-        let (_, values) = self.read_data(data::DataType::Setup, color)?;
+    pub async fn setup(&mut self, color: u8) -> Result<data::Setup, Error> {
+        let (_, values) = self.read_data(data::DataType::Setup, color).await?;
         let data::Values::Bytes(record) = values else {
             return Err(malformed("Setup did not come back as bytes".into()));
         };
@@ -286,13 +300,14 @@ impl Session {
     /// driver uses. Returns whether curves were cached; `false` covers both
     /// a unit that offers none and a reply that does not match the page
     /// describing it
-    pub fn fetch_curves(&mut self) -> bool {
+    pub async fn fetch_curves(&mut self) -> bool {
         let Some(ccd) = self.caps.ccd.clone() else {
             return false;
         };
         let rows = usize::from(self.caps.address.lines).max(1);
         let (_, values) = match self
             .read_data(data::DataType::CcdData, 0)
+            .await
             .inspect_err(|e| debug!(%e, "no CCD curves to correct with"))
         {
             Ok(v) => v,
@@ -321,8 +336,8 @@ impl Session {
     }
 
     /// Read the initiator cooperative action parameter a SCAN just asked for
-    pub fn cooperation(&mut self) -> Result<data::CooperativeAction, Error> {
-        let (_, values) = self.read_data(data::DataType::Cooperation, 0)?;
+    pub async fn cooperation(&mut self) -> Result<data::CooperativeAction, Error> {
+        let (_, values) = self.read_data(data::DataType::Cooperation, 0).await?;
         let data::Values::Bytes(record) = values else {
             return Err(malformed("Cooperation did not come back as bytes".into()));
         };
@@ -336,7 +351,7 @@ impl Session {
     /// 2-14: EXECUTE performs the operation *after* returning GOOD status, and
     /// no command other than a basic command may be issued before the operation
     /// termination is confirmed by TEST UNIT READY. So all three are one call
-    pub fn execute(
+    pub async fn execute(
         &mut self,
         operation: data::Op,
         params: data::Operation,
@@ -351,18 +366,19 @@ impl Session {
 
         let block = params.to_bytes();
         let cmd = SetParameter::new(operation.code(), block.len() as u32);
-        self.run(&cmd.cdb(), Data::Out(&block), PROBE_TIMEOUT)?;
+        self.run(&cmd.cdb(), Data::Out(&block), PROBE_TIMEOUT)
+            .await?;
 
         debug!(?operation, ?params, "executing");
-        self.run(&Execute.cdb(), Data::None, PROBE_TIMEOUT)?;
+        self.run(&Execute.cdb(), Data::None, PROBE_TIMEOUT).await?;
 
         // 2-8: a failed operation reports 02h-04h-02h and nothing else. The
         // real cause is only readable once, so take it while it is there
-        match self.test_unit_ready(timeout) {
+        match self.test_unit_ready(timeout).await {
             Err(Error::Device(fault))
                 if matches!(*fault, Fault::Reported(Failure::Mechanism, _)) =>
             {
-                match self.diagnose() {
+                match self.diagnose().await {
                     // The wrapper says mechanical whatever the cause was;
                     // `sense::diagnosed` is what actually reads it
                     Ok(Some(sense)) => Err(Error::Device(Box::new(Fault::Reported(
@@ -381,7 +397,7 @@ impl Session {
     /// 2-16, the other half of SET PARAMETER. Worth it after an autofocus: the
     /// unit reports the focus position it settled on, which is what makes a
     /// focus repeatable without focusing again
-    pub fn get_parameter(&mut self, operation: data::Op) -> Result<data::Operation, Error> {
+    pub async fn get_parameter(&mut self, operation: data::Op) -> Result<data::Operation, Error> {
         if !self.caps.features.execute.supports(operation) {
             return Err(Error::Unsupported {
                 op: "get parameter",
@@ -391,7 +407,9 @@ impl Session {
 
         let cmd = GetParameter::new(operation.code(), data::Operation::LENGTH as u32);
         let mut buf = vec![0u8; cmd.allocation_length()];
-        let completion = self.run(&cmd.cdb(), Data::In(&mut buf), PROBE_TIMEOUT)?;
+        let completion = self
+            .run(&cmd.cdb(), Data::In(&mut buf), PROBE_TIMEOUT)
+            .await?;
         buf.truncate(completion.transferred);
 
         let params = data::Operation::from_bytes(&buf)
@@ -404,10 +422,11 @@ impl Session {
     ///
     /// 2-8. The concrete fault only comes back here, and reading it clears it,
     /// so there is one chance at it. `None` means the unit had nothing to say.
-    pub fn diagnose(&mut self) -> Result<Option<Sense>, Error> {
-        let completion =
-            self.transport
-                .execute(&SendDiagnostic.cdb(), Data::None, PROBE_TIMEOUT)?;
+    pub async fn diagnose(&mut self) -> Result<Option<Sense>, Error> {
+        let completion = self
+            .transport
+            .execute(&SendDiagnostic.cdb(), Data::None, PROBE_TIMEOUT)
+            .await?;
         debug!(status = ?completion.status, sense = ?completion.sense, "diagnostic");
         Ok(completion
             .sense

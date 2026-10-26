@@ -167,6 +167,13 @@ On Linux, make sure you have the appropriate udev rules set up. Nusb has some [h
 
 MacOS *should* just work.
 
+### Browser
+
+The library also builds for `wasm32-unknown-unknown` and drives USB scanners over [WebUSB](https://wicg.github.io/webusb/) in Chromium-based browsers.
+Call `device::request` from a click to show the browser's device chooser.
+On Windows, the scanner needs the WinUSB driver here too.
+FireWire scanners do not work in a browser.
+
 ### FireWire Drivers
 
 Things *should* just work on Linux (assuming you've got the [SG](https://www.kernel.org/doc/html/latest/scsi/scsi-generic.html) module loaded) and Windows.

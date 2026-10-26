@@ -4,6 +4,7 @@
 //! read the stream a chunk at a time while a decoder unscrambles it.
 
 use super::Session;
+use crate::time::Instant;
 use crate::{
     error::Error,
     protocol::{decode::Samples, image::Layout, window::Window},
@@ -14,22 +15,25 @@ use crate::{
     },
     session::window::Started,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use std::{
     collections::VecDeque,
-    ops::ControlFlow,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        mpsc::{self, Receiver, Sender},
-    },
+    sync::mpsc::{self, Receiver, Sender},
     thread,
-    time::{Duration, Instant},
+};
+use std::{
+    ops::ControlFlow,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
 };
 use tracing::*;
 
 /// How many raw chunks the reader and decoder have in flight between them
+#[cfg(not(target_arch = "wasm32"))]
 const POOL: usize = 3;
 
 /// A chunk handed from the reader thread to the decoder, or how the stream ended
+#[cfg(not(target_arch = "wasm32"))]
 enum Chunk {
     Data(Vec<u8>),
     End,
@@ -126,15 +130,19 @@ impl Session {
     ///
     /// The caller owes the unit a read: a scan whose data is never read locks
     /// out every command that follows
-    pub fn start_pass(&mut self, windows: &[Window], timeout: Duration) -> Result<Started, Error> {
+    pub async fn start_pass(
+        &mut self,
+        windows: &[Window],
+        timeout: Duration,
+    ) -> Result<Started, Error> {
         for w in windows {
-            self.set_window(w)?;
+            self.set_window(w).await?;
         }
-        let started = self.scan(windows)?;
+        let started = self.scan(windows).await?;
         // Whether the unit reports ready as soon as it is streaming or only
         // once the whole pass is taken decides what this budget has to cover
         let waited = Instant::now();
-        self.test_unit_ready(timeout)?;
+        self.test_unit_ready(timeout).await?;
         debug!(ready_in = ?waited.elapsed(), "scan ready");
         Ok(started)
     }
@@ -146,13 +154,14 @@ impl Session {
     /// one. `samples.color` is row-major, channels interleaved per pixel, and
     /// `samples.ir` is likewise but only `Some` where the windows carried
     /// infrared. See [`Samples`].
-    pub fn scan_pass(
+    pub async fn scan_pass(
         &mut self,
         windows: &[Window],
         timeout: Duration,
         samples: &mut Samples,
     ) -> Result<Pass, Error> {
         self.scan_pass_with(windows, timeout, samples, |_| ControlFlow::Continue(()))
+            .await
     }
 
     /// The same as [`Self::scan_pass`], telling `on` how far along the pass is
@@ -164,14 +173,14 @@ impl Session {
     /// drained by [`Chunks`](super::image::Chunks)'s own `Drop`, the same path
     /// a consumer that simply stops reading already takes, so nothing here has
     /// to wait for the mechanism or send `ABORT`
-    pub fn scan_pass_with(
+    pub async fn scan_pass_with(
         &mut self,
         windows: &[Window],
         timeout: Duration,
         samples: &mut Samples,
         mut on: impl FnMut(Progress) -> ControlFlow<()>,
     ) -> Result<Pass, Error> {
-        let started = self.start_pass(windows, timeout)?;
+        let started = self.start_pass(windows, timeout).await?;
         let layout = started.layout.clone();
 
         let total = layout.total_bytes();
@@ -182,7 +191,7 @@ impl Session {
         let mut decoder = match pass::decoder(&layout, curves.as_deref()) {
             Ok(decoder) => decoder,
             Err(e) => {
-                self.abandon_scan();
+                self.abandon_scan().await;
                 return Err(e);
             }
         };
@@ -190,58 +199,81 @@ impl Session {
 
         let timing = Timing::default();
         let mut decoding = Duration::ZERO;
-        let mut idle = Duration::ZERO;
         let mut truncation = TruncationState::new();
         let reader_layout = layout.clone();
 
+        // Strips and decodes one chunk, and says how far the pass has got
+        let mut bytes = 0u64;
+        let mut decode = |chunk: &mut Vec<u8>| -> Result<Progress, Error> {
+            bytes += chunk.len() as u64;
+            strip_truncation(chunk, &mut truncation, &layout);
+            let pushed = Instant::now();
+            let decoded = decoder.push(chunk, samples);
+            decoding += pushed.elapsed();
+            decoded?;
+            Ok(Progress {
+                bytes,
+                total,
+                blocks: decoder.decoded(),
+            })
+        };
+
+        // Natively a separate thread reads the unit, so the unit does not wait while a chunk decodes
+        #[cfg(not(target_arch = "wasm32"))]
         thread::scope(|scope| {
             let (full_tx, full_rx) = mpsc::channel::<Chunk>();
             let (empty_tx, empty_rx) = mpsc::channel::<Vec<u8>>();
             let timing = &timing;
-            scope.spawn(move || read_chunks(self, &reader_layout, &full_tx, &empty_rx, timing));
-
-            let mut out = Ok(());
-            let mut bytes = 0u64;
+            scope.spawn(move || {
+                super::block_on(read_chunks(
+                    self,
+                    &reader_layout,
+                    &full_tx,
+                    &empty_rx,
+                    timing,
+                ))
+            });
 
             loop {
                 let waited = Instant::now();
                 let msg = full_rx.recv();
-                idle += waited.elapsed();
+                Timing::add(&timing.idle, waited.elapsed().as_nanos() as u64);
 
                 let mut chunk = match msg {
                     Ok(Chunk::Data(buf)) => buf,
-                    Ok(Chunk::End) | Err(_) => break,
-                    Ok(Chunk::Failed(e)) => {
-                        out = Err(e);
-                        break;
-                    }
+                    Ok(Chunk::End) | Err(_) => return Ok(()),
+                    Ok(Chunk::Failed(e)) => return Err(e),
                 };
-
-                bytes += chunk.len() as u64;
-
-                strip_truncation(&mut chunk, &mut truncation, &layout);
-
-                let pushed = Instant::now();
-                let decoded = decoder.push(&chunk, samples);
-                decoding += pushed.elapsed();
-
+                let decoded = decode(&mut chunk);
                 let _ = empty_tx.send(chunk);
-                if let Err(e) = decoded {
-                    out = Err(e);
-                    break;
-                }
-                let flow = on(Progress {
-                    bytes,
-                    total,
-                    blocks: decoder.decoded(),
-                });
-                if flow.is_break() {
-                    out = Err(Error::Cancelled);
-                    break;
+                if on(decoded?).is_break() {
+                    return Err(Error::Cancelled);
                 }
             }
-            out
         })?;
+
+        // A browser has no reader thread, so it reads and decodes one chunk at a time
+        #[cfg(target_arch = "wasm32")]
+        {
+            let mut chunks = self.image_chunks(&reader_layout)?;
+            let mut buf = Vec::with_capacity(chunks.capacity());
+            loop {
+                let reading = Instant::now();
+                let filled = chunks.fill(&mut buf).await;
+                Timing::add(&timing.read, reading.elapsed().as_nanos() as u64);
+                match filled {
+                    Some(Ok(got)) => {
+                        Timing::add(&timing.chunks, 1);
+                        Timing::add(&timing.bytes, got as u64);
+                    }
+                    Some(Err(e)) => return Err(e),
+                    None => break,
+                }
+                if on(decode(&mut buf)?).is_break() {
+                    return Err(Error::Cancelled);
+                }
+            }
+        }
 
         // `starved` is the only one of these the unit can feel: it is time we
         // spent not asking for data, with its buffer filling behind the stage
@@ -253,7 +285,7 @@ impl Session {
             read_ms = Timing::get(&timing.read) / 1_000_000,
             starved_ms = Timing::get(&timing.starved) / 1_000_000,
             decode_ms = decoding.as_millis(),
-            idle_ms = idle.as_millis(),
+            idle_ms = Timing::get(&timing.idle) / 1_000_000,
             "pass"
         );
         if !decoder.complete() {
@@ -277,12 +309,17 @@ impl Session {
     ///
     /// Builds its own windows from the capabilities (whole strip, lowest dpi,
     /// one channel per color), exposed as Nikon Scan exposes them for `film`
-    pub fn scan_thumbnail(&mut self, samples: &mut Samples, film: Film) -> Result<Pass, Error> {
+    pub async fn scan_thumbnail(
+        &mut self,
+        samples: &mut Samples,
+        film: Film,
+    ) -> Result<Pass, Error> {
         self.scan_thumbnail_with(samples, film, |_| ControlFlow::Continue(()))
+            .await
     }
 
     /// The same as [`Self::scan_thumbnail`], letting `on` cancel by returning `Break`
-    pub fn scan_thumbnail_with(
+    pub async fn scan_thumbnail_with(
         &mut self,
         samples: &mut Samples,
         film: Film,
@@ -296,7 +333,7 @@ impl Session {
         }
 
         let windows = crate::scan::thumbnail::windows(self.capabilities())?;
-        let mut windows = self.seed_white_balance(&windows)?;
+        let mut windows = self.seed_white_balance(&windows).await?;
         let factors = crate::scan::thumbnail::exposure_factors(self.capabilities(), film);
         for w in &mut windows {
             if let (Some(f), Some(c)) = (factors, meter::color(w)) {
@@ -305,6 +342,7 @@ impl Session {
         }
         debug!(?film, ?factors, "thumbnail exposure");
         self.scan_pass_with(&windows, THUMBNAIL_TIMEOUT, samples, on)
+            .await
     }
 }
 
@@ -325,6 +363,8 @@ struct Timing {
     read: AtomicU64,
     /// Waiting for the decoder to give a buffer back
     starved: AtomicU64,
+    /// The decoder waiting for the reader thread, which a browser does not have
+    idle: AtomicU64,
     chunks: AtomicU64,
     bytes: AtomicU64,
 }
@@ -341,7 +381,8 @@ impl Timing {
 
 /// Read the whole stream off the unit a chunk at a time, forwarding each chunk
 /// down `full` and drawing the buffer to fill from the pool `empty` keeps up
-fn read_chunks(
+#[cfg(not(target_arch = "wasm32"))]
+async fn read_chunks(
     session: &mut Session,
     layout: &Layout,
     full: &Sender<Chunk>,
@@ -377,7 +418,7 @@ fn read_chunks(
         };
 
         let reading = Instant::now();
-        let filled = chunks.fill(&mut buf);
+        let filled = chunks.fill(&mut buf).await;
         Timing::add(&timing.read, reading.elapsed().as_nanos() as u64);
 
         match filled {

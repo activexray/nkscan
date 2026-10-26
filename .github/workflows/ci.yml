@@ -148,6 +148,25 @@ jobs:
             - name: Clippy
               run: cargo clippy --target ${{ matrix.target }} --all-targets --features cli -- --deny warnings
 
+    # The browser build is the library only, because the CLI, the Python bindings and the OS transports are native
+    wasm:
+        name: Cross-check wasm32-unknown-unknown
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Install the toolchain rust-toolchain.toml names
+              run: cargo --version
+
+            - name: Cache Rust artifacts
+              uses: Swatinem/rust-cache@v2
+              with:
+                  key: wasm32-unknown-unknown
+
+            - name: Clippy
+              run: cargo clippy --target wasm32-unknown-unknown --lib -- --deny warnings
+
     # The stub is what a consumer sees of an abi3 extension, since one carries no introspectable
     # signatures. It is generated, so this only has to catch a commit that forgot to regenerate.
     stubs:

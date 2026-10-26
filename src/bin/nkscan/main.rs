@@ -63,18 +63,18 @@ fn main() -> anyhow::Result<()> {
     // Perform the requested CLI action
     match cli.action {
         cli::Action::List => {
-            let devs = device::list();
+            let devs = pollster::block_on(device::list());
             println!("Attached scanners:");
             devs.iter().for_each(|x| println!("{x}"));
         }
         cli::Action::Scan(args) => {
-            let outcome = scan::run(args);
+            let outcome = pollster::block_on(scan::run(args));
             // A pass that ended early still has its bar drawn
             progress::clear();
             outcome?
         }
-        cli::Action::Dump(args) => dump::run(args)?,
-        cli::Action::Eject(args) => eject::run(args)?,
+        cli::Action::Dump(args) => pollster::block_on(dump::run(args))?,
+        cli::Action::Eject(args) => pollster::block_on(eject::run(args))?,
     }
 
     // Donezo

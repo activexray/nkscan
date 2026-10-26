@@ -45,7 +45,7 @@ impl Session {
     ///
     /// `color` picks the channel, which needs the unit to offer
     /// `Op::ColorAutoFocus`; `None` uses `Op::AutoFocus` and lets it choose.
-    pub fn autofocus(&mut self, x: u32, y: u32, color: Option<u8>) -> Result<(), Error> {
+    pub async fn autofocus(&mut self, x: u32, y: u32, color: Option<u8>) -> Result<(), Error> {
         let operation = match color.is_some() {
             true => Op::ColorAutoFocus,
             false => Op::AutoFocus,
@@ -100,10 +100,11 @@ impl Session {
             },
             AUTOFOCUS_TIMEOUT,
         )
+        .await
     }
 
     /// Move the scan block to an absolute focus position
-    pub fn focus_to(&mut self, position: u16) -> Result<(), Error> {
+    pub async fn focus_to(&mut self, position: u16) -> Result<(), Error> {
         offers(self, Op::FocusMove)?;
         let range = self.capabilities().address.focus_range;
         if !range.contains(&position) {
@@ -121,12 +122,13 @@ impl Session {
             },
             FOCUS_TIMEOUT,
         )
+        .await
     }
 
     /// The current lens position, in the units that
     /// [`focus_to`](Self::focus_to) uses
-    pub fn focus_position(&mut self) -> Result<u16, Error> {
-        let params = self.get_parameter(Op::FocusMove)?;
+    pub async fn focus_position(&mut self) -> Result<u16, Error> {
+        let params = self.get_parameter(Op::FocusMove).await?;
         Ok(params.first.min(u32::from(u16::MAX)) as u16)
     }
 
@@ -135,10 +137,10 @@ impl Session {
     /// The frame is a rectangle of the boundary table, which is what the unit
     /// resolves an autofocus address against. Pass a crop to focus on that
     /// instead: any rectangle inside a frame works.
-    pub fn focus_frame(&mut self, frame: Rect, focus: Focus) -> Result<Focused, Error> {
+    pub async fn focus_frame(&mut self, frame: Rect, focus: Focus) -> Result<Focused, Error> {
         match focus {
             Focus::Hold => Ok(Focused::Skipped),
-            Focus::At(position) => self.focus_to(position).map(|()| Focused::Yes),
+            Focus::At(position) => self.focus_to(position).await.map(|()| Focused::Yes),
             Focus::Auto { at, color } => {
                 let caps = self.capabilities();
                 let point = |axis: &Axis, origin: u32, size: u32, fraction: f32| {
@@ -161,7 +163,7 @@ impl Session {
                 );
 
                 debug!(x, y, "focusing");
-                match self.autofocus(x, y, color) {
+                match self.autofocus(x, y, color).await {
                     Ok(()) => Ok(Focused::Yes),
                     Err(Error::Device(fault))
                         if matches!(*fault, Fault::Reported(Failure::OutOfFocus, _)) =>

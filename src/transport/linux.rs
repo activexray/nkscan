@@ -1,6 +1,8 @@
 //! SCSI transport on Linux via the SCSI-Generic Userspace Module
 
-use super::{Completion, Data, Error, SENSE_REQUEST_LEN, Status, Transport, sense_from_fixed};
+use super::{
+    BoxFuture, Completion, Data, Error, SENSE_REQUEST_LEN, Status, Transport, sense_from_fixed,
+};
 use bitflags::bitflags;
 use nix::{ioctl_read_bad, ioctl_readwrite_bad, ioctl_write_ptr_bad};
 use std::{
@@ -220,9 +222,15 @@ impl SgTransport {
 
 // --- Implementation of SCSI transport
 
-impl Transport for SgTransport {
+impl SgTransport {
+    /// One SCSI transaction, run to completion on this thread
     #[instrument(skip_all, fields(cdb = ?cdb, ?data))]
-    fn execute(&mut self, cdb: &[u8], data: Data, timeout: Duration) -> Result<Completion, Error> {
+    fn execute_blocking(
+        &mut self,
+        cdb: &[u8],
+        data: Data,
+        timeout: Duration,
+    ) -> Result<Completion, Error> {
         // A trace comparable with the NKDSBP2 proxy logs, so a session can be
         // diffed against a Nikon Scan capture command for command
         if tracing::enabled!(target: "nkscan::cdb", Level::TRACE) {
@@ -359,7 +367,9 @@ impl Transport for SgTransport {
             transferred,
         })
     }
+}
 
+impl Transport for SgTransport {
     fn max_transfer(&self) -> usize {
         self.max_transfer as usize
     }
@@ -367,5 +377,14 @@ impl Transport for SgTransport {
     // The reserved buffer is already the size the kernel gives one transfer
     fn preferred_transfer(&self) -> usize {
         self.max_transfer()
+    }
+
+    fn execute<'a>(
+        &'a mut self,
+        cdb: &'a [u8],
+        data: Data<'a>,
+        timeout: Duration,
+    ) -> BoxFuture<'a, Result<Completion, Error>> {
+        Box::pin(async move { self.execute_blocking(cdb, data, timeout) })
     }
 }

@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0]
+
+### Added
+
+- The library builds for `wasm32-unknown-unknown` and drives USB scanners over WebUSB. `.cargo/config.toml` sets the cfg that nusb's WebUSB backend needs.
+- `device::request` asks the person for a USB scanner. In a browser it shows the WebUSB chooser. Natively it gives the first USB scanner attached.
+- `Session::close` stops an unread pass and releases the unit. In a browser, `Drop` cannot do this.
+- `Transport::close` releases the unit and finishes when the release is complete. A browser cannot open the unit again before then.
+- `Model::usb_products` gives the USB product IDs of the USB models.
+
+### Changed
+
+- **Breaking:** the Rust API that talks to a unit is async. `Transport::execute` returns a boxed future, and `device::list`, `device::Device::open`, `device::Selector::open`, `Session::open`, the `Session` methods that send a command, `session::probe`, and the `scan::frame` and `scan::framing` entry points are `async fn`. Natively the futures block, so `pollster::block_on` runs them. The CLI and the Python API do not change.
+
 ## [0.16.0]
 
 ### Added

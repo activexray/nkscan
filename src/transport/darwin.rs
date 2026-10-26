@@ -9,7 +9,7 @@
 //! The interface is COM-shaped (CFPlugIn), so the vtables below are transcribed
 //! from `IOKit/scsi/SCSITaskLib.h` and must match it field for field.
 
-use super::{Completion, Data, Error, Status, Transport, sense_from_fixed};
+use super::{BoxFuture, Completion, Data, Error, Status, Transport, sense_from_fixed};
 use core_foundation_sys::uuid::{CFUUIDGetConstantUUIDWithBytes, CFUUIDGetUUIDBytes, CFUUIDRef};
 use io_kit_sys::{
     IOIteratorNext, IOObjectRelease, IORegistryEntryGetRegistryEntryID, IORegistryEntryIDMatching,
@@ -331,14 +331,15 @@ impl Drop for ScsiTaskTransport {
     }
 }
 
-impl Transport for ScsiTaskTransport {
-    fn max_transfer(&self) -> usize {
-        // Same cap as the other transports
-        1024 * 1024
-    }
-
+impl ScsiTaskTransport {
+    /// One SCSI transaction, run to completion on this thread
     #[instrument(skip_all, fields(cdb = ?cdb, ?data))]
-    fn execute(&mut self, cdb: &[u8], data: Data, timeout: Duration) -> Result<Completion, Error> {
+    fn execute_blocking(
+        &mut self,
+        cdb: &[u8],
+        data: Data,
+        timeout: Duration,
+    ) -> Result<Completion, Error> {
         if cdb.len() > 16 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -356,6 +357,22 @@ impl Transport for ScsiTaskTransport {
             ((**task).Release)(task.cast());
             result
         }
+    }
+}
+
+impl Transport for ScsiTaskTransport {
+    fn max_transfer(&self) -> usize {
+        // Same cap as the other transports
+        1024 * 1024
+    }
+
+    fn execute<'a>(
+        &'a mut self,
+        cdb: &'a [u8],
+        data: Data<'a>,
+        timeout: Duration,
+    ) -> BoxFuture<'a, Result<Completion, Error>> {
+        Box::pin(async move { self.execute_blocking(cdb, data, timeout) })
     }
 }
 

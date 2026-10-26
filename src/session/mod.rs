@@ -13,6 +13,7 @@ pub mod probe;
 pub mod scan;
 pub mod window;
 
+use crate::time::{Instant, sleep};
 use crate::{
     error::Error,
     protocol::{
@@ -28,11 +29,7 @@ use crate::{
     transport::{self, Completion, Data, Transport},
 };
 use std::sync::Arc;
-use std::{
-    io,
-    thread::sleep,
-    time::{Duration, Instant},
-};
+use std::{io, time::Duration};
 use tracing::*;
 
 pub struct Session {
@@ -46,6 +43,8 @@ pub struct Session {
     curves: Option<Arc<Curves>>,
     /// Whether we hold the unit, so [`Drop`] only releases what it took
     reserved: bool,
+    /// A pass that was dropped unread and is not stopped yet. Only a browser build sets this
+    unread: Option<image::Unread>,
 }
 
 /// What a command that asks the unit something, rather than moves anything,
@@ -85,6 +84,12 @@ pub(crate) const READY_TIMEOUT: Duration = Duration::from_secs(180);
 /// Polling needs no cap: it sleeps, and the deadline already bounds it
 const MAX_CHANGES: usize = 16;
 
+/// Run a session future from a `Drop` or the reader thread. Natively it is ready at the first poll
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    pollster::block_on(future)
+}
+
 /// A reply we could not make sense of
 pub(crate) fn malformed(what: String) -> Error {
     Error::Transport(io::Error::new(io::ErrorKind::InvalidData, what).into())
@@ -96,8 +101,8 @@ impl Session {
     /// Pins the measurement unit divisor to the unit's maximum resolution, so
     /// every window coordinate is one pixel and agrees with the addresses and
     /// boundaries `Address` reports.
-    pub fn open(mut transport: Box<dyn Transport>) -> Result<Self, Error> {
-        let caps = probe::capabilities(transport.as_mut())?;
+    pub async fn open(mut transport: Box<dyn Transport>) -> Result<Self, Error> {
+        let caps = probe::capabilities(transport.as_mut()).await?;
         let divisor = caps.address.x_axis.dpi_range.last;
         let mut session = Self {
             transport,
@@ -106,6 +111,7 @@ impl Session {
             reserved: false,
             frames: None,
             curves: None,
+            unread: None,
         };
         // INQUIRY answers while the unit is still initializing, so probing says
         // nothing about readiness. Everything below is a real command, and a
@@ -114,7 +120,7 @@ impl Session {
         // An empty unit answers this with no medium, which is a state to open
         // in rather than a failure: the caller is the one who decides whether
         // to wait for something to be loaded
-        match session.test_unit_ready(READY_TIMEOUT) {
+        match session.test_unit_ready(READY_TIMEOUT).await {
             Ok(()) => {}
             Err(Error::Media(Intervention::NoMedium)) => debug!("nothing is loaded"),
             // A scan the last process holding the unit never read to the end
@@ -126,22 +132,22 @@ impl Session {
                 if matches!(*fault, Fault::Rejected(Refusal::OutOfSequence, _)) =>
             {
                 debug!("a scan was still valid from the last process, stopping it");
-                session.abort()?;
-                session.test_unit_ready(READY_TIMEOUT)?;
+                session.abort().await?;
+                session.test_unit_ready(READY_TIMEOUT).await?;
             }
             Err(e) => return Err(e),
         }
         // Before RESERVE UNIT, not after: a scan the last program left open
         // refuses that too, and a refusal there is one nothing recovers from
-        session.stop_stale_scan()?;
-        session.reserved = session.reserve()?;
-        session.set_units(divisor)?;
+        session.stop_stale_scan().await?;
+        session.reserved = session.reserve().await?;
+        session.set_units(divisor).await?;
 
         // The rest of the preamble drives the mechanism, so it waits until
         // there is something loaded to drive it against
-        session.fetch_curves();
-        match session.media_loaded()? {
-            true => session.stage()?,
+        session.fetch_curves().await;
+        match session.media_loaded().await? {
+            true => session.stage().await?,
             false => debug!("nothing is loaded, so the mechanism is left alone"),
         }
 
@@ -159,9 +165,9 @@ impl Session {
     /// can be asked in a loop while somebody loads one. Nothing moves, which is
     /// the point: a scan drives the stage against film and has to know before
     /// it starts.
-    pub fn media_loaded(&mut self) -> Result<bool, Error> {
+    pub async fn media_loaded(&mut self) -> Result<bool, Error> {
         if self.caps.frames.is_some() {
-            let page = probe::vpd(self.transport.as_mut(), Frames::PAGE_CODE)?;
+            let page = probe::vpd(self.transport.as_mut(), Frames::PAGE_CODE).await?;
             let frames = Frames::try_from(&page)?;
             let loaded = !frames.images.is_empty();
             self.caps.frames = Some(frames);
@@ -171,7 +177,7 @@ impl Session {
         // while somebody feeds one - so the budget has to cover the draw-in, not
         // just an answer from an idle unit. `run` returns the moment the unit
         // stops reporting itself busy, so this is a ceiling rather than a wait
-        match self.test_unit_ready(MOVE_TIMEOUT) {
+        match self.test_unit_ready(MOVE_TIMEOUT).await {
             Ok(()) => Ok(true),
             Err(Error::Media(Intervention::NoMedium)) => Ok(false),
             Err(e) => Err(e),
@@ -185,8 +191,8 @@ impl Session {
     /// the mechanism, so this is not for an empty unit: [`open`](Self::open)
     /// runs it only when something is loaded, and a caller that waited for a
     /// holder runs it once one is.
-    pub fn stage(&mut self) -> Result<(), Error> {
-        let held = self.windows()?;
+    pub async fn stage(&mut self) -> Result<(), Error> {
+        let held = self.windows().await?;
         let y_boundary = self.caps.address.y_axis.boundary;
         for w in &held {
             // The power-on descriptors describe the hardware maximum, not what
@@ -196,12 +202,12 @@ impl Session {
                 debug!(id = w.id, size = w.size.1, "skipping stale power-on window");
                 continue;
             }
-            if let Err(e) = self.set_window(w) {
+            if let Err(e) = self.set_window(w).await {
                 debug!(id = w.id, %e, "this window would not go back");
             }
         }
-        if let Ok(at) = self.focus_position() {
-            match self.focus_to(at) {
+        if let Ok(at) = self.focus_position().await {
+            match self.focus_to(at).await {
                 Ok(()) => debug!(at, "staged the focus"),
                 Err(e) => debug!(at, %e, "could not stage the focus"),
             }
@@ -212,8 +218,13 @@ impl Session {
     /// Run a command that some units will not have, answering whether it ran
     ///
     /// `Err` stays `Err` for every refusal but the one named
-    fn tolerate(&mut self, cdb: &[u8], timeout: Duration, allowed: Refusal) -> Result<bool, Error> {
-        match self.run(cdb, Data::None, timeout) {
+    async fn tolerate(
+        &mut self,
+        cdb: &[u8],
+        timeout: Duration,
+        allowed: Refusal,
+    ) -> Result<bool, Error> {
+        match self.run(cdb, Data::None, timeout).await {
             Ok(_) => Ok(true),
             Err(Error::Device(fault)) if matches!(*fault, Fault::Rejected(refusal, _) if refusal == allowed) => {
                 Ok(false)
@@ -227,8 +238,10 @@ impl Session {
     /// Only SBP-2 has more than one initiator, but the 5000 documents the
     /// command too, in 2-4 and not in its own command list, so a unit that has
     /// never heard of it is not an error. Answers whether we got it
-    fn reserve(&mut self) -> Result<bool, Error> {
-        let held = self.tolerate(&ReserveUnit.cdb(), PROBE_TIMEOUT, Refusal::UnknownOpcode)?;
+    async fn reserve(&mut self) -> Result<bool, Error> {
+        let held = self
+            .tolerate(&ReserveUnit.cdb(), PROBE_TIMEOUT, Refusal::UnknownOpcode)
+            .await?;
         if !held {
             debug!("this unit has no RESERVE UNIT");
         }
@@ -239,14 +252,14 @@ impl Session {
     ///
     /// While one is, every non-basic command is refused as out of sequence, so
     /// issuing one is how to tell
-    fn stop_stale_scan(&mut self) -> Result<(), Error> {
-        match self.windows() {
+    async fn stop_stale_scan(&mut self) -> Result<(), Error> {
+        match self.windows().await {
             Ok(_) => Ok(()),
             Err(Error::Device(fault))
                 if matches!(*fault, Fault::Rejected(Refusal::OutOfSequence, _)) =>
             {
                 debug!("a scan was still valid from earlier, stopping it");
-                self.abort().map(drop)
+                self.abort().await.map(drop)
             }
             Err(e) => Err(e),
         }
@@ -262,13 +275,16 @@ impl Session {
     /// Coolscan V capture of NikonScan's own Stop button does exactly that -
     /// last READ's status read, then `C0h`, GOOD 1.6 ms later - so the wait
     /// below is a ceiling rather than something a readout abort spends
-    pub fn abort(&mut self) -> Result<bool, Error> {
-        if !self.tolerate(&Abort.cdb(), PROBE_TIMEOUT, Refusal::UnknownOpcode)? {
+    pub async fn abort(&mut self) -> Result<bool, Error> {
+        if !self
+            .tolerate(&Abort.cdb(), PROBE_TIMEOUT, Refusal::UnknownOpcode)
+            .await?
+        {
             debug!("this unit has no ABORT");
             return Ok(false);
         }
         // An operation activation command, so it answers before it acts
-        self.test_unit_ready(MOVE_TIMEOUT)?;
+        self.test_unit_ready(MOVE_TIMEOUT).await?;
         Ok(true)
     }
 
@@ -276,8 +292,8 @@ impl Session {
     ///
     /// The caller is already carrying an error, so a failure to stop it is
     /// logged rather than returned
-    pub(crate) fn abandon_scan(&mut self) {
-        if let Err(e) = self.abort() {
+    pub(crate) async fn abandon_scan(&mut self) {
+        if let Err(e) = self.abort().await {
             warn!(
                 %e,
                 "could not stop the scan, so it is left open - the next command \
@@ -295,12 +311,15 @@ impl Session {
     /// mechanism has finished and [`execute`](Self::execute) waits it out.
     /// An adapter with nothing to eject, such as a single-slide mount, does
     /// not offer the operation at all: leaving it loaded is not a failure
-    pub fn eject(&mut self) -> Result<bool, Error> {
+    pub async fn eject(&mut self) -> Result<bool, Error> {
         if !self.caps.features.execute.supports(Op::Unload) {
             debug!("this unit has no UNLOAD");
             return Ok(false);
         }
-        match self.execute(Op::Unload, Operation::default(), MOVE_TIMEOUT) {
+        match self
+            .execute(Op::Unload, Operation::default(), MOVE_TIMEOUT)
+            .await
+        {
             Ok(()) => Ok(true),
             // `execute` confirms termination with TEST UNIT READY, and once
             // UNLOAD has actually emptied the gate that reports medium not
@@ -321,12 +340,15 @@ impl Session {
     ///
     /// `Ok(false)` covers both nothing to do and nothing left: neither is a
     /// failure, and either way the caller has to ask the operator
-    pub fn load(&mut self) -> Result<bool, Error> {
+    pub async fn load(&mut self) -> Result<bool, Error> {
         if !self.caps.features.execute.supports(Op::Load) {
             debug!("this unit has no LOAD");
             return Ok(false);
         }
-        match self.execute(Op::Load, Operation::default(), MOVE_TIMEOUT) {
+        match self
+            .execute(Op::Load, Operation::default(), MOVE_TIMEOUT)
+            .await
+        {
             Ok(_) => Ok(true),
             Err(Error::Media(Intervention::NothingToLoad)) => {
                 debug!("the adapter has nothing left to take in");
@@ -334,6 +356,26 @@ impl Session {
             }
             Err(e) => Err(e),
         }
+    }
+
+    /// Stop an unread pass and release the unit. A browser cannot do this in `Drop`
+    pub async fn close(mut self) -> Result<(), Error> {
+        if let Err(e) = self.stop_unread().await {
+            warn!(%e, "could not stop the scan, so it is left open");
+        }
+        // Close the transport even if the release fails, so the interface is not left claimed
+        let released = if std::mem::take(&mut self.reserved) {
+            self.run(&ReleaseUnit.cdb(), Data::None, PROBE_TIMEOUT)
+                .await
+                .map(drop)
+        } else {
+            Ok(())
+        };
+        // Close rather than drop the transport, so a new session can open the unit at once
+        let transport = std::mem::replace(&mut self.transport, Box::new(transport::Closed));
+        let closed = transport.close().await;
+        released?;
+        Ok(closed?)
     }
 
     /// What the scanner says it can do
@@ -350,22 +392,24 @@ impl Session {
     /// they cover are the sensor's, so they outlive an adapter change and are
     /// read once at open rather than again here. Dropping them left every pass
     /// after the first refresh decoding uncorrected
-    pub fn refresh(&mut self) -> Result<(), Error> {
-        self.caps = probe::capabilities(self.transport.as_mut())?;
+    pub async fn refresh(&mut self) -> Result<(), Error> {
+        self.caps = probe::capabilities(self.transport.as_mut()).await?;
         Ok(())
     }
 
     /// Simple readiness check
-    pub fn test_unit_ready(&mut self, timeout: Duration) -> Result<(), Error> {
-        self.run(&TestUnitReady.cdb(), Data::None, timeout)?;
+    pub async fn test_unit_ready(&mut self, timeout: Duration) -> Result<(), Error> {
+        self.run(&TestUnitReady.cdb(), Data::None, timeout).await?;
         Ok(())
     }
 
     /// One mode page, header and block descriptor included
-    pub fn mode_sense(&mut self, page: u8, control: PageControl) -> Result<Vec<u8>, Error> {
+    pub async fn mode_sense(&mut self, page: u8, control: PageControl) -> Result<Vec<u8>, Error> {
         let cmd = ModeSense::new(page, control);
         let mut buf = vec![0u8; cmd.allocation_length()];
-        let completion = self.run(&cmd.cdb(), Data::In(&mut buf), PROBE_TIMEOUT)?;
+        let completion = self
+            .run(&cmd.cdb(), Data::In(&mut buf), PROBE_TIMEOUT)
+            .await?;
         buf.truncate(completion.transferred);
         Ok(buf)
     }
@@ -374,8 +418,10 @@ impl Session {
     ///
     /// It outlives a session: it holds until the next MODE SELECT, a reset or a
     /// power cycle
-    pub fn units(&mut self) -> Result<u16, Error> {
-        let reply = self.mode_sense(mode::MEASUREMENT_UNITS, PageControl::Current)?;
+    pub async fn units(&mut self) -> Result<u16, Error> {
+        let reply = self
+            .mode_sense(mode::MEASUREMENT_UNITS, PageControl::Current)
+            .await?;
         mode::divisor(&reply)
             .ok_or_else(|| malformed(format!("no measurement units page in {reply:02x?}")))
     }
@@ -384,7 +430,7 @@ impl Session {
     ///
     /// 2-3-4 note 5 takes only 1200 or the unit's own maximum resolution and
     /// answers anything else with common error 2
-    pub fn set_units(&mut self, divisor: u16) -> Result<(), Error> {
+    pub async fn set_units(&mut self, divisor: u16) -> Result<(), Error> {
         let max = self.caps.address.x_axis.dpi_range.last;
         if divisor != 1200 && divisor != max {
             return Err(Error::Unsupported {
@@ -399,7 +445,8 @@ impl Session {
             trace!(divisor, bytes = hex.join(" "), "mode select");
         }
         let cmd = ModeSelect::new(list.len() as u8);
-        self.run(&cmd.cdb(), Data::Out(&list), PROBE_TIMEOUT)?;
+        self.run(&cmd.cdb(), Data::Out(&list), PROBE_TIMEOUT)
+            .await?;
         self.divisor = divisor;
         Ok(())
     }
@@ -411,13 +458,13 @@ impl Session {
     /// record is read and the command issued again, so this returns when it
     /// has run. `timeout` budgets the whole command including re-issues, not
     /// one transfer
-    pub fn run(
+    pub async fn run(
         &mut self,
         cdb: &[u8],
         data: Data<'_>,
         timeout: Duration,
     ) -> Result<Completion, Error> {
-        let (completion, _) = self.run_handshake(cdb, data, timeout)?;
+        let (completion, _) = self.run_handshake(cdb, data, timeout).await?;
         Ok(completion)
     }
 
@@ -428,12 +475,17 @@ impl Session {
     /// `DataType::Cooperation`, do the
     /// work, and issue the command again. SCAN uses this so its caller can
     /// honor whatever the unit asks for once the data is in hand
-    pub(crate) fn run_handshake(
+    pub(crate) async fn run_handshake(
         &mut self,
         cdb: &[u8],
         mut data: Data<'_>,
         timeout: Duration,
     ) -> Result<(Completion, Vec<CooperativeAction>), Error> {
+        // The unit refuses most commands while a pass is open, so stop it first. Boxed because stopping sends a command
+        if self.unread.is_some() {
+            Box::pin(self.stop_unread()).await?;
+        }
+
         // One budget for the command, re-issues included, rather than one each:
         // a fresh timeout per round would let 16 cooperative requests run for 16
         // times what the caller allowed
@@ -442,7 +494,9 @@ impl Session {
         let mut asked: Vec<(Coop, CooperativeAction)> = Vec::new();
         for _ in 0..=MAX_COOPERATION {
             let payload = data.reborrow();
-            let (completion, coop) = self.run_cooperative(cdb, payload, deadline, timeout)?;
+            let (completion, coop) = self
+                .run_cooperative(cdb, payload, deadline, timeout)
+                .await?;
             let Some(coop) = coop else {
                 return Ok((completion, cooperations));
             };
@@ -453,7 +507,8 @@ impl Session {
             // This read carries its own `PROBE_TIMEOUT` rather than the
             // command's deadline: it is a short reply the unit already has in
             // hand, and it is bounded by the cap on the loop
-            let record = self.cooperation()?;
+            // Boxed: reading the record is itself a command through `run`
+            let record = Box::pin(self.cooperation()).await?;
             debug!(?coop, ?record, "the unit wants something doing");
 
             // Each job is asked for once, so the same one coming back means it
@@ -487,7 +542,7 @@ impl Session {
     /// `deadline` bounds this call and `budget` is only what a timeout reports,
     /// since the deadline is the caller's whole command and the remainder of it
     /// would be a misleading thing to name
-    fn run_cooperative(
+    async fn run_cooperative(
         &mut self,
         cdb: &[u8],
         mut data: Data<'_>,
@@ -506,7 +561,7 @@ impl Session {
                 return Err(Error::Transport(transport::Error::Timeout(budget)));
             }
 
-            let completion = self.transport.execute(cdb, payload, left)?;
+            let completion = self.transport.execute(cdb, payload, left).await?;
 
             match interpret(&completion) {
                 // Done, either quietly or having done something other than what
@@ -532,7 +587,7 @@ impl Session {
                     if reported.replace(activity) != Some(activity) {
                         debug!(?activity, "waiting");
                     }
-                    sleep(POLL_INTERVAL);
+                    sleep(POLL_INTERVAL).await;
                 }
 
                 // Unit attention: the command did not run. Several queue up --
@@ -540,7 +595,7 @@ impl Session {
                 // track the adapter, so what we cached may now be stale
                 Outcome::StateChanged(change) => {
                     debug!(?change, "device state changed under us, re-issuing");
-                    self.refresh()?;
+                    self.refresh().await?;
                     changes += 1;
                     if changes >= MAX_CHANGES {
                         return Err(unsettled(change, changes));
@@ -574,8 +629,12 @@ impl Drop for Session {
         if !self.reserved {
             return;
         }
-        if let Err(e) = self.run(&ReleaseUnit.cdb(), Data::None, PROBE_TIMEOUT) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(e) = block_on(self.run(&ReleaseUnit.cdb(), Data::None, PROBE_TIMEOUT)) {
             warn!(%e, "could not release the scanner");
         }
+        // Only SBP-2 has another initiator to lock out, and a browser has no SBP-2
+        #[cfg(target_arch = "wasm32")]
+        debug!("the session was dropped without `close`, so the reservation is left");
     }
 }

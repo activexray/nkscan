@@ -341,7 +341,8 @@ pub fn validate_set(windows: &[Window]) -> Result<(), Error> {
     // has to match the visible channels in the set. Infrared is not one of
     // them: Nikon Scan scans 09 01 02 03 with the RGB code, four windows to
     // three planes. Getting this wrong gets common error 2, 05h-26h, which no
-    // section documents
+    // section documents. A set with only infrared has no visible channel, but
+    // its stream has one plane, so it uses the one-plane code
     let planes = planes(first.composition).ok_or_else(|| {
         bad(
             "image composition",
@@ -352,7 +353,7 @@ pub fn validate_set(windows: &[Window]) -> Result<(), Error> {
         )
     })?;
     let visible = windows.iter().filter(|w| w.channel().is_color()).count();
-    if planes != visible {
+    if planes != visible.max(1) {
         return Err(bad(
             "image composition",
             format!(
@@ -994,6 +995,17 @@ mod tests {
             ))
             .is_err()
         );
+    }
+
+    /// A set with only infrared has one plane. With infrared and colors, the
+    /// colors set the number of planes
+    #[test]
+    fn infrared_alone_is_one_monochrome_plane() {
+        let ir = Channel::Infrared.id();
+        assert!(validate_set(&set(&[ir], Composition::MultilevelBW)).is_ok());
+        assert!(validate_set(&set(&[ir], Composition::MultilevelRGB)).is_err());
+        assert!(validate_set(&set(&[ir, 1, 2, 3], Composition::MultilevelBW)).is_err());
+        assert!(validate_set(&set(&[ir, 1], Composition::MultilevelRGB)).is_err());
     }
 
     /// Address publishes a separate resolution range for thumbnails, far below the

@@ -78,14 +78,15 @@ pub(crate) fn color_channels(caps: &Capabilities) -> Vec<Channel> {
 /// Blank descriptors for `channels`, carrying what every set agrees on
 ///
 /// Composition counts the color planes in the stream, so infrared does not sway
-/// it. What is left is the geometry and the mode, which the caller sets.
+/// it, and infrared alone is one plane. What is left is the geometry and the
+/// mode, which the caller sets.
 pub(crate) fn blank(caps: &Capabilities, channels: &[Channel]) -> Result<Vec<Window>, Error> {
     let bpp = deepest_depth(caps.set_window.depth).ok_or_else(|| Error::Unsupported {
         op: "scan window",
         reason: "this unit advertises no pixel depth".into(),
     })?;
     let composition = match channels.iter().filter(|c| c.is_color()).count() {
-        1 => Composition::MultilevelBW,
+        0 | 1 => Composition::MultilevelBW,
         _ => Composition::MultilevelRGB,
     };
 
@@ -284,13 +285,28 @@ impl Recipe {
     /// The frame's own edges are the window, so the stage steps to it and
     /// stays. Pass a rectangle inside a frame to scan a crop of it.
     pub fn windows(&self, caps: &Capabilities, frame: Rect) -> Result<Vec<Window>, Error> {
-        self.supported(caps)?;
-
         // The captures lead with infrared
         let mut channels = color_channels(caps);
         if self.infrared {
             channels.insert(0, Channel::Infrared);
         }
+        self.windows_of(caps, frame, &channels)
+    }
+
+    /// The one descriptor that scans infrared alone over `frame`, whatever
+    /// [`infrared`](Self::infrared) says. A list of one infrared window is one
+    /// monochrome plane
+    pub fn infrared_windows(&self, caps: &Capabilities, frame: Rect) -> Result<Vec<Window>, Error> {
+        self.windows_of(caps, frame, &[Channel::Infrared])
+    }
+
+    fn windows_of(
+        &self,
+        caps: &Capabilities,
+        frame: Rect,
+        channels: &[Channel],
+    ) -> Result<Vec<Window>, Error> {
+        self.supported(caps)?;
 
         let (x, y) = (&caps.address.x_axis, &caps.address.y_axis);
         let clamp =
@@ -335,7 +351,7 @@ impl Recipe {
             flags |= Flags::AVERAGING;
         }
 
-        let mut windows = blank(caps, &channels)?;
+        let mut windows = blank(caps, channels)?;
         for w in &mut windows {
             // A scan is square. Only a metering pass halves Y, in the prescan builder
             w.resolution = (self.dpi, self.dpi);
@@ -448,6 +464,30 @@ pub(crate) mod tests {
                 .iter()
                 .all(|w| w.composition == Composition::MultilevelRGB)
         );
+    }
+
+    /// The pass of infrared alone is one window, with the one-plane code, on
+    /// the same rectangle and at the same readings as the colors
+    #[test]
+    fn infrared_alone_is_one_monochrome_window() {
+        let recipe = Recipe {
+            samples: 4,
+            ..recipe()
+        };
+        let colors = recipe.windows(&caps(), frame()).expect("windows");
+        let windows = recipe
+            .infrared_windows(&caps(), frame())
+            .expect("infrared window");
+
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].channel(), Channel::Infrared);
+        assert_eq!(windows[0].composition, Composition::MultilevelBW);
+        assert_eq!(
+            (windows[0].origin, windows[0].size),
+            (colors[0].origin, colors[0].size)
+        );
+        assert_eq!(windows[0].multiple_reading, colors[0].multiple_reading);
+        assert!(crate::protocol::window::validate_set(&windows).is_ok());
     }
 
     /// A metering pass covers the channels the scan will, or the scan goes out

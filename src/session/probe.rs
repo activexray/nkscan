@@ -11,9 +11,10 @@ use crate::{
             frames::Frames,
             identity::Identity,
             other::Features,
-            set_window::SetWindowFunction,
+            set_window::{ScanMode, SetWindowFunction},
         },
         cdbs::Inquiry,
+        model::Model,
         sense::{Fault, Outcome, interpret},
     },
     transport::{Data, Transport},
@@ -136,11 +137,16 @@ pub async fn capabilities(t: &mut dyn Transport) -> Result<Capabilities, Error> 
         _ => None,
     };
 
+    let mut set_window = SetWindowFunction::try_from(&vpd(t, SetWindowFunction::PAGE_CODE).await?)?;
+    if identity.model().is_some_and(Model::omits_multi_reading_bit) {
+        set_window.mode |= ScanMode::MULTI_READING;
+    }
+
     Ok(Capabilities {
         identity,
         address,
         features,
-        set_window: SetWindowFunction::try_from(&vpd(t, SetWindowFunction::PAGE_CODE).await?)?,
+        set_window,
         // Neither spec lists this one in page 00h, so a refusal means the unit
         // has not got it rather than that anything went wrong
         ccd: match vpd(t, CcdMeasurement::PAGE_CODE).await {
@@ -160,4 +166,93 @@ pub async fn capabilities(t: &mut dyn Transport) -> Result<Capabilities, Error> 
         },
         holder,
     })
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::transport::{BoxFuture, Completion, Sense, Status};
+    use std::collections::HashMap;
+
+    /// Answers INQUIRY with the pages of a capture, and refuses other pages
+    pub(crate) struct Replay(pub(crate) HashMap<String, Vec<u8>>);
+
+    impl Transport for Replay {
+        fn max_transfer(&self) -> usize {
+            65536
+        }
+
+        fn execute<'a>(
+            &'a mut self,
+            cdb: &'a [u8],
+            data: Data<'a>,
+            _: Duration,
+        ) -> BoxFuture<'a, Result<Completion, crate::transport::Error>> {
+            Box::pin(std::future::ready(Ok(self.answer(cdb, data))))
+        }
+    }
+
+    impl Replay {
+        fn answer(&mut self, cdb: &[u8], data: Data) -> Completion {
+            let key = match cdb[1] & 1 {
+                0 => "std".to_owned(),
+                _ => format!("{:02x}", cdb[2]),
+            };
+            match (self.0.get(&key), data) {
+                (Some(page), Data::In(buf)) => {
+                    let n = page.len().min(buf.len());
+                    buf[..n].copy_from_slice(&page[..n]);
+                    Completion {
+                        status: Status::Good,
+                        sense: None,
+                        transferred: n,
+                    }
+                }
+                _ => Completion {
+                    status: Status::CheckCondition,
+                    sense: Some(Sense {
+                        key: 5,
+                        asc: 0x24,
+                        ascq: 0,
+                        tsc: None,
+                        ili: false,
+                        information: None,
+                        raw: Vec::new(),
+                    }),
+                    transferred: 0,
+                },
+            }
+        }
+    }
+
+    /// The pages of `unit`'s capture under `tests/fixtures/thumbnail_window`, keyed as [`Replay`] looks them up
+    pub(crate) fn pages(unit: &str) -> HashMap<String, Vec<u8>> {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/thumbnail_window")
+            .join(unit);
+        std::fs::read_dir(&dir)
+            .expect("fixture")
+            .filter_map(|e| {
+                let name = e.ok()?.file_name().into_string().ok()?;
+                let code = name.strip_prefix("page_")?.strip_suffix(".bin")?.to_owned();
+                Some((code, std::fs::read(dir.join(&name)).ok()?))
+            })
+            .collect()
+    }
+
+    /// A Coolscan V capture: byte 5 of its SET WINDOW page is 46h, without
+    /// `MULTI_READING`, and the unit reads a line up to 16 times anyway
+    #[test]
+    fn an_ls50_offers_the_multi_reading_its_page_leaves_out() {
+        let mut ls50 = pages("ls50");
+        assert_eq!(ls50["d1"][5] & ScanMode::MULTI_READING.bits(), 0);
+        let caps = crate::session::block_on(capabilities(&mut Replay(ls50.clone()))).expect("caps");
+        assert!(caps.set_window.mode.contains(ScanMode::MULTI_READING));
+
+        // The same pages under another name are taken as they read
+        let product = ls50.get_mut("std").expect("standard INQUIRY");
+        product[16..24].copy_from_slice(b"LS-40 ED");
+        let caps = crate::session::block_on(capabilities(&mut Replay(ls50))).expect("caps");
+        assert!(!caps.set_window.mode.contains(ScanMode::MULTI_READING));
+    }
 }

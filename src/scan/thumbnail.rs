@@ -355,82 +355,17 @@ pub(crate) fn windows(caps: &Capabilities) -> Result<Vec<Window>, Error> {
 mod tests {
     use super::*;
     use crate::scan::window::tests::caps;
-
-    /// Answers INQUIRY with the pages of a capture, and refuses other pages
-    struct Replay(std::collections::HashMap<String, Vec<u8>>);
-
-    impl crate::transport::Transport for Replay {
-        fn max_transfer(&self) -> usize {
-            65536
-        }
-
-        fn execute<'a>(
-            &'a mut self,
-            cdb: &'a [u8],
-            data: crate::transport::Data<'a>,
-            _: std::time::Duration,
-        ) -> crate::transport::BoxFuture<
-            'a,
-            Result<crate::transport::Completion, crate::transport::Error>,
-        > {
-            Box::pin(std::future::ready(self.answer(cdb, data)))
-        }
-    }
-
-    impl Replay {
-        fn answer(
-            &mut self,
-            cdb: &[u8],
-            data: crate::transport::Data,
-        ) -> Result<crate::transport::Completion, crate::transport::Error> {
-            use crate::transport::{Completion, Data, Sense, Status};
-            let key = match cdb[1] & 1 {
-                0 => "std".to_owned(),
-                _ => format!("{:02x}", cdb[2]),
-            };
-            Ok(match (self.0.get(&key), data) {
-                (Some(page), Data::In(buf)) => {
-                    let n = page.len().min(buf.len());
-                    buf[..n].copy_from_slice(&page[..n]);
-                    Completion {
-                        status: Status::Good,
-                        sense: None,
-                        transferred: n,
-                    }
-                }
-                _ => Completion {
-                    status: Status::CheckCondition,
-                    sense: Some(Sense {
-                        key: 5,
-                        asc: 0x24,
-                        ascq: 0,
-                        tsc: None,
-                        ili: false,
-                        information: None,
-                        raw: Vec::new(),
-                    }),
-                    transferred: 0,
-                },
-            })
-        }
-    }
+    use crate::session::probe::tests::{Replay, pages};
 
     /// Compares our thumbnail windows with Nikon Scan's; `start` is the unit's 8Ch exposures
     fn windows_match_nikon(unit: &str, film: Film, start: [u32; 3]) {
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/thumbnail_window")
             .join(unit);
-        let pages = std::fs::read_dir(&dir)
-            .expect("fixture")
-            .filter_map(|e| {
-                let name = e.ok()?.file_name().into_string().ok()?;
-                let code = name.strip_prefix("page_")?.strip_suffix(".bin")?.to_owned();
-                Some((code, std::fs::read(dir.join(&name)).ok()?))
-            })
-            .collect();
-        let caps =
-            crate::session::block_on(crate::session::probe::capabilities(&mut Replay(pages)))
-                .expect("capabilities");
+        let caps = crate::session::block_on(crate::session::probe::capabilities(&mut Replay(
+            pages(unit),
+        )))
+        .expect("capabilities");
         let factors = exposure_factors(&caps, film).expect("factors");
         let mut wrong = Vec::new();
         for (c, mut w) in windows(&caps).expect("windows").into_iter().enumerate() {

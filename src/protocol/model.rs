@@ -12,7 +12,9 @@ pub const VENDOR: u16 = 0x04B0;
 ///
 /// Not a list of what it can drive: what a unit can do is read from its pages,
 /// so an unlisted model still scans. This is for the things that follow the
-/// model rather than the capabilities, of which color is the one that matters.
+/// model rather than the capabilities: color, and the firmware quirks where a
+/// unit does something its pages do not say, which are the methods below that
+/// name one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Model {
     /// Coolscan IV ED
@@ -79,6 +81,12 @@ impl Model {
             .find(|(model, _, _)| *model == self)
             .map(|(_, name, _)| *name)
             .expect("every model is in the table")
+    }
+
+    /// Firmware quirk: the unit reads a line 2 to 16 times, but byte 5 of its
+    /// SET WINDOW page leaves `MULTI_READING` out. Tested on an LS-50
+    pub fn omits_multi_reading_bit(self) -> bool {
+        self == Self::Ls50
     }
 }
 

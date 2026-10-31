@@ -226,12 +226,19 @@ impl Slot {
     }
 
     /// One per output channel, in the order the channel list carries them
-    fn every(channels: &[u8], readings: usize) -> Vec<Self> {
+    ///
+    /// `infrared_per_reading` repeats infrared with the colors, so a reading
+    /// is every channel and the stride is all of them
+    fn every(channels: &[u8], readings: usize, infrared_per_reading: bool) -> Vec<Self> {
         let colors = channels
             .iter()
             .filter(|id| Channel::from(**id).is_color())
             .count();
         let once = channels.len() - colors;
+        let stride = match infrared_per_reading {
+            true => channels.len(),
+            false => colors,
+        };
 
         let (mut color, mut ir) = (0, 0);
         channels
@@ -242,7 +249,7 @@ impl Slot {
                     Slot {
                         first: color - 1,
                         next: colors + once + color - 1,
-                        stride: colors,
+                        stride,
                         readings,
                         out: color - 1,
                         color: true,
@@ -250,13 +257,23 @@ impl Slot {
                 }
                 false => {
                     ir += 1;
-                    Slot {
-                        first: colors + ir - 1,
-                        next: 0,
-                        stride: 0,
-                        readings: 1,
-                        out: ir - 1,
-                        color: false,
+                    match infrared_per_reading {
+                        true => Slot {
+                            first: colors + ir - 1,
+                            next: channels.len() + colors + ir - 1,
+                            stride,
+                            readings,
+                            out: ir - 1,
+                            color: false,
+                        },
+                        false => Slot {
+                            first: colors + ir - 1,
+                            next: 0,
+                            stride: 0,
+                            readings: 1,
+                            out: ir - 1,
+                            color: false,
+                        },
                     }
                 }
             })
@@ -416,6 +433,7 @@ impl<'a> Decoder<'a> {
         let slots = Slot::every(
             &layout.channels,
             usize::from(layout.readings_per_line).max(1),
+            layout.infrared_per_reading,
         );
         let colors = slots.iter().filter(|s| s.color).count();
         let ir = slots.len() - colors;
@@ -767,6 +785,7 @@ mod transposed {
             channels,
             interleaving: ColorInterleaving::MULTILINE_SIMULTANEOUS,
             readings_per_line: readings,
+            infrared_per_reading: false,
             ccd_lines: 3,
             packed_rows: 1,
             registration_gap: gap,
@@ -895,6 +914,7 @@ mod transposed {
             channels,
             interleaving: ColorInterleaving::LINE_WITHOUT_DISTANCE,
             readings_per_line: readings,
+            infrared_per_reading: false,
             ccd_lines: 1,
             packed_rows: 1,
             registration_gap: 1,
@@ -937,6 +957,50 @@ mod transposed {
                     let want = reads.iter().map(|&s| u32::from(s)).sum::<u32>() / 4;
                     assert_eq!(
                         samples.colors[c][pixel_at], want as u16,
+                        "stage {stage} pixel {pixel} color {c}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The LS-50 reads infrared again with the colors, so a feed position is
+    /// R, G, B, IR for each reading and infrared averages like a color
+    #[test]
+    fn a_single_line_averages_infrared_read_every_time() {
+        let (rows, stages, readings) = (2usize, 2usize, 4u8);
+        let l = Layout {
+            infrared_per_reading: true,
+            ..single(rows as u32, stages as u32, vec![1, 2, 3, 9], readings)
+        };
+        // 4 channels x 4 readings
+        assert_eq!(l.readouts(), 16);
+        let (mut d, mut samples) = buffers(&l);
+        d.push(&stream(stages, 16, rows, 1), &mut samples).unwrap();
+        assert!(d.complete());
+
+        // Channel `slot` of each reading sits 4 readouts after the last
+        let average = |stage: usize, slot: usize, pixel: usize| {
+            let sum: u32 = (0..4)
+                .map(|r| u32::from(tag(stage, slot + 4 * r, pixel, 0)))
+                .sum();
+            (sum / 4) as u16
+        };
+        let (_, cols) = d.shape();
+        let ir = samples.ir.as_ref().unwrap();
+        for stage in 0..stages {
+            for pixel in 0..rows {
+                let (y, x) = (rows - 1 - pixel, stage);
+                let pixel_at = y * cols + x;
+                assert_eq!(
+                    ir[pixel_at],
+                    average(stage, 3, pixel),
+                    "stage {stage} pixel {pixel} IR"
+                );
+                for c in 0..3 {
+                    assert_eq!(
+                        samples.colors[c][pixel_at],
+                        average(stage, c, pixel),
                         "stage {stage} pixel {pixel} color {c}"
                     );
                 }

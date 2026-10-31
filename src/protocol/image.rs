@@ -13,6 +13,7 @@ use crate::{
             set_window::{ColorInterleaving, ScanKind},
         },
         data::{Position, Truncation, width_code},
+        model::Model,
         window::{Channel, Window, validate_set},
     },
 };
@@ -49,6 +50,9 @@ pub struct Layout {
     pub interleaving: ColorInterleaving,
     /// Times each line is read. More than 1 means the host owes an average
     pub readings_per_line: u8,
+    /// Whether infrared repeats with the colors on every reading rather than
+    /// coming once with the first. See [`Model::repeats_infrared_per_reading`]
+    pub infrared_per_reading: bool,
     /// Lines on the CCD, which is how many arrive at once under
     /// [`MULTILINE_SIMULTANEOUS`](ColorInterleaving::MULTILINE_SIMULTANEOUS)
     pub ccd_lines: u8,
@@ -176,6 +180,7 @@ impl Layout {
             channels,
             interleaving: ColorInterleaving::LINE_WITHOUT_DISTANCE,
             readings_per_line: 1,
+            infrared_per_reading: false,
             ccd_lines: 1,
             packed_rows: 1,
             registration_gap: 0,
@@ -363,6 +368,10 @@ impl Layout {
             interleaving: first.color_interleaving,
             // Byte 40's high nibble is one less than the number of reads
             readings_per_line: first.multiple_reading.saturating_add(1),
+            infrared_per_reading: caps
+                .identity
+                .model()
+                .is_some_and(Model::repeats_infrared_per_reading),
             ccd_lines: caps.address.lines,
             packed_rows: packed_rows(caps, first.color_interleaving),
             // The gap is along the feed, so it divides by the feed's pitch. The
@@ -412,7 +421,10 @@ impl Layout {
     pub fn bytes_per_reading(&self, reading: u32) -> u32 {
         let colors = self.colors().count() as u32;
         let once = self.channels.len() as u32 - colors;
-        let readouts = colors + if reading == 0 { once } else { 0 };
+        let readouts = match self.infrared_per_reading {
+            true => self.channels.len() as u32,
+            false => colors + if reading == 0 { once } else { 0 },
+        };
         let (first, last) = self.truncated_bytes(reading);
         self.pixels * u32::from(self.bytes_per_sample) * readouts + first + last
     }
@@ -449,7 +461,9 @@ impl Layout {
     /// True if all the readings of a line have the same length. A channel the
     /// unit reads one time makes the first reading longer than the others
     pub fn even_readings(&self) -> bool {
-        self.readings() == 1 || self.channels.len() as u32 == self.colors().count() as u32
+        self.readings() == 1
+            || self.infrared_per_reading
+            || self.channels.len() as u32 == self.colors().count() as u32
     }
 
     /// Bytes in one line of every channel, all its readings included
@@ -469,9 +483,13 @@ impl Layout {
 
     /// Readouts the unit emits per line
     ///
-    /// Multi-sampling repeats the color channels only. Infrared is read once
-    /// however many repeats are set, so channels times readings overstates it
+    /// Multi-sampling repeats the color channels only, unless infrared repeats
+    /// with them. Otherwise infrared is read once however many repeats are
+    /// set, so channels times readings overstates it
     pub fn readouts(&self) -> u32 {
+        if self.infrared_per_reading {
+            return self.channels.len() as u32 * self.readings();
+        }
         let repeated = self
             .channels
             .iter()
@@ -862,6 +880,40 @@ mod tests {
         );
     }
 
+    /// The LS-50 reads infrared again on every reading, so the readings of a
+    /// line are all the same length
+    ///
+    /// Each reading is R, G, B, IR, and the unit pads it by 304 to a whole
+    /// number of 512-byte packets
+    #[test]
+    fn an_ls50_reads_infrared_on_every_reading() {
+        let truncation = Truncation {
+            position: Position::ALL_LAST,
+            all_colors: Edges {
+                first: 0,
+                last: 304,
+            },
+            ..Default::default()
+        };
+        let mut windows = rgb(4000, (986, 1000));
+        windows.push(window(9, 4000, (986, 1000)));
+        for w in &mut windows {
+            w.multiple_reading = 1;
+            w.composition = Composition::MultilevelRGB;
+        }
+        let mut ls50 = caps(0x03, 1, 1);
+        ls50.identity.product = "LS-50 ED".into();
+
+        let l = Layout::new(&ls50, &windows, 4000, Some(&truncation)).unwrap();
+
+        assert!(l.infrared_per_reading);
+        assert!(l.even_readings());
+        assert_eq!(l.bytes_per_reading(0), 8192);
+        assert_eq!(l.bytes_per_reading(1), 8192);
+        assert_eq!(l.bytes_per_line(), 16384);
+        assert_eq!(l.readouts(), 8);
+    }
+
     /// Issue 52: the same unit on `--samples 4 --ir`, where the CCD's two rows
     /// come packed into one line
     ///
@@ -1027,6 +1079,7 @@ mod readouts {
             channels: vec![9, 1, 2, 3],
             interleaving: ColorInterleaving::MULTILINE_SIMULTANEOUS,
             readings_per_line: readings,
+            infrared_per_reading: false,
             ccd_lines: 3,
             packed_rows: 1,
             registration_gap: 1,

@@ -88,6 +88,13 @@ impl Model {
     pub fn omits_multi_reading_bit(self) -> bool {
         self == Self::Ls50
     }
+
+    /// Firmware quirk: with more than one reading a line, infrared is read
+    /// again with the colors on every reading, so each one is R, G, B, IR. The
+    /// LS-5000 reads it once, with the first. Measured on an LS-50
+    pub fn repeats_infrared_per_reading(self) -> bool {
+        self == Self::Ls50
+    }
 }
 
 #[cfg(test)]

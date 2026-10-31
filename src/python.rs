@@ -21,7 +21,7 @@ use crate::{
     scan::{
         autoexpose::Exposures,
         focus::{Focus, Focused},
-        frame::{self, Phase},
+        frame::{self, InfraredPass, Phase},
         framing::{self, Framing},
         meter::Metering,
         pass::Progress,
@@ -775,6 +775,7 @@ impl PySession {
                     metering,
                     clean,
                     focus,
+                    infrared: InfraredPass::WithColors,
                 };
                 let scanned = block_on(frame::scan_frame_with(
                     session,
@@ -785,6 +786,7 @@ impl PySession {
                     |phase, p| match phase {
                         Phase::Meter(pass) => report(&progress, "meter", pass, p),
                         Phase::Scan => report(&progress, "scan", 0, p),
+                        Phase::Infrared => report(&progress, "infrared", 0, p),
                     },
                 ))?;
 

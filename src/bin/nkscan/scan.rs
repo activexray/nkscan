@@ -126,6 +126,7 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
         thumbnail: save_thumbnail,
         format,
         film,
+        ir_pass,
     } = args;
 
     // Silver grains stop infrared as they stop light, so the mask a
@@ -158,6 +159,14 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
         info!(
             "at {dpi} dpi all the CCD rows give one output line, so the scan reads one row at a time and takes more time"
         );
+    }
+
+    let infrared = match ir_pass {
+        true => InfraredPass::Separate,
+        false => InfraredPass::WithColors,
+    };
+    if ir_pass && !infrared.separates(&recipe) {
+        warn!("--ir-pass needs --samples above 1 and --ir or --clean, so it changes nothing");
     }
 
     debug!(
@@ -285,7 +294,7 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
                 metering,
                 clean,
                 focus: Focus::default(),
-                infrared: InfraredPass::WithColors,
+                infrared,
             };
             let scanned = frame::scan_frame_with(
                 session,

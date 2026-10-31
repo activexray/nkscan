@@ -88,6 +88,12 @@ for frame in frames:
     session.scan_frame(frame, infrared=True, exposures=exposures)
 ```
 
+With `samples` above 1, `infrared_pass="separate"` takes the infrared plane in a pass of its own after the colors, at one reading and the same exposures. An LS-50 otherwise reads infrared again on every reading, and infrared is its longest exposure, so this is much faster there:
+
+```python
+session.scan_frame(frame, samples=4, clean=True, infrared_pass="separate")
+```
+
 ## Focus
 
 By default, `scan_frame` autofocuses on the center of the frame. Use `focus` to change this:
@@ -181,6 +187,7 @@ Nikon Scan shows in that column. On these units, Nikon Scan lets a frame move
 
 Both `discover_frames` and `scan_frame` take a `progress` callback.
 Returning `False` cancels the pass in progress; anything else (including `None`) continues.
+`scan_frame` reports its passes as the phases `"meter"`, `"scan"` and, under `infrared_pass="separate"`, `"infrared"`.
 
 ```python
 def on_progress(phase, pass_number, bytes_done, bytes_total):

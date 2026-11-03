@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0]
+
+### Added
+
+- The LS-50 can multi-sample. Use `--samples` 2 to 16, with or without infrared. Its SET WINDOW page does not set the multi-reading bit. It reads infrared again on every reading. Python's `max_samples` is 16 on an LS-50.
+- `Quirks`, `Model::quirks` and `Identity::quirks` list what the firmware of a model does that its pages do not say.
+- `Layout::sample_bits` gives the bits in a decoded sample.
+
+### Changed
+
+- The decoder scales an average of more than one reading to 16 bits before it rounds the average. Thus the average keeps the precision that the readings add. A pass of one reading keeps the depth of the unit. On a 16-bit unit, the average does not change.
+- A unit can ask for a cooperation job again after a different job. nkscan refuses a unit that asks for the same job two times in sequence.
+- **Breaking:** `Layout` has a public `infrared_per_reading` field. A multi-reading pass from `Session::scan_pass` gives 16-bit samples. Its `Image::bits` is 16.
+
 ## [0.17.0]
 
 ### Added

@@ -3,7 +3,7 @@
 //! Note: this is not a VPD page
 
 use super::Error;
-use crate::protocol::model::Model;
+use crate::protocol::model::{Model, Quirks};
 
 /// Peripheral device type 6, which is what a scanner reports
 pub const SCANNER: u8 = 0x06;
@@ -34,6 +34,11 @@ impl Identity {
     /// Which scanner this is, where the product field names one we know
     pub fn model(&self) -> Option<Model> {
         Model::from_product(&self.product)
+    }
+
+    /// What this unit's firmware does that its pages do not say
+    pub fn quirks(&self) -> Quirks {
+        self.model().map_or(Quirks::empty(), Model::quirks)
     }
 
     pub fn is_mf_scanner(&self) -> bool {

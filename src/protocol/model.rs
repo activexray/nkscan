@@ -12,7 +12,7 @@ pub const VENDOR: u16 = 0x04B0;
 ///
 /// Not a list of what it can drive: what a unit can do is read from its pages,
 /// so an unlisted model still scans. This is for the things that follow the
-/// model rather than the capabilities, of which color is the one that matters.
+/// model rather than the capabilities: color, and the [`Quirks`] of its firmware.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Model {
     /// Coolscan IV ED
@@ -79,6 +79,28 @@ impl Model {
             .find(|(model, _, _)| *model == self)
             .map(|(_, name, _)| *name)
             .expect("every model is in the table")
+    }
+
+    /// What this model's firmware does that its pages do not say
+    pub fn quirks(self) -> Quirks {
+        match self {
+            Self::Ls50 => Quirks::UNADVERTISED_MULTI_READING | Quirks::INFRARED_EVERY_READING,
+            _ => Quirks::empty(),
+        }
+    }
+}
+
+bitflags::bitflags! {
+    /// Things a unit does that its pages do not say. Each one is measured on hardware
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Quirks: u8 {
+        /// The unit reads a line 2 to 16 times, but byte 5 of its SET WINDOW
+        /// page does not set `MULTI_READING`. LS-50 firmware 1.02 and 2.04
+        const UNADVERTISED_MULTI_READING = 1 << 0;
+        /// With more than one reading a line, the unit reads infrared again on
+        /// every reading, so each reading is R, G, B, IR. Other units read
+        /// infrared one time, with the first reading. LS-50
+        const INFRARED_EVERY_READING = 1 << 1;
     }
 }
 

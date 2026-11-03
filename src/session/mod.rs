@@ -59,8 +59,9 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// It asks for one job at a time and walks a list of them: a 666 dpi multi-line
 /// pass with three readings and infrared asked five times, one each for
 /// averaging, registration and the CCD data, with two the sense calls 5. The cap
-/// is only there to bound a unit that will not move on, which is what asking for
-/// the same thing twice means
+/// is only there to bound a unit that will not move on: one asking for the same
+/// thing twice in a row is refused at once, and one going round a cycle of jobs
+/// stops here
 const MAX_COOPERATION: usize = 16;
 
 /// Long enough for a full-length stage move
@@ -491,7 +492,7 @@ impl Session {
         // times what the caller allowed
         let deadline = Instant::now() + timeout;
         let mut cooperations = Vec::new();
-        let mut asked: Vec<(Coop, CooperativeAction)> = Vec::new();
+        let mut previous: Option<(Coop, CooperativeAction)> = None;
         for _ in 0..=MAX_COOPERATION {
             let payload = data.reborrow();
             let (completion, coop) = self
@@ -511,24 +512,25 @@ impl Session {
             let record = Box::pin(self.cooperation()).await?;
             debug!(?coop, ?record, "the unit wants something doing");
 
-            // Each job is asked for once, so the same one coming back means it
-            // is not satisfied by reading the record and re-issuing, and asking
-            // again would spin until the cap
-            if asked.contains(&(coop, record.clone())) {
+            // If the unit asks for the same job again at once, the record and
+            // the re-issue did not satisfy it. A job can come back after a
+            // different job, because one job can clear what another set
+            let asked = (coop, record.clone());
+            if previous.as_ref() == Some(&asked) {
                 return Err(Error::Unsupported {
                     op: "host cooperation",
                     reason: format!("the unit asked for {coop:?} twice over"),
                 });
             }
-            asked.push((coop, record.clone()));
+            previous = Some(asked);
             cooperations.push(record);
         }
 
         Err(Error::Unsupported {
             op: "host cooperation",
             reason: format!(
-                "the unit asked for {} things and was still going: {asked:?}",
-                asked.len()
+                "the unit asked for {} things and was still going: {cooperations:?}",
+                cooperations.len()
             ),
         })
     }
@@ -636,5 +638,157 @@ impl Drop for Session {
         // Only SBP-2 has another initiator to lock out, and a browser has no SBP-2
         #[cfg(target_arch = "wasm32")]
         debug!("the session was dropped without `close`, so the reservation is left");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        protocol::caps::other::DataTypes,
+        transport::{BoxFuture, Sense, Status},
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const SCAN: [u8; 6] = [0x1B, 0, 0, 0, 0, 0];
+
+    /// A unit that answers each command through a closure, given the CDB and
+    /// the buffer of a data-in phase
+    struct Unit<F>(F);
+
+    impl<F: FnMut(&[u8], &mut [u8]) -> Completion + Send> Transport for Unit<F> {
+        fn max_transfer(&self) -> usize {
+            65536
+        }
+
+        fn execute<'a>(
+            &'a mut self,
+            cdb: &'a [u8],
+            data: Data<'a>,
+            _: Duration,
+        ) -> BoxFuture<'a, Result<Completion, transport::Error>> {
+            let completion = match data {
+                Data::In(buf) => (self.0)(cdb, buf),
+                _ => (self.0)(cdb, &mut []),
+            };
+            Box::pin(std::future::ready(Ok(completion)))
+        }
+    }
+
+    /// A unit whose SCAN asks for each job `next` gives, until it gives none,
+    /// and whose cooperation record names the job last asked for. The count is
+    /// how many SCANs it took
+    fn asking(
+        mut next: impl FnMut() -> Option<u8> + Send + 'static,
+    ) -> (Session, Arc<AtomicUsize>) {
+        let scans = Arc::new(AtomicUsize::new(0));
+        let counted = scans.clone();
+        let mut job = 0;
+        let unit = Unit(
+            move |cdb: &[u8], buf: &mut [u8]| match (cdb[0], cdb.get(2)) {
+                (0x1B, _) => {
+                    counted.fetch_add(1, Ordering::Relaxed);
+                    match next() {
+                        Some(q) => {
+                            job = q;
+                            Completion {
+                                status: Status::CheckCondition,
+                                sense: Some(Sense {
+                                    key: 0x09,
+                                    asc: 0x80,
+                                    ascq: q,
+                                    tsc: None,
+                                    ili: false,
+                                    information: None,
+                                    raw: Vec::new(),
+                                }),
+                                transferred: 0,
+                            }
+                        }
+                        None => Completion {
+                            status: Status::Good,
+                            sense: None,
+                            transferred: 0,
+                        },
+                    }
+                }
+                // READ of the cooperation record: the 2-11-6 header, then the record
+                (0x28, Some(0x87)) => {
+                    let mut reply = vec![0x87, 8];
+                    reply.extend((CooperativeAction::LENGTH as u32).to_be_bytes());
+                    let mut record = [0u8; CooperativeAction::LENGTH];
+                    record[0] = job;
+                    reply.extend(record);
+                    let n = reply.len().min(buf.len());
+                    buf[..n].copy_from_slice(&reply[..n]);
+                    Completion {
+                        status: Status::Good,
+                        sense: None,
+                        transferred: n,
+                    }
+                }
+                _ => panic!("the unit was not expecting {cdb:02X?}"),
+            },
+        );
+
+        let mut caps = crate::scan::window::tests::caps();
+        caps.features.data_types |= DataTypes::COOP_PARAMS_READ;
+        let session = Session {
+            divisor: caps.address.x_axis.dpi_range.last,
+            caps,
+            transport: Box::new(unit),
+            frames: None,
+            curves: None,
+            reserved: false,
+            unread: None,
+        };
+        (session, scans)
+    }
+
+    fn scan(session: &mut Session) -> Result<(Completion, Vec<CooperativeAction>), Error> {
+        block_on(session.run_handshake(&SCAN, Data::None, Duration::from_secs(5)))
+    }
+
+    /// The LS-50 before a multi-reading pass: its truncation job clears the
+    /// averaging flag, so averaging is asked for again after it
+    #[test]
+    fn a_job_can_come_back_after_another() {
+        let mut jobs = [0x02, 0x06, 0x02].into_iter();
+        let (mut session, scans) = asking(move || jobs.next());
+        let (_, cooperations) = scan(&mut session).expect("the scan starts");
+        let kinds: Vec<Coop> = cooperations.iter().map(CooperativeAction::kind).collect();
+        assert_eq!(kinds, [Coop::Averaging, Coop::Truncate, Coop::Averaging]);
+        assert_eq!(scans.load(Ordering::Relaxed), 4);
+    }
+
+    /// Reading the record and re-issuing did not satisfy the job, so asking a
+    /// third time would get the same answer
+    #[test]
+    fn the_same_job_straight_back_is_refused() {
+        let mut jobs = [0x02, 0x02].into_iter();
+        let (mut session, scans) = asking(move || jobs.next());
+        assert!(matches!(
+            scan(&mut session),
+            Err(Error::Unsupported {
+                op: "host cooperation",
+                ..
+            })
+        ));
+        assert_eq!(scans.load(Ordering::Relaxed), 2);
+    }
+
+    /// Two jobs taking turns forever end at the cap
+    #[test]
+    fn a_cycle_of_jobs_stops_at_the_cap() {
+        let mut jobs = [0x02, 0x06].into_iter().cycle();
+        let (mut session, scans) = asking(move || jobs.next());
+        assert!(matches!(
+            scan(&mut session),
+            Err(Error::Unsupported {
+                op: "host cooperation",
+                ..
+            })
+        ));
+        assert_eq!(scans.load(Ordering::Relaxed), MAX_COOPERATION + 1);
     }
 }

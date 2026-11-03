@@ -92,7 +92,7 @@ impl Model {
 
 bitflags::bitflags! {
     /// Things a unit does that its pages do not say. Each one is measured on hardware
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
     pub struct Quirks: u8 {
         /// The unit reads a line 2 to 16 times, but byte 5 of its SET WINDOW
         /// page does not set `MULTI_READING`. LS-50 firmware 1.02 and 2.04

@@ -1,5 +1,5 @@
 [toolchain]
-channel = "1.97"
+channel = "1.99"
 components = ["rustfmt", "rust-analyzer", "clippy", "rust-src"]
 # Every platform `device::list` has a transport for, plus the musl one releases ship. The
 # flake reads this file, so a target here is one `cargo clippy --target` can reach from any of

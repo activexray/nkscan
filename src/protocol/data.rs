@@ -272,10 +272,7 @@ impl Values {
     /// Split `bytes` into elements, dropping any tail too short to fill one
     pub fn decode(scalar: Scalar, bytes: &[u8]) -> Self {
         fn each<const N: usize, T>(bytes: &[u8], f: impl Fn([u8; N]) -> T) -> Vec<T> {
-            bytes
-                .chunks_exact(N)
-                .map(|c| f(c.try_into().expect("chunks_exact")))
-                .collect()
+            bytes.as_chunks::<N>().0.iter().map(|&c| f(c)).collect()
         }
         match scalar {
             Scalar::U8 => Self::Bytes(bytes.to_vec()),

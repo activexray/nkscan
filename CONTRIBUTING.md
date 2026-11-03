@@ -31,6 +31,7 @@ Comments, doc comments, error messages, log lines and the changelog use Simplifi
 ### Code
 
 - Write the least code that gives the behavior. Use the standard library and idiomatic Rust.
+- Use a new feature of the toolchain if it makes the code shorter or clearer.
 - Use the types that exist before you add a new type. If a type is almost correct, change it.
 - Do not branch on the scanner model. Decide from what the unit reports: its pages, its capabilities, or the data. Firmware behavior that the pages do not report goes in `Quirks` in `src/protocol/model.rs`, and nowhere else.
 - Do not add bare constants. Give each constant a name and a comment that says where its value comes from.

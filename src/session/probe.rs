@@ -237,7 +237,7 @@ pub(crate) mod tests {
             .expect("fixture")
             .filter_map(|e| {
                 let name = e.ok()?.file_name().into_string().ok()?;
-                let code = name.strip_prefix("page_")?.strip_suffix(".bin")?.to_owned();
+                let code = name.strip_circumfix("page_", ".bin")?.to_owned();
                 Some((code, std::fs::read(dir.join(&name)).ok()?))
             })
             .collect()

@@ -282,15 +282,16 @@ pub fn from_density(values: &[f32]) -> Vec<u16> {
         .par_chunks(CHUNK)
         .zip(out.par_chunks_mut(CHUNK))
         .for_each(|(src, dst)| {
-            let mut lanes = src.chunks_exact(4).zip(dst.chunks_exact_mut(4));
-            for (s, d) in &mut lanes {
-                let v = (f32x4::new(s.try_into().expect("chunked by four")) * scale).exp2()
-                    - f32x4::ONE;
-                let v = v.round_int().to_array();
-                d.copy_from_slice(&v.map(|v| v.clamp(0, i32::from(u16::MAX)) as u16));
+            let (src_lanes, src_tail) = src.as_chunks::<4>();
+            let (dst_lanes, dst_tail) = dst.as_chunks_mut::<4>();
+            for (s, d) in src_lanes.iter().zip(dst_lanes) {
+                let v = (f32x4::new(*s) * scale).exp2() - f32x4::ONE;
+                *d = v
+                    .round_int()
+                    .to_array()
+                    .map(|v| v.clamp(0, i32::from(u16::MAX)) as u16);
             }
-            let done = src.len() / 4 * 4;
-            for (&s, d) in src[done..].iter().zip(&mut dst[done..]) {
+            for (&s, d) in src_tail.iter().zip(dst_tail) {
                 *d = from_density_scalar(s);
             }
         });

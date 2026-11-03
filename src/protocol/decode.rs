@@ -100,7 +100,7 @@ pub fn filled_columns(planes: &[&[u16]], rows: usize, cols: usize) -> usize {
     (0..cols)
         .rev()
         .find(|&x| (0..rows).any(|y| planes.iter().any(|plane| plane[y * cols + x] != 0)))
-        .map_or(0, |x| x + 1)
+        .map_or_default(|x| x + 1)
 }
 
 /// A view of an unscrambled pass
@@ -536,7 +536,7 @@ impl<'a> Decoder<'a> {
             }
         }
         let needed = self.ir_samples();
-        let have = samples.ir.as_ref().map_or(0, Vec::len);
+        let have = samples.ir.as_ref().map_or_default(Vec::len);
         if have < needed {
             return Err(bad(format!(
                 "the infrared output holds {have} samples and this stream needs {needed}"

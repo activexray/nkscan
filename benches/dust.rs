@@ -77,15 +77,10 @@ fn read_u16(path: &str) -> Option<Vec<u16>> {
 
 /// The TIFF itself is still chunky RGB; `Samples` wants planes apart
 fn deinterleave3(chunky: &[u16]) -> Vec<Vec<u16>> {
-    let mut planes: Vec<Vec<u16>> = (0..3)
-        .map(|_| Vec::with_capacity(chunky.len() / 3))
-        .collect();
-    for pixel in chunky.chunks_exact(3) {
-        for (plane, &v) in planes.iter_mut().zip(pixel) {
-            plane.push(v);
-        }
-    }
-    planes
+    let pixels = chunky.as_chunks::<3>().0;
+    (0..3)
+        .map(|c| pixels.iter().map(|p| p[c]).collect())
+        .collect()
 }
 
 static SCAN: LazyLock<Option<Samples>> = LazyLock::new(|| {
@@ -248,7 +243,7 @@ fn clean(bencher: divan::Bencher) {
         return;
     };
     let counted = samples.colors.iter().map(Vec::len).sum::<usize>()
-        + samples.ir.as_ref().map_or(0, Vec::len);
+        + samples.ir.as_ref().map_or_default(Vec::len);
     bencher
         .counter(ItemsCount::new(counted))
         .with_inputs(|| {

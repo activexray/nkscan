@@ -38,7 +38,7 @@ impl Identity {
 
     /// What this unit's firmware does that its pages do not say
     pub fn quirks(&self) -> Quirks {
-        self.model().map_or(Quirks::empty(), Model::quirks)
+        self.model().map_or_default(Model::quirks)
     }
 
     pub fn is_mf_scanner(&self) -> bool {

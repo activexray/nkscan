@@ -66,19 +66,14 @@ fn filled_columns(chunky: &[u16], cols: usize, rows: usize) -> usize {
     (0..cols)
         .rev()
         .find(|&x| (0..rows).any(|y| chunky[(y * cols + x) * 3..][..3].iter().any(|&v| v != 0)))
-        .map_or(0, |x| x + 1)
+        .map_or_default(|x| x + 1)
 }
 
 fn deinterleave3(chunky: &[u16]) -> Vec<Vec<u16>> {
-    let mut planes: Vec<Vec<u16>> = (0..3)
-        .map(|_| Vec::with_capacity(chunky.len() / 3))
-        .collect();
-    for pixel in chunky.chunks_exact(3) {
-        for (plane, &v) in planes.iter_mut().zip(pixel) {
-            plane.push(v);
-        }
-    }
-    planes
+    let pixels = chunky.as_chunks::<3>().0;
+    (0..3)
+        .map(|c| pixels.iter().map(|p| p[c]).collect())
+        .collect()
 }
 
 fn main() {

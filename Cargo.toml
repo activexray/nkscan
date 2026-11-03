@@ -30,8 +30,8 @@ wide = "1"
 rayon = "1"
 
 # Python library dependencies
-pyo3 = { version = "0.29", optional = true, features = ["abi3-py313"] }
-numpy = { version = "0.29", optional = true }
+pyo3 = { version = "0.30", optional = true, features = ["abi3-py313"] }
+numpy = { version = "0.30", optional = true }
 pyo3-stub-gen = { version = "0.23", optional = true, default-features = false, features = [
   "numpy",
   "infer_signature",
@@ -72,11 +72,11 @@ path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"] # For python support
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-pollster = "0.4"
+pollster = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-time = "1"
-gloo-timers = { version = "0.3", features = ["futures"] }
+gloo-timers = { version = "0.4", features = ["futures"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.31", features = ["ioctl"] }
@@ -108,7 +108,7 @@ name = "discover"
 required-features = ["cli"]
 
 [dev-dependencies]
-divan = "0.1.21"
+divan = "0.1"
 tiff = "0.11"
 
 [[bench]]

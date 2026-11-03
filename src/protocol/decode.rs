@@ -239,8 +239,8 @@ impl Slot {
 
     /// One per output channel, in the order the channel list carries them
     ///
-    /// `infrared_per_reading` repeats infrared with the colors, so a reading
-    /// is every channel and the stride is all of them
+    /// With `infrared_per_reading`, each reading contains every channel, so the
+    /// stride is the number of channels
     fn every(channels: &[u8], readings: usize, infrared_per_reading: bool) -> Vec<Self> {
         let colors = channels
             .iter()
@@ -342,9 +342,9 @@ impl Transposed<'_> {
                             None => raw,
                         });
                     }
-                    // Scale before the division, so the rounding is to a step
-                    // of the output and not of the unit. Rounding to nearest
-                    // keeps the average off a bias toward zero
+                    // Scale before the division. Then the rounding is to a step
+                    // of the output, not to a step of the unit. Rounding to the
+                    // nearest step prevents a bias toward zero
                     let n = slot.readings as u64;
                     let value = ((2 * u64::from(sum) * self.out + n * self.top)
                         / (2 * n * self.top))
@@ -982,8 +982,9 @@ mod transposed {
         }
     }
 
-    /// The LS-50 reads infrared again with the colors, so a feed position is
-    /// R, G, B, IR for each reading and infrared averages like a color
+    /// The LS-50 reads infrared again with the colors. Each reading of a feed
+    /// position is R, G, B, IR, and the decoder averages infrared as it
+    /// averages a color
     #[test]
     fn a_single_line_averages_infrared_read_every_time() {
         let (rows, stages, readings) = (2usize, 2usize, 4u8);
@@ -997,7 +998,7 @@ mod transposed {
         d.push(&stream(stages, 16, rows, 1), &mut samples).unwrap();
         assert!(d.complete());
 
-        // Channel `slot` of each reading sits 4 readouts after the last
+        // Channel `slot` of each reading is 4 readouts after the same channel of the reading before
         let average = |stage: usize, slot: usize, pixel: usize| {
             let sum: u32 = (0..4)
                 .map(|r| u32::from(tag(stage, slot + 4 * r, pixel, 0)))
@@ -1059,12 +1060,12 @@ mod transposed {
         }
         // 14-bit: 5000.5 steps is 20002.5 at 16 bits. One step is 4
         assert_eq!(average(14, &[5000, 5001]).0, 20003);
-        // 16-bit has no room for the half step, so it rounds up as before
+        // A 16-bit output cannot hold the half step, so the average rounds up
         assert_eq!(average(16, &[40000, 40001]).0, 40001);
     }
 
-    /// One reading stays at the unit's own depth, so metering and framing see
-    /// the samples they always have
+    /// A pass of one reading is at the unit's own depth. Metering and framing
+    /// use passes of one reading
     #[test]
     fn one_reading_is_not_scaled() {
         for (bits, v) in [(8u8, 200u16), (14, 16383), (16, 65535)] {
@@ -1086,7 +1087,7 @@ mod transposed {
     }
 
     /// Infrared that the unit reads one time is in the same pass as averaged
-    /// colors, so it is at the same 16-bit scale as they are
+    /// colors, so it has the same 16-bit scale as the colors
     #[test]
     fn once_read_infrared_is_at_the_colors_scale() {
         let l = Layout {

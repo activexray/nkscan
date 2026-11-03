@@ -50,8 +50,9 @@ pub struct Layout {
     pub interleaving: ColorInterleaving,
     /// Times each line is read. More than 1 means the host owes an average
     pub readings_per_line: u8,
-    /// Whether infrared repeats with the colors on every reading rather than
-    /// coming once with the first. See [`Quirks::INFRARED_EVERY_READING`]
+    /// True if the unit reads infrared again with the colors on every reading.
+    /// Otherwise it reads infrared one time, with the first reading. See
+    /// [`Quirks::INFRARED_EVERY_READING`]
     pub infrared_per_reading: bool,
     /// Lines on the CCD, which is how many arrive at once under
     /// [`MULTILINE_SIMULTANEOUS`](ColorInterleaving::MULTILINE_SIMULTANEOUS)
@@ -495,9 +496,8 @@ impl Layout {
 
     /// Readouts the unit emits per line
     ///
-    /// Multi-sampling repeats the color channels only, unless infrared repeats
-    /// with them. Otherwise infrared is read once however many repeats are
-    /// set, so channels times readings overstates it
+    /// Multi-sampling repeats the color channels. Infrared is read one time,
+    /// however many readings are set, unless `infrared_per_reading` is true
     pub fn readouts(&self) -> u32 {
         if self.infrared_per_reading {
             return self.channels.len() as u32 * self.readings();

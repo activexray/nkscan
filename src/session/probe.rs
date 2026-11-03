@@ -252,7 +252,7 @@ pub(crate) mod tests {
         let caps = crate::session::block_on(capabilities(&mut Replay(ls50.clone()))).expect("caps");
         assert!(caps.set_window.mode.contains(ScanMode::MULTI_READING));
 
-        // The same pages under another name are taken as they read
+        // Under another model name, the probe uses the pages without a change
         let product = ls50.get_mut("std").expect("standard INQUIRY");
         product[16..24].copy_from_slice(b"LS-40 ED");
         let caps = crate::session::block_on(capabilities(&mut Replay(ls50))).expect("caps");

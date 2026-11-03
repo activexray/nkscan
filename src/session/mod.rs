@@ -59,9 +59,9 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// It asks for one job at a time and walks a list of them: a 666 dpi multi-line
 /// pass with three readings and infrared asked five times, one each for
 /// averaging, registration and the CCD data, with two the sense calls 5. The cap
-/// is only there to bound a unit that will not move on: one asking for the same
-/// thing twice in a row is refused at once, and one going round a cycle of jobs
-/// stops here
+/// stops a unit that does not start. A unit that asks for the same job two
+/// times in sequence is refused at once. A unit that asks for jobs in a cycle
+/// stops at the cap
 const MAX_COOPERATION: usize = 16;
 
 /// Long enough for a full-length stage move
@@ -529,7 +529,7 @@ impl Session {
         Err(Error::Unsupported {
             op: "host cooperation",
             reason: format!(
-                "the unit asked for {} things and was still going: {cooperations:?}",
+                "the unit asked for {} jobs and did not start: {cooperations:?}",
                 cooperations.len()
             ),
         })
@@ -749,8 +749,8 @@ mod tests {
         block_on(session.run_handshake(&SCAN, Data::None, Duration::from_secs(5)))
     }
 
-    /// The LS-50 before a multi-reading pass: its truncation job clears the
-    /// averaging flag, so averaging is asked for again after it
+    /// Before a multi-reading pass, the LS-50 asks for Averaging, Truncate, then
+    /// Averaging again. Its truncation job clears the averaging flag
     #[test]
     fn a_job_can_come_back_after_another() {
         let mut jobs = [0x02, 0x06, 0x02].into_iter();
@@ -777,7 +777,7 @@ mod tests {
         assert_eq!(scans.load(Ordering::Relaxed), 2);
     }
 
-    /// Two jobs taking turns forever end at the cap
+    /// Two jobs that alternate with no end stop at the cap
     #[test]
     fn a_cycle_of_jobs_stops_at_the_cap() {
         let mut jobs = [0x02, 0x06].into_iter().cycle();

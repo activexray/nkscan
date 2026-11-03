@@ -17,7 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The decoder scales an average of more than one reading to 16 bits before it rounds the average. Thus the average keeps the precision that the readings add. A pass of one reading keeps the depth of the unit. On a 16-bit unit, the average does not change.
 - A unit can ask for a cooperation job again after a different job. nkscan refuses a unit that asks for the same job two times in sequence.
-- nkscan builds with Rust 1.99. PyO3 and numpy are 0.30, pollster is 1.0, and gloo-timers is 0.4. The Python API does not change.
 - **Breaking:** `Layout` has a public `infrared_per_reading` field. A multi-reading pass from `Session::scan_pass` gives 16-bit samples. Its `Image::bits` is 16.
 
 ## [0.17.0]

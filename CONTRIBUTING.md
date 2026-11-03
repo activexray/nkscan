@@ -23,6 +23,7 @@ A few simple expectations:
 - **Test your change** before opening the PR.
 - **Keep it focused.** A PR that claims to fix one thing but touches a lot of unrelated code is hard to review (broad prompts tend to cause this).
 - **Disclose AI assistance** in the PR description, along with roughly how much was used (e.g. docs only vs. code generation). Trivial tab-completion of single keywords or short phrases doesn't need to be disclosed.
+- **Do not credit an AI tool as an author or co-author of a commit.** Remove trailers such as `Co-Authored-By: Claude`. You are the author, and you are responsible for the code. The tool is not. Put the disclosure in the PR description instead.
 
 Example disclosures:
 

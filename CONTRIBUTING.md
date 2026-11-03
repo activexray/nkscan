@@ -11,6 +11,35 @@ cargo clippy --all-targets
 cargo test
 ```
 
+## Style
+
+### Prose
+
+Comments, doc comments, error messages, log lines and the changelog use Simplified Technical English ([ASD-STE100](https://www.asd-ste100.org/)) and American spelling.
+
+- Write one idea in each sentence. Use the active voice and the simple present tense.
+- Use a verb only in its plain meaning. Do not use a metaphor in place of a verb, such as "land", "sit", "carry", "walk" or "hold". Say what happens.
+- Do not use em dashes. Use a period, a colon, or a new sentence.
+- Keep the technical names from the specs, such as SET WINDOW, scanning pitch or multi-line read.
+
+### Comments
+
+- Write a comment in one line. Write a block comment only if one line cannot give the reason.
+- Say why the code does something that is not clear from the code. Do not say what the code does, and do not say how the code was before.
+- Do not put worked examples in library doc comments. Put concrete numbers in tests.
+
+### Code
+
+- Write the least code that gives the behavior. Use the standard library and idiomatic Rust.
+- Use the types that exist before you add a new type. If a type is almost correct, change it.
+- Do not branch on the scanner model. Decide from what the unit reports: its pages, its capabilities, or the data. Firmware behavior that the pages do not report goes in `Quirks` in `src/protocol/model.rs`, and nowhere else.
+- Do not add bare constants. Give each constant a name and a comment that says where its value comes from.
+- Put behavior that a Python caller needs in the library, not in the CLI.
+
+### Commits
+
+- Write the commit message in one line.
+
 ## AI Assistance
 
 Using AI tools to help you contribute is nominally ok, we just want to remind you that *you* are asking the maintainers (human people) review your code and you need to be in the loop of that process.

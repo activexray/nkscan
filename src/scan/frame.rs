@@ -103,7 +103,7 @@ pub async fn scan_frame_with(
         Ok((pass, exposures, focused, focus_position))
     })
     .await?;
-    samples.to_full_scale(pass.layout.bits_per_sample);
+    samples.to_full_scale(pass.layout.sample_bits());
 
     let cleaned = options
         .clean

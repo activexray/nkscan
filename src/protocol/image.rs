@@ -410,6 +410,18 @@ impl Layout {
         u32::from(self.readings_per_line).max(1)
     }
 
+    /// Valid bits in a decoded sample
+    ///
+    /// The decoder scales an average of more than one reading to 16 bits
+    /// before it rounds the average. This keeps the precision that the average
+    /// adds
+    pub fn sample_bits(&self) -> u8 {
+        match self.readings() {
+            1 => self.bits_per_sample,
+            _ => 16,
+        }
+    }
+
     /// Bytes the unit sends for one reading of a line
     ///
     /// 2-7 raises TRUNCATED BY DRIVER when the data of one line is not a

@@ -69,12 +69,20 @@ impl Samples {
     }
 }
 
+/// The largest sample `bits` can hold. 0 means 16
+pub(crate) fn ceiling(bits: u8) -> u16 {
+    match bits {
+        0 | 16.. => u16::MAX,
+        b => (1u16 << b) - 1,
+    }
+}
+
 /// A table stretching `bits`-deep samples to fill 16, or `None` where they already do
 fn full_scale_table(bits: u8) -> Option<Vec<u16>> {
     if bits == 0 || bits >= 16 {
         return None;
     }
-    let top = u32::from(u16::MAX >> (16 - bits));
+    let top = u32::from(ceiling(bits));
     Some(
         (0..=u32::from(u16::MAX))
             .map(|v| ((v.min(top) * 65535 + top / 2) / top) as u16)
@@ -159,7 +167,7 @@ impl<'a> Image<'a> {
             rows,
             cols: cols.min(stride),
             stride,
-            bits: layout.bits_per_sample,
+            bits: layout.sample_bits(),
         })
     }
 }
@@ -192,6 +200,10 @@ struct Transposed<'a> {
     /// Samples in one stage position
     stage: usize,
     bytes_per_sample: usize,
+    /// The largest sample the unit sends
+    top: u64,
+    /// The largest sample the decoder writes. See [`Layout::sample_bits`]
+    out: u64,
     /// The rows' remap onto each other, where the unit gave us one
     curves: Option<&'a Curves>,
 }
@@ -318,8 +330,7 @@ impl Transposed<'_> {
 
                 for slot in &self.slots {
                     // Integers throughout. A nibble caps the readings at 16, so
-                    // the sum cannot leave a u32, and rounding to nearest keeps
-                    // the average off a systematic bias toward zero
+                    // the sum cannot leave a u32
                     let mut sum = 0u32;
                     for r in 0..slot.readings {
                         let off = (sample + slot.nth(r) * self.readout) * self.bytes_per_sample;
@@ -331,8 +342,13 @@ impl Transposed<'_> {
                             None => raw,
                         });
                     }
-                    let n = slot.readings as u32;
-                    let value = ((sum + n / 2) / n) as u16;
+                    // Scale before the division, so the rounding is to a step
+                    // of the output and not of the unit. Rounding to nearest
+                    // keeps the average off a bias toward zero
+                    let n = slot.readings as u64;
+                    let value = ((2 * u64::from(sum) * self.out + n * self.top)
+                        / (2 * n * self.top))
+                        .min(u64::from(u16::MAX)) as u16;
                     match slot.color {
                         true => colors_out[slot.out][pixel] = value,
                         false => ir_out[pixel] = value,
@@ -448,6 +464,8 @@ impl<'a> Decoder<'a> {
             readout,
             stage: layout.readouts() as usize * readout,
             bytes_per_sample,
+            top: u64::from(ceiling(layout.bits_per_sample)),
+            out: u64::from(ceiling(layout.sample_bits())),
             curves: None,
         };
 
@@ -1006,6 +1024,85 @@ mod transposed {
                 }
             }
         }
+    }
+
+    /// One pixel of one color, read once for each of `reads`, on a unit of
+    /// `bits` valid bits. Returns the decoded sample and its depth
+    fn average(bits: u8, reads: &[u16]) -> (u16, u8) {
+        let bytes = bits.div_ceil(8);
+        let l = Layout {
+            bytes_per_sample: bytes,
+            bits_per_sample: bits,
+            ..single(1, 1, vec![1], reads.len() as u8)
+        };
+        let wire: Vec<u8> = reads
+            .iter()
+            .flat_map(|r| r.to_be_bytes()[2 - usize::from(bytes)..].to_vec())
+            .collect();
+        let (mut d, mut samples) = buffers(&l);
+        d.push(&wire, &mut samples).unwrap();
+        assert!(d.complete());
+        (samples.colors[0][0], l.sample_bits())
+    }
+
+    /// The average of two readings one step apart is half a step of the unit.
+    /// A 16-bit output can hold it, so it comes out at full scale and is not
+    /// rounded to a step of the unit
+    #[test]
+    fn an_average_keeps_the_precision_it_adds() {
+        for (bits, low) in [(8u8, 100u16), (14, 5000), (16, 40000)] {
+            let top = f64::from(ceiling(bits));
+            let (value, depth) = average(bits, &[low, low + 1]);
+            assert_eq!(depth, 16, "{bits}-bit");
+            let want = ((f64::from(low) + 0.5) * 65535.0 / top).round() as u16;
+            assert_eq!(value, want, "{bits}-bit");
+        }
+        // 14-bit: 5000.5 steps is 20002.5 at 16 bits. One step is 4
+        assert_eq!(average(14, &[5000, 5001]).0, 20003);
+        // 16-bit has no room for the half step, so it rounds up as before
+        assert_eq!(average(16, &[40000, 40001]).0, 40001);
+    }
+
+    /// One reading stays at the unit's own depth, so metering and framing see
+    /// the samples they always have
+    #[test]
+    fn one_reading_is_not_scaled() {
+        for (bits, v) in [(8u8, 200u16), (14, 16383), (16, 65535)] {
+            assert_eq!(average(bits, &[v]), (v, bits), "{bits}-bit");
+        }
+    }
+
+    /// Sixteen readings at the top of a 14-bit unit fill 16 bits and do not
+    /// overflow, and the error is less than one output step anywhere
+    #[test]
+    fn sixteen_readings_fill_the_output() {
+        assert_eq!(average(14, &[16383; 16]).0, u16::MAX);
+        assert_eq!(average(8, &[255; 16]).0, u16::MAX);
+        assert_eq!(average(14, &[0; 16]).0, 0);
+        let reads: Vec<u16> = (0..16).map(|r| 8000 + r % 3).collect();
+        let mean = reads.iter().map(|&r| f64::from(r)).sum::<f64>() / 16.0;
+        let want = mean * 65535.0 / 16383.0;
+        assert!((f64::from(average(14, &reads).0) - want).abs() <= 0.5);
+    }
+
+    /// Infrared that the unit reads one time is in the same pass as averaged
+    /// colors, so it is at the same 16-bit scale as they are
+    #[test]
+    fn once_read_infrared_is_at_the_colors_scale() {
+        let l = Layout {
+            bits_per_sample: 14,
+            ..single(1, 1, vec![9, 1], 2)
+        };
+        // R, IR, then the second R
+        let wire: Vec<u8> = [8000u16, 16383, 8001]
+            .iter()
+            .flat_map(|v| v.to_be_bytes())
+            .collect();
+        let (mut d, mut samples) = buffers(&l);
+        d.push(&wire, &mut samples).unwrap();
+        assert_eq!(samples.ir.as_ref().unwrap()[0], u16::MAX);
+        // 8000.5 steps of 16383 is 32003.47 of 65535
+        assert_eq!(samples.colors[0][0], 32003);
     }
 
     /// A single-line pass of a channel multi-sampling does not repeat is one

@@ -179,7 +179,7 @@ pub fn write_thumbnail(
     let color = color_planes(pass);
 
     let mut samples = samples.clone();
-    samples.to_full_scale(pass.layout.bits_per_sample);
+    samples.to_full_scale(pass.layout.sample_bits());
     let planes: Vec<&[u16]> = samples.colors.iter().map(Vec::as_slice).collect();
 
     let path = thumbnail_path(basename, n);

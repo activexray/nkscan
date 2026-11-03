@@ -357,13 +357,7 @@ fn high(image: &Image, plane: &[u16], crop: Crop, percentile: f32) -> u16 {
         .unwrap_or(0) as u16
 }
 
-/// Full scale for a sample of `bits` valid bits
-pub(crate) fn ceiling(bits: u8) -> u16 {
-    match bits {
-        0 | 16.. => u16::MAX,
-        b => (1u16 << b) - 1,
-    }
-}
+pub(crate) use crate::protocol::decode::ceiling;
 
 #[cfg(test)]
 mod tests {

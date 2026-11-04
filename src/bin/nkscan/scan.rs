@@ -14,7 +14,7 @@ use nkscan::{
     scan::{
         autoexpose::Exposures,
         focus::Focus,
-        frame::{self, Phase},
+        frame::{self, InfraredPass, Phase},
         framing::{self, Framing},
         meter::Metering,
         pass::Progress,
@@ -126,6 +126,7 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
         thumbnail: save_thumbnail,
         format,
         film,
+        ir_pass,
     } = args;
 
     // Silver grains stop infrared as they stop light, so the mask a
@@ -158,6 +159,14 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
         info!(
             "at {dpi} dpi all the CCD rows give one output line, so the scan reads one row at a time and takes more time"
         );
+    }
+
+    let infrared = match ir_pass {
+        true => InfraredPass::Separate,
+        false => InfraredPass::WithColors,
+    };
+    if ir_pass && !infrared.separates(&recipe) {
+        warn!("--ir-pass needs --samples above 1 and --ir or --clean, so it changes nothing");
     }
 
     debug!(
@@ -279,18 +288,13 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
                 return Err(Error::Cancelled.into());
             }
 
-            // Lazy, and at most one live at a time: metering may not run at
-            // all (a locked exposure), and indicatif has no idea what to do
-            // with two bars neither owns unless one finishes before the next starts
-            let mut meter_bar: Option<ProgressBar> = None;
-            let mut scan_bar: Option<ProgressBar> = None;
-            let mut shown = 0;
-
+            let mut bars = FrameBars::new(n + 1);
             let options = frame::Options {
                 exposures: locked.as_ref(),
                 metering,
                 clean,
                 focus: Focus::default(),
+                infrared,
             };
             let scanned = frame::scan_frame_with(
                 session,
@@ -298,53 +302,10 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
                 frame,
                 options,
                 &mut samples,
-                |phase, p| {
-                    match phase {
-                        Phase::Meter(pass) => {
-                            // A pass does not know how long it is until its
-                            // first chunk lands, so a bar made when the phase
-                            // starts draws `0 B/0 B` and sits at it. Waiting for
-                            // a length keeps that line off the screen, and names
-                            // the bar for the pass it is rather than renaming it
-                            if meter_bar.is_none() && p.total > 0 {
-                                meter_bar = Some(pass_bar(format!("meter {pass}"), p.total));
-                                shown = pass;
-                            }
-                            if let Some(bar) = &meter_bar {
-                                // Each pass starts over, so say which one it is
-                                if pass != shown {
-                                    bar.set_message(format!("meter {pass}"));
-                                    shown = pass;
-                                }
-                                bar.report(p);
-                            }
-                        }
-                        Phase::Scan => {
-                            if let Some(bar) = meter_bar.take() {
-                                crate::progress::done(bar);
-                            }
-                            if scan_bar.is_none() && p.total > 0 {
-                                scan_bar = Some(pass_bar(format!("frame {}", n + 1), p.total));
-                            }
-                            if let Some(bar) = &scan_bar {
-                                bar.report(p);
-                            }
-                        }
-                    }
-                    if cancel::requested() {
-                        ControlFlow::Break(())
-                    } else {
-                        ControlFlow::Continue(())
-                    }
-                },
+                |phase, p| bars.update(phase, p),
             )
             .await?;
-            if let Some(bar) = meter_bar {
-                crate::progress::done(bar);
-            }
-            if let Some(bar) = scan_bar {
-                crate::progress::done(bar);
-            }
+            bars.done();
 
             info!(frame = n + 1, exposures = ?scanned.exposures, "metered");
             if lock_ae {
@@ -599,6 +560,87 @@ fn pass_bar(label: impl Into<Cow<'static, str>>, total: u64) -> ProgressBar {
     );
     bar.set_message(label.into());
     crate::progress::add(bar)
+}
+
+/// The bars of one frame's passes
+///
+/// A bar is made only when its pass starts, and one bar at a time is shown,
+/// because indicatif cannot draw two bars that no parent owns
+struct FrameBars {
+    /// The frame's number, counting from one
+    frame: usize,
+    meter: Option<ProgressBar>,
+    scan: Option<ProgressBar>,
+    infrared: Option<ProgressBar>,
+    /// The metering pass the meter bar is named for
+    shown: usize,
+}
+
+impl FrameBars {
+    fn new(frame: usize) -> Self {
+        Self {
+            frame,
+            meter: None,
+            scan: None,
+            infrared: None,
+            shown: 0,
+        }
+    }
+
+    /// Move `p` onto the bar for `phase`, and answer whether to go on
+    fn update(&mut self, phase: Phase, p: Progress) -> ControlFlow<()> {
+        match phase {
+            Phase::Meter(pass) => {
+                // The length is known only after the first chunk, so the bar is made then, with the name of its pass
+                if self.meter.is_none() && p.total > 0 {
+                    self.meter = Some(pass_bar(format!("meter {pass}"), p.total));
+                    self.shown = pass;
+                }
+                if let Some(bar) = &self.meter {
+                    // Each pass starts again from zero, so the message names the pass
+                    if pass != self.shown {
+                        bar.set_message(format!("meter {pass}"));
+                        self.shown = pass;
+                    }
+                    bar.report(p);
+                }
+            }
+            Phase::Scan => {
+                if let Some(bar) = self.meter.take() {
+                    crate::progress::done(bar);
+                }
+                if self.scan.is_none() && p.total > 0 {
+                    self.scan = Some(pass_bar(format!("frame {}", self.frame), p.total));
+                }
+                if let Some(bar) = &self.scan {
+                    bar.report(p);
+                }
+            }
+            Phase::Infrared => {
+                if let Some(bar) = self.scan.take() {
+                    crate::progress::done(bar);
+                }
+                if self.infrared.is_none() && p.total > 0 {
+                    self.infrared = Some(pass_bar(format!("IR {}", self.frame), p.total));
+                }
+                if let Some(bar) = &self.infrared {
+                    bar.report(p);
+                }
+            }
+        }
+        if cancel::requested() {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    }
+
+    /// Finish the bars that were drawn
+    fn done(self) {
+        for bar in [self.meter, self.scan, self.infrared].into_iter().flatten() {
+            crate::progress::done(bar);
+        }
+    }
 }
 
 /// Moving a pass's progress onto a bar

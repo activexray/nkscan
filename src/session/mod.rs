@@ -642,7 +642,7 @@ impl Drop for Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{
         protocol::caps::other::DataTypes,
@@ -653,10 +653,10 @@ mod tests {
     const SCAN: [u8; 6] = [0x1B, 0, 0, 0, 0, 0];
 
     /// A unit that answers each command through a closure, given the CDB and
-    /// the buffer of a data-in phase
-    struct Unit<F>(F);
+    /// its data phase
+    pub(crate) struct Unit<F>(pub(crate) F);
 
-    impl<F: FnMut(&[u8], &mut [u8]) -> Completion + Send> Transport for Unit<F> {
+    impl<F: FnMut(&[u8], Data<'_>) -> Completion + Send> Transport for Unit<F> {
         fn max_transfer(&self) -> usize {
             65536
         }
@@ -667,11 +667,47 @@ mod tests {
             data: Data<'a>,
             _: Duration,
         ) -> BoxFuture<'a, Result<Completion, transport::Error>> {
-            let completion = match data {
-                Data::In(buf) => (self.0)(cdb, buf),
-                _ => (self.0)(cdb, &mut []),
-            };
-            Box::pin(std::future::ready(Ok(completion)))
+            Box::pin(std::future::ready(Ok((self.0)(cdb, data))))
+        }
+    }
+
+    /// GOOD, having moved `n` bytes
+    pub(crate) fn good(n: usize) -> Completion {
+        Completion {
+            status: Status::Good,
+            sense: None,
+            transferred: n,
+        }
+    }
+
+    /// CHECK CONDITION with this sense
+    pub(crate) fn check(key: u8, asc: u8, ascq: u8) -> Completion {
+        Completion {
+            status: Status::CheckCondition,
+            sense: Some(Sense {
+                key,
+                asc,
+                ascq,
+                tsc: None,
+                ili: false,
+                information: None,
+                raw: Vec::new(),
+            }),
+            transferred: 0,
+        }
+    }
+
+    /// A session on `unit` that knows it as `caps`, without the preamble
+    /// [`open`](Session::open) sends
+    pub(crate) fn session(unit: impl Transport + 'static, caps: Capabilities) -> Session {
+        Session {
+            divisor: caps.address.x_axis.dpi_range.last,
+            caps,
+            transport: Box::new(unit),
+            frames: None,
+            curves: None,
+            reserved: false,
+            unread: None,
         }
     }
 
@@ -685,35 +721,19 @@ mod tests {
         let counted = scans.clone();
         let mut job = 0;
         let unit = Unit(
-            move |cdb: &[u8], buf: &mut [u8]| match (cdb[0], cdb.get(2)) {
-                (0x1B, _) => {
+            move |cdb: &[u8], data: Data<'_>| match (cdb[0], cdb.get(2), data) {
+                (0x1B, ..) => {
                     counted.fetch_add(1, Ordering::Relaxed);
                     match next() {
                         Some(q) => {
                             job = q;
-                            Completion {
-                                status: Status::CheckCondition,
-                                sense: Some(Sense {
-                                    key: 0x09,
-                                    asc: 0x80,
-                                    ascq: q,
-                                    tsc: None,
-                                    ili: false,
-                                    information: None,
-                                    raw: Vec::new(),
-                                }),
-                                transferred: 0,
-                            }
+                            check(0x09, 0x80, q)
                         }
-                        None => Completion {
-                            status: Status::Good,
-                            sense: None,
-                            transferred: 0,
-                        },
+                        None => good(0),
                     }
                 }
                 // READ of the cooperation record: the 2-11-6 header, then the record
-                (0x28, Some(0x87)) => {
+                (0x28, Some(0x87), Data::In(buf)) => {
                     let mut reply = vec![0x87, 8];
                     reply.extend((CooperativeAction::LENGTH as u32).to_be_bytes());
                     let mut record = [0u8; CooperativeAction::LENGTH];
@@ -721,11 +741,7 @@ mod tests {
                     reply.extend(record);
                     let n = reply.len().min(buf.len());
                     buf[..n].copy_from_slice(&reply[..n]);
-                    Completion {
-                        status: Status::Good,
-                        sense: None,
-                        transferred: n,
-                    }
+                    good(n)
                 }
                 _ => panic!("the unit was not expecting {cdb:02X?}"),
             },
@@ -733,16 +749,7 @@ mod tests {
 
         let mut caps = crate::scan::window::tests::caps();
         caps.features.data_types |= DataTypes::COOP_PARAMS_READ;
-        let session = Session {
-            divisor: caps.address.x_axis.dpi_range.last,
-            caps,
-            transport: Box::new(unit),
-            frames: None,
-            curves: None,
-            reserved: false,
-            unread: None,
-        };
-        (session, scans)
+        (session(unit, caps), scans)
     }
 
     fn scan(session: &mut Session) -> Result<(Completion, Vec<CooperativeAction>), Error> {

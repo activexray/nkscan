@@ -351,7 +351,7 @@ class Session:
         works the same as a detected one, just slower if the stage has to home
         first to reach it
         """
-    def scan_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], dpi: typing.Optional[builtins.int] = None, samples: builtins.int = 1, superfine: builtins.bool = False, infrared: builtins.bool = False, clean: builtins.bool = False, film: typing.Optional[builtins.str] = None, format: typing.Optional[builtins.str] = None, base_density: typing.Optional[tuple[builtins.float, builtins.float, builtins.float]] = None, lock_white_balance: typing.Optional[builtins.bool] = None, exposures: typing.Optional[typing.Mapping[builtins.str, builtins.int]] = None, focus: typing.Optional[typing.Union[builtins.int, tuple[builtins.float, builtins.float], typing.Literal['auto', 'hold']]] = None, progress: typing.Optional[typing.Any] = None) -> ScanResult:
+    def scan_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], dpi: typing.Optional[builtins.int] = None, samples: builtins.int = 1, superfine: builtins.bool = False, infrared: builtins.bool = False, clean: builtins.bool = False, film: typing.Optional[builtins.str] = None, format: typing.Optional[builtins.str] = None, base_density: typing.Optional[tuple[builtins.float, builtins.float, builtins.float]] = None, lock_white_balance: typing.Optional[builtins.bool] = None, exposures: typing.Optional[typing.Mapping[builtins.str, builtins.int]] = None, focus: typing.Optional[typing.Union[builtins.int, tuple[builtins.float, builtins.float], typing.Literal['auto', 'hold']]] = None, progress: typing.Optional[typing.Any] = None, *, infrared_pass: typing.Literal['with_colors', 'separate'] = "with_colors") -> ScanResult:
         r"""
         Focus, meter, take the pass over `frame`, and optionally clean it
         
@@ -366,7 +366,14 @@ class Session:
         
         `film` and `format` are as for `discover_frames`, and `base_density` is
         `Discovery.base_density`. `lock_white_balance` defaults to
-        `Capabilities.locks_white_balance(film)`
+        `Capabilities.locks_white_balance(film)`.
+        
+        `infrared_pass="separate"` scans infrared in a separate pass after the
+        colors, at one reading and with the same exposures. The film and the lens
+        do not move. It applies only with `samples` above 1 and `infrared` or
+        `clean`. It is much faster on an LS-50, which otherwise reads infrared
+        again on every reading. The progress callback gets this pass as the
+        "infrared" phase
         """
     def meter_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], infrared: builtins.bool = False, film: typing.Optional[builtins.str] = None, format: typing.Optional[builtins.str] = None, base_density: typing.Optional[tuple[builtins.float, builtins.float, builtins.float]] = None, lock_white_balance: typing.Optional[builtins.bool] = None, progress: typing.Optional[typing.Any] = None) -> builtins.dict[builtins.str, builtins.int]:
         r"""

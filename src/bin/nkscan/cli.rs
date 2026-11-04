@@ -119,6 +119,13 @@ pub struct Scan {
     /// Film type, which picks the color profile the scans are tagged with
     #[arg(long, value_enum, default_value_t = Film::Negative)]
     pub film: Film,
+
+    /// Take infrared in a pass of its own, at one reading, after the colors at
+    /// --samples readings. Only with --samples above 1 and --ir or --clean.
+    /// Much faster on an LS-50, which otherwise reads infrared again on every
+    /// reading
+    #[arg(long)]
+    pub ir_pass: bool,
 }
 
 /// A log level flag, by name

@@ -21,7 +21,7 @@ use crate::{
     scan::{
         autoexpose::Exposures,
         focus::{Focus, Focused},
-        frame::{self, Phase},
+        frame::{self, InfraredPass, Phase},
         framing::{self, Framing},
         meter::Metering,
         pass::Progress,
@@ -303,6 +303,17 @@ fn metering_from(
         metering.lock_white_balance = lock;
     }
     Ok(metering)
+}
+
+/// Parse the `infrared_pass` argument of `scan_frame`
+fn infrared_pass_from(name: &str) -> PyResult<InfraredPass> {
+    match name {
+        "with_colors" => Ok(InfraredPass::WithColors),
+        "separate" => Ok(InfraredPass::Separate),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "infrared_pass is 'with_colors' or 'separate', not '{other}'"
+        ))),
+    }
 }
 
 // ----- focus -----
@@ -712,7 +723,14 @@ impl PySession {
     ///
     /// `film` and `format` are as for `discover_frames`, and `base_density` is
     /// `Discovery.base_density`. `lock_white_balance` defaults to
-    /// `Capabilities.locks_white_balance(film)`
+    /// `Capabilities.locks_white_balance(film)`.
+    ///
+    /// `infrared_pass="separate"` scans infrared in a separate pass after the
+    /// colors, at one reading and with the same exposures. The film and the lens
+    /// do not move. It applies only with `samples` above 1 and `infrared` or
+    /// `clean`. It is much faster on an LS-50, which otherwise reads infrared
+    /// again on every reading. The progress callback gets this pass as the
+    /// "infrared" phase
     #[pyo3(signature = (
         frame,
         dpi=None,
@@ -727,6 +745,8 @@ impl PySession {
         exposures=None,
         focus=None,
         progress=None,
+        *,
+        infrared_pass="with_colors",
     ))]
     #[allow(clippy::too_many_arguments)]
     fn scan_frame(
@@ -746,8 +766,11 @@ impl PySession {
         #[gen_stub(override_type(type_repr = "typing.Optional[typing.Union[builtins.int, tuple[builtins.float, builtins.float], typing.Literal['auto', 'hold']]]", imports = ("builtins", "typing")))]
         focus: Option<Bound<'_, PyAny>>,
         progress: Option<Py<PyAny>>,
+        #[gen_stub(override_type(type_repr = "typing.Literal['with_colors', 'separate']", imports = ("typing")))]
+        infrared_pass: &str,
     ) -> PyResult<PyScanResult> {
         let focus = focus_from(focus.as_ref())?;
+        let infrared_pass = infrared_pass_from(infrared_pass)?;
         let frame = rect(frame);
         let metering = metering_from(film, format, base_density, lock_white_balance)?;
         let locked = exposures.map(|by_name| {
@@ -775,6 +798,7 @@ impl PySession {
                     metering,
                     clean,
                     focus,
+                    infrared: infrared_pass,
                 };
                 let scanned = block_on(frame::scan_frame_with(
                     session,
@@ -785,6 +809,7 @@ impl PySession {
                     |phase, p| match phase {
                         Phase::Meter(pass) => report(&progress, "meter", pass, p),
                         Phase::Scan => report(&progress, "scan", 0, p),
+                        Phase::Infrared => report(&progress, "infrared", 0, p),
                     },
                 ))?;
 

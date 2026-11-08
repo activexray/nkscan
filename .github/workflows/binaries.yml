@@ -33,16 +33,16 @@ jobs:
                       target: x86_64-pc-windows-msvc
                       rustflags: -C target-feature=+crt-static
                       ext: .exe
-                    - runner: macos-14
+                    - runner: macos-15
                       target: aarch64-apple-darwin
                     # Cross-compiled from the arm64 runner above: no free Intel runner exists
-                    - runner: macos-14
+                    - runner: macos-15
                       target: x86_64-apple-darwin
         steps:
             - name: Checkout repository
               uses: actions/checkout@v4
 
-            # rust-toolchain.toml names the channel and the targets, and rustup honours both
+            # rust-toolchain.toml names the channel and the targets, and rustup honors both
             # when cargo first runs, so there is no version here to drift from that file
             - name: Install the toolchain rust-toolchain.toml names
               run: cargo --version

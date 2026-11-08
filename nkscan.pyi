@@ -220,6 +220,11 @@ class Discovery:
         The film base density off the thumbnail, for `scan_frame`. `None` without a
         thumbnail, and on a unit with holders, where `scan_frame` uses the default
         """
+    @property
+    def cache(self) -> bytes:
+        r"""
+        This discovery as bytes, for `Session.resume_frames` in a later session
+        """
 
 class MediaError(ScannerError):
     r"""
@@ -307,6 +312,13 @@ class Session:
         r"""
         What the scanner says it can do
         """
+    @property
+    def medium_changes(self) -> builtins.int:
+        r"""
+        The number of times the unit reported that the medium may have changed (`28h-00h`)
+        
+        The unit reports a change one time, to the next command. Thus a session that opens after a change counts it at open
+        """
     def __new__(cls, location: builtins.str) -> Session:
         r"""
         Start a session against whatever `list_devices` reports at this `location`
@@ -348,6 +360,14 @@ class Session:
         rectangle handed to `scan_frame` needs no match in it, so a nudged one
         works the same as a detected one, just slower if the stage has to home
         first to reach it
+        """
+    def resume_frames(self, cache: bytes, format: typing.Optional[builtins.str] = None, film: typing.Optional[builtins.str] = None) -> typing.Optional[Discovery]:
+        r"""
+        Use a `Discovery.cache` from an earlier session, if the film did not change since
+        
+        Returns `None` if the cache is for a different unit, adapter, film or format,
+        or if the medium changed. Then call `discover_frames`. `format` and `film`
+        are the arguments that `discover_frames` got
         """
     def scan_frame(self, frame: tuple[builtins.int, builtins.int, builtins.int, builtins.int], dpi: typing.Optional[builtins.int] = None, samples: builtins.int = 1, superfine: builtins.bool = False, infrared: builtins.bool = False, clean: builtins.bool = False, film: typing.Optional[builtins.str] = None, format: typing.Optional[builtins.str] = None, base_density: typing.Optional[tuple[builtins.float, builtins.float, builtins.float]] = None, lock_white_balance: typing.Optional[builtins.bool] = None, exposures: typing.Optional[typing.Mapping[builtins.str, builtins.int]] = None, focus: typing.Optional[typing.Union[builtins.int, tuple[builtins.float, builtins.float], typing.Literal['auto', 'hold']]] = None, progress: typing.Optional[typing.Any] = None) -> ScanResult:
         r"""

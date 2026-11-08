@@ -119,6 +119,10 @@ pub struct Scan {
     /// Film type, which picks the color profile the scans are tagged with
     #[arg(long, value_enum, default_value_t = Film::Negative)]
     pub film: Film,
+
+    /// Find the frames again, even if the film did not change since the last run
+    #[arg(long)]
+    pub rediscover: bool,
 }
 
 /// A log level flag, by name

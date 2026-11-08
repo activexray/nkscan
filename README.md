@@ -121,6 +121,9 @@ Options:
           
           [default: negative]
 
+      --rediscover
+          Find the frames again, even if the film did not change since the last run
+
   -h, --help
           Print help (see a summary with '-h')
 ```

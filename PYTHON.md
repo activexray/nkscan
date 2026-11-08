@@ -177,6 +177,21 @@ Nikon Scan shows in that column. On these units, Nikon Scan lets a frame move
 `discovery.addresses_per_column` is the spacing of evenly spaced columns, and
 `None` on a unit that counts perforations.
 
+## Using the frames again
+
+A new discovery measures the frames again, and the frames can move by some pixels between two discoveries.
+To scan the same film in a later session at the same position, keep `discovery.cache` and give it to `resume_frames`.
+It returns `None` if the unit, adapter, film or format is different, or if the medium changed. Then discover again:
+
+```python
+discovery = session.resume_frames(cache, film=film) or session.discover_frames(film=film)
+cache = discovery.cache  # bytes, to keep until eject
+```
+
+`session.medium_changes` is the number of times the unit reported that the medium may have changed (`28h-00h`).
+The unit reports this when film goes in or out, also when it ejects a strip by itself after a time with no activity.
+The count is for this session only.
+
 ## Progress and cancellation
 
 Both `discover_frames` and `scan_frame` take a `progress` callback.

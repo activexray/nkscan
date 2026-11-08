@@ -4,7 +4,7 @@
 //! take the pass. What that costs is a stage move each way, so it is done once
 //! per frame rather than once per channel.
 
-use crate::{cancel, cli, io};
+use crate::{cache, cancel, cli, io};
 use anyhow::{anyhow, bail};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use nkscan::{
@@ -102,6 +102,7 @@ async fn give_the_film_back(session: &mut Session) {
         Ok(true) => {}
         Err(e) => debug!(%e, "could not tell whether anything is loaded, trying the eject anyway"),
     }
+    cache::forget(session.capabilities());
     match session.eject().await {
         Ok(true) => info!("ejected"),
         Ok(false) => debug!("this unit cannot give the medium back"),
@@ -126,6 +127,7 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
         thumbnail: save_thumbnail,
         format,
         film,
+        rediscover,
     } = args;
 
     // Silver grains stop infrared as they stop light, so the mask a
@@ -219,24 +221,41 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
         // running. Made on the first report with a length for the same reason
         // the metering bars are
         let takes_pass = framing.takes_thumbnail(session.capabilities());
-        let mut bar: Option<ProgressBar> = None;
-        let discovery = framing::discover_with(session, format, film, &mut samples, |p| {
-            if takes_pass && bar.is_none() && p.total > 0 {
-                bar = Some(pass_bar("thumbnail", p.total));
+        let resumed = match cache::load(session.capabilities()).filter(|_| !rediscover) {
+            Some(bytes) => {
+                nkscan::scan::cache::resume(session, &bytes, film, format, &mut samples).await?
             }
-            if let Some(bar) = &bar {
-                bar.report(p);
+            None => None,
+        };
+        let discovery = match resumed {
+            Some(discovery) => {
+                info!("using the frames from the last run, as the film did not change");
+                discovery
             }
-            if cancel::requested() {
-                ControlFlow::Break(())
-            } else {
-                ControlFlow::Continue(())
+            None => {
+                let mut bar: Option<ProgressBar> = None;
+                let discovery = framing::discover_with(session, format, film, &mut samples, |p| {
+                    if takes_pass && bar.is_none() && p.total > 0 {
+                        bar = Some(pass_bar("thumbnail", p.total));
+                    }
+                    if let Some(bar) = &bar {
+                        bar.report(p);
+                    }
+                    if cancel::requested() {
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
+                    }
+                })
+                .await?;
+                if let Some(bar) = bar {
+                    crate::progress::done(bar);
+                }
+                let caps = session.capabilities();
+                cache::save(caps, &discovery.to_bytes(caps, film, format, &samples)?);
+                discovery
             }
-        })
-        .await?;
-        if let Some(bar) = bar {
-            crate::progress::done(bar);
-        }
+        };
 
         if save_thumbnail && let Some(pass) = &discovery.thumbnail {
             let path = io::write_thumbnail(&basename, first, &samples, pass)?;
@@ -397,6 +416,7 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
         // the refresh after it shows the empty gate
         let self_feeding = framing::self_feeding(session.capabilities());
         let cartridge = framing::cartridge(session.capabilities());
+        cache::forget(session.capabilities());
         let ejected = session.eject().await?;
         if ejected {
             info!("ejected");

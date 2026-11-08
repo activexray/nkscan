@@ -26,6 +26,7 @@ pub async fn run(args: Eject) -> Result<()> {
 
     println!("Connected to scanner");
 
+    crate::cache::forget(session.capabilities());
     match session.eject().await {
         Ok(true) => {
             println!("Ejected");

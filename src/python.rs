@@ -19,6 +19,7 @@ use crate::{
         window::Channel,
     },
     scan::{
+        self,
         autoexpose::Exposures,
         focus::{Focus, Focused},
         frame::{self, Phase},
@@ -35,6 +36,7 @@ use numpy::{IntoPyArray, PyArray2, PyArrayMethods};
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     prelude::*,
+    types::PyBytes,
 };
 use pyo3_stub_gen::{create_exception, define_stub_info_gatherer, derive::*};
 use std::{
@@ -514,6 +516,38 @@ pub struct PyDiscovery {
     /// The film base density off the thumbnail, for `scan_frame`. `None` without a
     /// thumbnail, and on a unit with holders, where `scan_frame` uses the default
     base_density: Option<(f64, f64, f64)>,
+    /// This discovery as bytes, for `Session.resume_frames` in a later session
+    cache: Py<PyBytes>,
+}
+
+impl PyDiscovery {
+    fn new(
+        py: Python<'_>,
+        discovery: framing::Discovery,
+        samples: Samples,
+        cache: Vec<u8>,
+    ) -> Self {
+        let thumbnail = discovery.thumbnail.as_ref().map(|pass| {
+            let ids: Vec<u8> = pass.layout.colors().collect();
+            colors_to_numpy(py, &ids, samples.colors, pass.rows, pass.cols)
+        });
+        Self {
+            frames: discovery
+                .frames
+                .iter()
+                .map(|r| (r.top, r.left, r.bottom, r.right))
+                .collect(),
+            thumbnail,
+            addresses_per_column: discovery.line_pitch.map(|p| p.addresses_per_column()),
+            column_addresses: discovery.column_addresses,
+            row_addresses: discovery.row_addresses,
+            contrast: discovery.contrast,
+            thumbnail_complete: discovery.thumbnail.as_ref().map(|p| p.complete),
+            thumbnail_blocks: discovery.thumbnail.as_ref().map(|p| p.blocks),
+            base_density: discovery.base_density.map(|[r, g, b]| (r, g, b)),
+            cache: PyBytes::new(py, &cache).unbind(),
+        }
+    }
 }
 
 // ----- a session -----
@@ -612,19 +646,7 @@ impl PySession {
         let format = format_from_name(format)?;
         let film = film.map(film_from_name).transpose()?.unwrap_or_default();
 
-        let (
-            frames,
-            thumbnail,
-            ids,
-            samples,
-            shape,
-            pitch,
-            columns,
-            row_addresses,
-            contrast,
-            arrived,
-            base_density,
-        ) = py.detach(move || {
+        let (discovery, samples, cache) = py.detach(move || {
             self.with(|session| {
                 let mut samples = Samples::default();
                 let discovery = block_on(framing::discover_with(
@@ -634,67 +656,52 @@ impl PySession {
                     &mut samples,
                     |p| report(&progress, "discover", 0, p),
                 ))?;
-                let frames: Vec<_> = discovery
-                    .frames
-                    .into_iter()
-                    .map(|r| (r.top, r.left, r.bottom, r.right))
-                    .collect();
-                let pitch = discovery.line_pitch.map(|p| p.addresses_per_column());
-                let columns = discovery.column_addresses;
-                let row_addresses = discovery.row_addresses;
-                let contrast = discovery.contrast;
-                let base_density = discovery.base_density.map(|[r, g, b]| (r, g, b));
-                match discovery.thumbnail {
-                    Some(pass) => {
-                        let ids: Vec<u8> = pass.layout.colors().collect();
-                        let shape = (pass.rows, pass.cols);
-                        let arrived = Some((pass.complete, pass.blocks));
-                        Ok((
-                            frames,
-                            true,
-                            ids,
-                            samples.colors,
-                            shape,
-                            pitch,
-                            columns,
-                            row_addresses,
-                            contrast,
-                            arrived,
-                            base_density,
-                        ))
-                    }
-                    None => Ok((
-                        frames,
-                        false,
-                        Vec::new(),
-                        Vec::new(),
-                        (0, 0),
-                        pitch,
-                        columns,
-                        row_addresses,
-                        contrast,
-                        None,
-                        base_density,
-                    )),
-                }
+                let cache = discovery.to_bytes(session.capabilities(), film, format, &samples)?;
+                Ok((discovery, samples, cache))
             })
         })?;
+        Ok(PyDiscovery::new(py, discovery, samples, cache))
+    }
 
-        let thumbnail = thumbnail.then(|| {
-            let (rows, cols) = shape;
-            Python::attach(|py| colors_to_numpy(py, &ids, samples, rows, cols))
-        });
-        Ok(PyDiscovery {
-            frames,
-            thumbnail,
-            addresses_per_column: pitch,
-            column_addresses: columns,
-            row_addresses,
-            contrast,
-            thumbnail_complete: arrived.map(|(complete, _)| complete),
-            thumbnail_blocks: arrived.map(|(_, blocks)| blocks),
-            base_density,
-        })
+    /// Use a `Discovery.cache` from an earlier session, if the film did not change since
+    ///
+    /// Returns `None` if the cache is for a different unit, adapter, film or format,
+    /// or if the medium changed. Then call `discover_frames`. `format` and `film`
+    /// are the arguments that `discover_frames` got
+    #[pyo3(signature = (cache, format=None, film=None))]
+    fn resume_frames(
+        &self,
+        py: Python<'_>,
+        cache: &Bound<'_, PyBytes>,
+        format: Option<&str>,
+        film: Option<&str>,
+    ) -> PyResult<Option<PyDiscovery>> {
+        let format = format_from_name(format)?;
+        let film = film.map(film_from_name).transpose()?.unwrap_or_default();
+        let cache = cache.as_bytes().to_vec();
+        let resumed = py.detach(move || {
+            self.with(|session| {
+                let mut samples = Samples::default();
+                let resumed = block_on(scan::cache::resume(
+                    session,
+                    &cache,
+                    film,
+                    format,
+                    &mut samples,
+                ))?;
+                Ok(resumed.map(|discovery| (discovery, samples, cache)))
+            })
+        })?;
+        Ok(resumed
+            .map(|(discovery, samples, cache)| PyDiscovery::new(py, discovery, samples, cache)))
+    }
+
+    /// The number of times the unit reported that the medium may have changed (`28h-00h`)
+    ///
+    /// The unit reports a change one time, to the next command. Thus a session that opens after a change counts it at open
+    #[getter]
+    fn medium_changes(&self) -> PyResult<u32> {
+        self.with(|s| Ok(s.medium_changes()))
     }
 
     /// Focus, meter, take the pass over `frame`, and optionally clean it

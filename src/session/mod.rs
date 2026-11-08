@@ -45,6 +45,8 @@ pub struct Session {
     reserved: bool,
     /// A pass that was dropped unread and is not stopped yet. Only a browser build sets this
     unread: Option<image::Unread>,
+    /// The number of `28h-00h` unit attentions this session received
+    medium_changes: u32,
 }
 
 /// What a command that asks the unit something, rather than moves anything,
@@ -113,6 +115,7 @@ impl Session {
             frames: None,
             curves: None,
             unread: None,
+            medium_changes: 0,
         };
         // INQUIRY answers while the unit is still initializing, so probing says
         // nothing about readiness. Everything below is a real command, and a
@@ -317,6 +320,8 @@ impl Session {
             debug!("this unit has no UNLOAD");
             return Ok(false);
         }
+        // The next film can be a different film
+        self.frames = None;
         match self
             .execute(Op::Unload, Operation::default(), MOVE_TIMEOUT)
             .await
@@ -377,6 +382,13 @@ impl Session {
         let closed = transport.close().await;
         released?;
         Ok(closed?)
+    }
+
+    /// The number of `28h-00h` unit attentions this session received, one for each time a holder or strip went in or out
+    ///
+    /// The unit reports a change one time, to the next command. Thus a session that opens after a change counts it at open
+    pub fn medium_changes(&self) -> u32 {
+        self.medium_changes
     }
 
     /// What the scanner says it can do
@@ -597,6 +609,11 @@ impl Session {
                 // track the adapter, so what we cached may now be stale
                 Outcome::StateChanged(change) => {
                     debug!(?change, "device state changed under us, re-issuing");
+                    // A medium change resets the unit's frame table
+                    if change == Change::MediumChanged {
+                        self.medium_changes += 1;
+                        self.frames = None;
+                    }
                     self.refresh().await?;
                     changes += 1;
                     if changes >= MAX_CHANGES {
@@ -741,6 +758,7 @@ mod tests {
             curves: None,
             reserved: false,
             unread: None,
+            medium_changes: 0,
         };
         (session, scans)
     }

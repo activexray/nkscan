@@ -39,7 +39,7 @@ pub(crate) fn line_pitch(caps: &Capabilities) -> u32 {
 
 /// The Y addresses between two thumbnail lines
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LinePitch(u32);
+pub struct LinePitch(pub(crate) u32);
 
 impl LinePitch {
     /// The pitch the pass asks for

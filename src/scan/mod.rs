@@ -7,6 +7,7 @@
 
 pub mod autoexpose;
 pub mod boundary;
+pub mod cache;
 pub mod clean;
 pub mod focus;
 pub mod frame;

@@ -254,8 +254,8 @@ fn packed_rows(caps: &Capabilities, interleaving: ColorInterleaving) -> u8 {
 ///
 /// Bit 1 makes it a line across every color, bit 2 one line. When neither bit
 /// is set, a READ ends on a whole line, because Nikon Scan's READs do so on
-/// every unit. On an LS-4000 with the SA-30, READs that end mid-line give more
-/// 8Eh records than lines. When a line is too large for one READ, the session
+/// every unit. On some units, READs that end mid-line give more 8Eh records
+/// than lines. When a line is too large for one READ, the session
 /// uses [`Layout::reading_granules`] instead
 ///
 /// A line is what the unit puts on the wire, so it counts the bytes 2-11-5-3
@@ -456,8 +456,8 @@ impl Layout {
     /// A READ can end between two readings of the same line, but not between
     /// packed rows. A channel that the unit reads one time comes with the first
     /// reading, so the first reading is longer than the others. For this
-    /// reason, a line has two lengths and not one. Nikon Scan reads an LS-9000
-    /// line that is too large for one READ in these lengths
+    /// reason, a line has two lengths and not one. Nikon Scan reads a line that
+    /// is too large for one READ in these lengths
     pub fn reading_granules(&self) -> Granules {
         let rows = usize::from(self.packed_rows);
         let reading = |r| (self.bytes_per_reading(r) as usize * rows).max(1);

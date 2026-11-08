@@ -17,7 +17,7 @@ impl Link for Pipes {
     }
 
     async fn write_out(&mut self, bytes: &[u8], timeout: Duration) -> Result<(), Error> {
-        // A queued write with these bytes is this write sent late. Do not send it twice: the LS-40 refuses a repeated READ with 05h-2Ch
+        // A queued write with these bytes is this write sent late. Do not send it twice: a unit can refuse a repeated READ with 05h-2Ch
         let ours = match self.ep_out.pending() {
             0 => {
                 self.ep_out.submit(Buffer::from(bytes));

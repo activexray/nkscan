@@ -5,8 +5,7 @@
 //! holder, since the same 6×9 holder accepts 6×6, 6×7, 6×8 and 6×9 film, so the
 //! holder ID narrows the choices but does not fix the answer.
 //!
-//! The holder ID does fix it for the FH-869GR, which has a mask that selects
-//! the format physically. For everything else the operator supplies it.
+//! A holder with a mask that selects the format fixes it. For any other holder the operator supplies it.
 
 use crate::error::Error;
 use std::{fmt, str::FromStr};
@@ -59,8 +58,7 @@ impl FilmFormat {
     /// numbers are in. A millimeter cannot express them: 6x6's 8964 dots are
     /// 56.92 mm, and 56.9 mm reaches only 8961.
     ///
-    /// 135 is an LS-50's published Y boundary, because the gate of a strip
-    /// feeder is one frame, and is longer than the 36 mm the name gives.
+    /// 135 is the Y boundary a strip adapter publishes. The gate is one frame, and it is longer than the 36 mm the name gives.
     ///
     /// The five 120 formats are Nikon Scan's (`CBrownieThumbManager::BaseFrameRect`).
     ///
@@ -98,8 +96,7 @@ impl FilmFormat {
     /// The format a holder ID implies, where the holder fixes it
     ///
     /// Returns `None` where the holder accepts more than one format, or where
-    /// the holder is unknown. The FH-869GR is the only holder that physically
-    /// selects the format via its mask
+    /// the holder is unknown. Only a holder with a mask that selects the format fixes it
     pub fn from_holder(holder_id: u8) -> Option<Self> {
         match holder_id {
             0x12 => Some(Self::F16),  // FH-816

@@ -42,8 +42,8 @@ const PHASE_WAIT: Duration = Duration::from_secs(7);
 /// How long a check after a BUSY waits
 ///
 /// The unit has the command by then and is working on it, so this is how long
-/// its answer is worth waiting for before we treat it as gone. An LS-40
-/// answers BUSY to the first check of every command and the real phase to the
+/// its answer is worth waiting for before we treat it as gone. A unit can
+/// answer BUSY to the first check of every command and the real phase to the
 /// next, tens of milliseconds later
 const RECHECK_WAIT: Duration = Duration::from_secs(1);
 
@@ -86,7 +86,7 @@ impl Budget {
 
 /// The two bulk pipes. A timeout is [`Error::Timeout`], and the link decides what happens to that transfer
 trait Link {
-    /// The bulk IN endpoint's packet size: 512 for USB 2.0, 64 for USB 1.1 (LS-40)
+    /// The bulk IN endpoint's packet size: 512 for USB 2.0, 64 for USB 1.1
     fn in_max_packet(&self) -> usize;
 
     /// Write `bytes` to the bulk OUT endpoint
@@ -229,7 +229,7 @@ impl UsbTransport {
         // Endpoint addresses from LS5K spec table 1-1-6-2-4
         let ep_out = interface.endpoint::<Bulk, Out>(0x01)?;
         let ep_in = interface.endpoint::<Bulk, In>(0x82)?;
-        // 512 for USB 2.0, 64 for USB 1.1 (LS-40)
+        // 512 for USB 2.0, 64 for USB 1.1
         let in_max_packet = ep_in.max_packet_size();
         // Protect against zero packet sizes (this would be weird)
         if in_max_packet == 0 {
@@ -273,7 +273,7 @@ impl<L: Link> Phases<L> {
     /// Being one command out of step is not something a caller can act on: the
     /// next phase byte is a stale data byte, the one after that is worse, and
     /// the way out is a power cycle. Draining until the pipe comes back empty
-    /// puts the two ends back in step, which is verified against an LS-50 that
+    /// puts the two ends back in step, which is verified against a unit that
     /// had been desynced on purpose: eight stale bytes drained and the unit
     /// answered INQUIRY again without a reset
     async fn resync(&mut self) {
@@ -410,7 +410,7 @@ impl<L: Link> Phases<L> {
 
         // It holds the command from here. BUSY says it is working on that one,
         // so we ask it again: a second command would be a second command, and
-        // the LS-40 refuses a repeated READ with 05h-2Ch
+        // a unit can refuse a repeated READ with 05h-2Ch
         let mut wait = BUSY_WAIT;
         let mut bound = PHASE_WAIT;
         let phase = loop {

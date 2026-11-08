@@ -5,8 +5,7 @@
 //! of one model: what changes is the table from device values to the connection
 //! space, since the transform runs through the film's dyes and those differ per
 //! stock. Negative and Kodachrome need their own for that reason. Positive and
-//! Kodachrome were measured per model; the negative table is shared by the
-//! LS-9000, LS-5000 and LS-50, while the LS-8000 and LS-4000 have their own.
+//! Kodachrome were measured per model. Some models share one negative table.
 //!
 //! Nikon also ships an `_R` profile, the same bytes for every model and older
 //! than the rest. It is not a film type, so it is not here: the manual's

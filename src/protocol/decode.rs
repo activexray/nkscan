@@ -758,7 +758,7 @@ mod tests {
         }
         assert!(d.complete());
 
-        // A photograph, not noise: neighbouring pixels agree far better than
+        // A photograph, not noise: neighboring pixels agree far better than
         // distant ones. Scrambled planes would flatten the difference
         let at = |y: usize, x: usize, c: usize| f64::from(samples.colors[c][y * w + x]);
         let (mut near, mut far, mut n) = (0.0, 0.0, 0.0);
@@ -769,7 +769,7 @@ mod tests {
                 n += 1.0;
             }
         }
-        eprintln!("neighbour {:.0}, distant {:.0}", near / n, far / n);
+        eprintln!("neighbor {:.0}, distant {:.0}", near / n, far / n);
         assert!(near * 4.0 < far, "near {} far {}", near / n, far / n);
     }
 

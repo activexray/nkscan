@@ -127,7 +127,7 @@ pub async fn capabilities(t: &mut dyn Transport) -> Result<Capabilities, Error> 
         "features"
     );
 
-    // Only the LS-40, LS-50 and LS-5000 give the holder name on this page (LS5000 2-2-2-2)
+    // Not every unit gives the holder name on this page (LS5000 2-2-2-2)
     let holder = match address.holder_id.filter(|&id| id != 0) {
         Some(id) if !identity.is_mf_scanner() => match vpd(t, id).await {
             Ok(page) => Some(page.ascii()?),

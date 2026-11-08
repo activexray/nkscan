@@ -87,7 +87,7 @@ pub enum Fault {
 /// Something a person has to go and fix
 ///
 /// Table 2-1-2 in both specs. TSC picks the variant, and SBP-2 has no slot for
-/// it, so the LS-9000 can leave us with [`Unreported`](Self::Unreported)
+/// it, so a unit on SBP-2 can leave us with [`Unreported`](Self::Unreported)
 #[derive(Debug, thiserror::Error)]
 pub enum Intervention {
     // 0x02-0x04-0x03-xx  Manual Intervention Required

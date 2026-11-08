@@ -48,7 +48,7 @@ pub struct Session {
 }
 
 /// What a command that asks the unit something, rather than moves anything,
-/// gets. A busy LS-40 leaves a phase check unanswered for seconds at a time
+/// gets. A busy unit can leave a phase check unanswered for seconds at a time
 pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long to wait before asking a busy unit again
@@ -273,7 +273,7 @@ impl Session {
     /// is also how to get to a known state.
     ///
     /// Safe to issue partway through a readout, at a command boundary. A
-    /// Coolscan V capture of NikonScan's own Stop button does exactly that -
+    /// capture of NikonScan's own Stop button does exactly that -
     /// last READ's status read, then `C0h`, GOOD 1.6 ms later - so the wait
     /// below is a ceiling rather than something a readout abort spends
     pub async fn abort(&mut self) -> Result<bool, Error> {

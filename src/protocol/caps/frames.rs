@@ -3,9 +3,8 @@
 //! Where the holder's frames sit. Only published when `Address` byte 16 sets
 //! [`FRAME_RECTS`](super::address::CoordinateBase::FRAME_RECTS)
 //!
-//! One page holds 15 images. The images after that are on C9h, CAh and CBh,
-//! which only the FH-816 has (LS9000 2-2-2-1). On C8h the rectangles start
-//! at byte 5, after the image count. On the next pages they start at byte 4.
+//! One page holds 15 images. A holder with more images puts the rest on C9h, CAh and CBh (LS9000 2-2-2-1).
+//! On C8h the rectangles start at byte 5, after the image count. On the next pages they start at byte 4.
 //! The page length gives the number of rectangles on a page, as LS9000.md3
 //! reads it (`1009e960` for C8h, `1009eb90` for the next pages).
 

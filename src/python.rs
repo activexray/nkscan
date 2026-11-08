@@ -254,9 +254,7 @@ pub struct PyCapabilities {
     eject: bool,
     /// Whether the unit focuses itself
     autofocus: bool,
-    /// Whether the unit runs an AE pass itself. False on every unit seen, an
-    /// LS-9000 included, so metering is host-side and the white-balance
-    /// controls are what decide it
+    /// Whether the unit runs an AE pass itself. False on every unit seen, so metering is host-side
     hardware_metering: bool,
     /// The reading modes this unit offers, by name
     interleavings: Vec<String>,
@@ -514,7 +512,7 @@ pub struct PyDiscovery {
     /// is no thumbnail
     thumbnail_blocks: Option<usize>,
     /// The film base density off the thumbnail, for `scan_frame`. `None` without a
-    /// thumbnail, and on the LS-8000 and LS-9000, where `scan_frame` uses the default
+    /// thumbnail, and on a unit with holders, where `scan_frame` uses the default
     base_density: Option<(f64, f64, f64)>,
 }
 

@@ -108,9 +108,7 @@ class Capabilities:
     @property
     def hardware_metering(self) -> builtins.bool:
         r"""
-        Whether the unit runs an AE pass itself. False on every unit seen, an
-        LS-9000 included, so metering is host-side and the white-balance
-        controls are what decide it
+        Whether the unit runs an AE pass itself. False on every unit seen, so metering is host-side
         """
     @property
     def interleavings(self) -> builtins.list[builtins.str]:
@@ -220,7 +218,7 @@ class Discovery:
     def base_density(self) -> typing.Optional[tuple[builtins.float, builtins.float, builtins.float]]:
         r"""
         The film base density off the thumbnail, for `scan_frame`. `None` without a
-        thumbnail, and on the LS-8000 and LS-9000, where `scan_frame` uses the default
+        thumbnail, and on a unit with holders, where `scan_frame` uses the default
         """
 
 class MediaError(ScannerError):

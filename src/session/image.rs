@@ -179,8 +179,7 @@ impl Session {
 
 /// The lengths a READ ends on when one READ can carry at most `most` bytes
 ///
-/// A whole line, or else one reading of a line. Nikon Scan reads a large
-/// LS-9000 line in this way
+/// A whole line, or else one reading of a line, as Nikon Scan reads a line that is too large
 fn fitted(line: Granules, readings: Granules, most: usize) -> Granules {
     match line.widest() > most {
         true => readings,
@@ -412,8 +411,8 @@ impl Chunks<'_> {
 ///
 /// 2-13's ABORT is what closes it, not reading to the end. Reading was the
 /// earlier choice here, on the grounds that aborting mid-move risks the
-/// mechanism - but a USBPcap capture of NikonScan's own Stop button against a
-/// Coolscan V shows it aborting 9.1 s into a 2 MB/s readout, at the boundary
+/// mechanism - but a USBPcap capture of NikonScan's own Stop button
+/// shows it aborting 9.1 s into a 2 MB/s readout, at the boundary
 /// right after a READ's status, with GOOD back in 1.6 ms, no data read
 /// afterwards and no endpoint cleanup of any kind. The hazard is aborting a
 /// stage move, which is a different operation from a readout.

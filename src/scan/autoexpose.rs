@@ -74,9 +74,7 @@ pub(crate) enum AutoExposure {
 impl AutoExposure {
     /// Determine the kind of AE to use
     ///
-    /// The two unit-side branches are unexercised: neither an LS-50 nor an
-    /// LS-9000 sets [`ScanKind::AE`] or `AE_WB`, so every unit seen so far
-    /// lands on [`Host`](Self::Host)
+    /// No unit seen sets [`ScanKind::AE`] or `AE_WB`, so the two unit-side branches are not tested on hardware
     pub(crate) fn choose(caps: &Capabilities, metering: &Metering) -> Result<Self, Error> {
         let kinds = caps.set_window.kind;
         let lock_white_balance = metering.lock_white_balance;
@@ -117,9 +115,7 @@ pub(crate) fn prescan_windows(caps: &Capabilities, windows: &[Window]) -> Vec<Wi
         .iter()
         .map(|w| {
             let mut w = w.clone();
-            // An LS-8000/9000 prescan halves Y and has no averaging (byte 41 is 01h)
-            // An LS-50/5000 prescan is 285 dpi with averaging (byte 41 is 80h). The
-            // LS-40 prescan is 290 dpi (LS4000.md3 `10034dc8`)
+            // A medium format prescan halves Y and has no averaging (byte 41 is 01h). A 35mm prescan averages (byte 41 is 80h)
             if caps.identity.is_mf_scanner() {
                 w.resolution = (dpi, dpi / 2);
                 w.flags.remove(Flags::AVERAGING);

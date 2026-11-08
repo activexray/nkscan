@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0]
+
+### Added
+
+- The CLI keeps the frames and the thumbnail of each unit until eject. A later run on the same film does not take a thumbnail pass, and the frame goes to the same position. On the LS-50, two runs put the frame 0.01 px apart. Before, two runs put it up to 4 px apart. The file is in `$XDG_CACHE_HOME/nkscan` on Linux, `~/Library/Caches/nkscan` on macOS and `%LOCALAPPDATA%\nkscan\cache` on Windows. `nkscan eject` removes it.
+- `--rediscover` finds the frames again, also when the film did not change.
+- `Discovery::to_bytes` and `scan::cache::resume` keep a discovery for a later session. The library does not write files. The caller keeps the bytes. `resume` gives `None` when the unit, adapter, film or format is different, when the medium changed, or when the frame table in the unit is different.
+- `Session::medium_changes` gives the number of `28h-00h` unit attentions. Each one means that a holder or strip went in or out (#66).
+- Python: `Discovery.cache`, `Session.resume_frames` and `Session.medium_changes`.
+
+### Changed
+
+- `Session::eject` and a `28h-00h` unit attention clear the frame table that the session keeps.
+
 ## [0.18.0]
 
 ### Added

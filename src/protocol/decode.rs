@@ -903,6 +903,37 @@ mod transposed {
         }
     }
 
+    /// The LS-8000 reads infrared again with the colors in the three-line
+    /// mode. Each reading of a feed position is R, G, B, IR, and the decoder
+    /// averages infrared as it averages a color
+    #[test]
+    fn multi_line_averages_infrared_read_every_time() {
+        let l = Layout {
+            infrared_per_reading: true,
+            ..layout(2, 1, 1, vec![1, 2, 3, 9], 2)
+        };
+        // 4 channels x 2 readings
+        assert_eq!(l.readouts(), 8);
+        let (mut d, mut samples) = buffers(&l);
+        d.push(&stream(1, 8, 2, 3), &mut samples).unwrap();
+        assert!(d.complete());
+
+        let (_, cols) = d.shape();
+        let ir = samples.ir.as_ref().unwrap();
+        for line in 0..3 {
+            for pixel in 0..2 {
+                let (y, x) = (2 - 1 - pixel, line);
+                let pixel_at = y * cols + x;
+                // Channel `c` of the second reading is 4 readouts after the first
+                let average = |c: usize| (tag(0, c, pixel, line) + tag(0, 4 + c, pixel, line)) / 2;
+                assert_eq!(ir[pixel_at], average(3));
+                for c in 0..3 {
+                    assert_eq!(samples.colors[c][pixel_at], average(c));
+                }
+            }
+        }
+    }
+
     /// A gap of zero gives the decoder no rows to separate
     #[test]
     fn a_gap_of_zero_is_refused() {

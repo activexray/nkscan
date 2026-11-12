@@ -85,6 +85,7 @@ impl Model {
     pub fn quirks(self) -> Quirks {
         match self {
             Self::Ls50 => Quirks::UNADVERTISED_MULTI_READING | Quirks::INFRARED_EVERY_READING,
+            Self::Ls8000 => Quirks::INFRARED_EVERY_READING,
             _ => Quirks::empty(),
         }
     }
@@ -99,7 +100,7 @@ bitflags::bitflags! {
         const UNADVERTISED_MULTI_READING = 1 << 0;
         /// With more than one reading a line, the unit reads infrared again on
         /// every reading, so each reading is R, G, B, IR. Other units read
-        /// infrared one time, with the first reading. LS-50
+        /// infrared one time, with the first reading. LS-50 and LS-8000
         const INFRARED_EVERY_READING = 1 << 1;
     }
 }

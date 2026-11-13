@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- With more than one sample and infrared, nkscan expects infrared in every reading of a line. The LS-4000, LS-8000 and LS-50 send infrared in every reading. Only the LS-5000 and the LS-9000 send infrared in the first reading alone. The Nikon Scan 4.0.2 module of each model reads the line in the same way. Before, nkscan expected infrared in the first reading alone from every unit except the LS-50. A multi-sample infrared pass from an LS-4000 or LS-8000 then decoded each channel from the wrong position and stopped before the end of the data (#82).
+
+### Changed
+
+- **Breaking:** `Quirks::INFRARED_EVERY_READING` is now `Quirks::INFRARED_FIRST_READING`, and the LS-5000 and LS-9000 have it.
+
 ## [0.19.0]
 
 ### Added

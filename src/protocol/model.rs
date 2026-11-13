@@ -84,7 +84,8 @@ impl Model {
     /// What this model's firmware does that its pages do not say
     pub fn quirks(self) -> Quirks {
         match self {
-            Self::Ls50 => Quirks::UNADVERTISED_MULTI_READING | Quirks::INFRARED_EVERY_READING,
+            Self::Ls50 => Quirks::UNADVERTISED_MULTI_READING,
+            Self::Ls5000 | Self::Ls9000 => Quirks::INFRARED_FIRST_READING,
             _ => Quirks::empty(),
         }
     }
@@ -97,10 +98,10 @@ bitflags::bitflags! {
         /// The unit reads a line 2 to 16 times, but byte 5 of its SET WINDOW
         /// page does not set `MULTI_READING`. LS-50 firmware 1.02 and 2.04
         const UNADVERTISED_MULTI_READING = 1 << 0;
-        /// With more than one reading a line, the unit reads infrared again on
-        /// every reading, so each reading is R, G, B, IR. Other units read
-        /// infrared one time, with the first reading. LS-50
-        const INFRARED_EVERY_READING = 1 << 1;
+        /// With more than one reading a line, the unit reads infrared in the
+        /// first reading only. Other units read infrared in every reading.
+        /// LS-5000 (issue 52) and LS-9000
+        const INFRARED_FIRST_READING = 1 << 1;
     }
 }
 

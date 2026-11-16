@@ -2,6 +2,7 @@ use divan::counter::ItemsCount;
 use nkscan::{
     dust::{self, Calibration, Options, Params, Prescan},
     protocol::decode::Samples,
+    scan::profile::Film,
 };
 use std::sync::LazyLock;
 use tiff::decoder::{Decoder, DecodingResult, Limits};
@@ -189,7 +190,7 @@ fn calibrate(bencher: divan::Bencher) {
     bencher
         .counter(ItemsCount::new(PRESCAN_ROWS * PRESCAN_COLS))
         .with_inputs(prescan_image)
-        .bench_values(|prescan| dust::calibrate(&prescan));
+        .bench_values(|prescan| dust::calibrate(&prescan, Film::Positive));
 }
 
 fn prescan_image() -> Prescan<'static> {
@@ -262,7 +263,7 @@ fn clean(bencher: divan::Bencher) {
             (r, g, b, ir, prescan)
         })
         .bench_values(|(mut r, mut g, mut b, ir, prescan)| {
-            let cal = dust::calibrate(&prescan).expect("clear film in the prescan");
+            let cal = dust::calibrate(&prescan, Film::Positive).expect("clear film in the prescan");
             dust::clean([&mut r, &mut g, &mut b], &ir, &cal, ROWS, COLS, &options())
         });
 }
@@ -349,7 +350,8 @@ fn clean_35mm(bencher: divan::Bencher) {
             (r, g, b, ir, prescan)
         })
         .bench_values(|(mut r, mut g, mut b, ir, prescan)| {
-            let cal = dust::calibrate(&prescan).expect("clear film in the synthetic prescan");
+            let cal = dust::calibrate(&prescan, Film::Positive)
+                .expect("clear film in the synthetic prescan");
             dust::clean(
                 [&mut r, &mut g, &mut b],
                 &ir,

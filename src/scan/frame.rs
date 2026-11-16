@@ -107,7 +107,14 @@ pub async fn scan_frame_with(
 
     let cleaned = options
         .clean
-        .then(|| clean_frame(samples, &pass, session.capabilities().identity.model()))
+        .then(|| {
+            clean_frame(
+                samples,
+                &pass,
+                session.capabilities().identity.model(),
+                options.metering.film,
+            )
+        })
         .transpose()?;
 
     Ok(Scanned {

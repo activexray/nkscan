@@ -4,7 +4,7 @@ use crate::{
     dust,
     error::Error,
     protocol::{decode::Samples, model::Model, window::Channel},
-    scan::pass::Pass,
+    scan::{pass::Pass, profile::Film},
 };
 use tracing::*;
 
@@ -23,11 +23,12 @@ fn decimate(plane: &[u16], cols: usize, step: usize) -> Vec<u16> {
     out
 }
 
-/// Run dust removal over a finished pass, in place, returning how many pixels it rebuilt
+/// Run dust removal over a finished pass of `film`, in place, returning how many pixels it rebuilt
 pub fn clean_frame(
     samples: &mut Samples,
     pass: &Pass,
     model: Option<Model>,
+    film: Film,
 ) -> Result<usize, Error> {
     // The buffer holds the pass's color channels in the stream's own order
     let ids: Vec<u8> = pass.layout.colors().collect();
@@ -61,21 +62,27 @@ pub fn clean_frame(
     let step = ((pass.rows * pass.cols) / PRESCAN_PIXELS).isqrt().max(1);
     let small_red = decimate(&samples.colors[r], pass.cols, step);
     let small_ir = decimate(ir, pass.cols, step);
-    let cal = dust::calibrate(&dust::Prescan {
-        red: &small_red,
-        ir: &small_ir,
-        rows: pass.rows / step,
-        cols: pass.cols / step,
-    })
+    let cal = dust::calibrate(
+        &dust::Prescan {
+            red: &small_red,
+            ir: &small_ir,
+            rows: pass.rows / step,
+            cols: pass.cols / step,
+        },
+        film,
+    )
     .or_else(|| {
         // A frame with little clear film can have none left after decimation while the full pass still has plenty
         warn!("no clear film in the decimated prescan, calibrating off the whole frame");
-        dust::calibrate(&dust::Prescan {
-            red: &samples.colors[r],
-            ir,
-            rows: pass.rows,
-            cols: pass.cols,
-        })
+        dust::calibrate(
+            &dust::Prescan {
+                red: &samples.colors[r],
+                ir,
+                rows: pass.rows,
+                cols: pass.cols,
+            },
+            film,
+        )
     })
     .ok_or_else(|| Error::Unsupported {
         op: "clean",

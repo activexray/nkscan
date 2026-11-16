@@ -3,11 +3,18 @@
 //! Some design notes: gotta go fast at all costs.
 //! I don't care about matchin Nikon bit-for-bit. It need to look correct and not waste my time.
 
+use crate::scan::profile::Film;
 use rayon::prelude::*;
 use std::sync::LazyLock;
 use wide::f32x4;
 
 // -----  constants
+
+/// The R->IR leakage ICE uses for a positive when no clear tile measures one (ICEDLL.dll 3.0.0.4012, 0x109cc0a8)
+const POSITIVE_LEAKAGE: f32 = 0.14;
+
+/// The R->IR leakage ICE uses for a negative when no clear tile measures one (ICEDLL.dll 3.0.0.4012, 0x109cc0a4)
+const NEGATIVE_LEAKAGE: f32 = 0.17;
 
 /// The maximum value of a 16-bit sample
 const M: f32 = 65535.0;
@@ -320,7 +327,8 @@ pub struct Calibration {
 /// Step 2: measure `c` and `IR_ref` from a low-resolution scan of the frame.
 ///
 /// Returns `None` when the prescan holds no clear film to measure against, which would otherwise divide by zero and poison the whole pass.
-pub fn calibrate(prescan: &Prescan) -> Option<Calibration> {
+/// Where no clear tile measures `c`, the leakage ICE keeps for `film` stands in.
+pub fn calibrate(prescan: &Prescan, film: Film) -> Option<Calibration> {
     // Log-densities of the red and IR channels
     let d_r = to_density(prescan.red);
     let d_ir = to_density(prescan.ir);
@@ -408,9 +416,12 @@ pub fn calibrate(prescan: &Prescan) -> Option<Calibration> {
         )
         .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
 
-    // No clear tile survived the slope filter
-    // So, assume no leak rather than hand back a NaN that flags the whole frame
-    let c = if den > 0.0 { (num / den) as f32 } else { 0.0 };
+    // ICE uses its film's leakage where the calibration measures none
+    let c = match (den > 0.0, film) {
+        (true, _) => (num / den) as f32,
+        (false, Film::Negative | Film::MonochromeNegative) => NEGATIVE_LEAKAGE,
+        (false, Film::Positive | Film::Kodachrome) => POSITIVE_LEAKAGE,
+    };
 
     Some(Calibration {
         c,
@@ -856,6 +867,39 @@ pub fn clean(
 mod tests {
     use super::*;
 
+    /// Without a clear 8x8 tile to measure it, the leakage is the one ICE keeps for the film
+    #[test]
+    fn an_unmeasured_leakage_is_the_film_default() {
+        let (rows, cols) = (16, 16);
+        // Clear and dense pixels alternate, so clear film exists but no tile is clear throughout
+        let ir: Vec<u16> = (0..rows * cols)
+            .map(|i| {
+                if (i / cols + i % cols) % 2 == 0 {
+                    50000
+                } else {
+                    1000
+                }
+            })
+            .collect();
+        let red = vec![30000; rows * cols];
+        let prescan = Prescan {
+            red: &red,
+            ir: &ir,
+            rows,
+            cols,
+        };
+
+        for (film, c) in [
+            (Film::Positive, 0.14),
+            (Film::Kodachrome, 0.14),
+            (Film::Negative, 0.17),
+            (Film::MonochromeNegative, 0.17),
+        ] {
+            let cal = calibrate(&prescan, film).expect("clear film");
+            assert_eq!(cal.c, c, "{film:?}");
+        }
+    }
+
     /// A fixed noise in `[-0.5, 0.5)` per pixel and stream
     fn noise(i: usize, stream: usize) -> f32 {
         uniform(i, stream) - 0.5
@@ -890,12 +934,15 @@ mod tests {
         }
         let dirty = planes[0].clone();
 
-        let cal = calibrate(&Prescan {
-            red: &planes[0],
-            ir: &ir,
-            rows: ROWS,
-            cols,
-        })
+        let cal = calibrate(
+            &Prescan {
+                red: &planes[0],
+                ir: &ir,
+                rows: ROWS,
+                cols,
+            },
+            Film::Positive,
+        )
         .expect("clear film");
         let opts = Options {
             model: Model::Ls5000,

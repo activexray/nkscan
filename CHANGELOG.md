@@ -13,7 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `--clean` uses the film type when no clear film in the frame measures the red leakage into infrared. It then uses the leakage that Nikon's ICE engine uses: 0.14 for slide film and Kodachrome, and 0.17 for negative film. Before, it used no leakage.
 - **Breaking:** `Quirks::INFRARED_EVERY_READING` is now `Quirks::INFRARED_FIRST_READING`, and the LS-5000 and LS-9000 have it.
+- **Breaking:** `dust::calibrate` and `scan::clean::clean_frame` take the `Film`.
 
 ## [0.19.0]
 

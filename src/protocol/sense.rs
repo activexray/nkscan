@@ -19,6 +19,11 @@ pub enum Failure {
     Aborted, // 0Bh-4Bh data phase, 0Bh-4Eh overlapped
     #[error("hardware error")]
     Hardware, // 04h
+    /// Neither spec lists this one. It is SPC's MEDIA LOAD OR EJECT FAILED,
+    /// and an SA-21 reports it partway through a thumbnail when the feed loses
+    /// the strip, as it does at torn perforations
+    #[error("the adapter could not feed the film; check its perforations")]
+    Feed, // 04h-53h-00h
     #[error("medium error")]
     Medium, // 03h
     #[error("unexpected status {0:#04x}")]
@@ -346,6 +351,7 @@ fn from_sense(s: &Sense) -> Outcome {
 
         // Medium and hardware
         (0x03, ..) => Failed(Failure::Medium),
+        (0x04, 0x53, 0x00) => Failed(Failure::Feed),
         (0x04, ..) => Failed(Failure::Hardware),
 
         // Illegal request: our bug
@@ -406,6 +412,20 @@ mod tests {
         assert!(matches!(
             interpret(&completion),
             Outcome::Failed(Failure::OutOfFocus)
+        ));
+    }
+
+    /// A strip the feed lost is told apart from any other hardware error
+    #[test]
+    fn a_failed_feed_is_its_own_failure() {
+        let completion = Completion {
+            status: Status::CheckCondition,
+            sense: Some(sense(0x04, 0x53, 0x00)),
+            transferred: 0,
+        };
+        assert!(matches!(
+            interpret(&completion),
+            Outcome::Failed(Failure::Feed)
         ));
     }
 

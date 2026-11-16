@@ -9,17 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- With more than one sample and infrared, nkscan expects infrared in every reading of a line. The LS-4000, LS-8000 and LS-50 send infrared in every reading. Only the LS-5000 and the LS-9000 send infrared in the first reading alone. The Nikon Scan 4.0.2 module of each model reads the line in the same way. Before, nkscan expected infrared in the first reading alone from every unit except the LS-50. A multi-sample infrared pass from an LS-4000 or LS-8000 then decoded each channel from the wrong position and stopped before the end of the data (#82).
+- A multi-sample infrared pass from an LS-4000 or LS-8000 decodes correctly. These units and the LS-50 send infrared in every reading of a line. Only the LS-5000 and LS-9000 send it in the first reading alone (#82).
 
 ### Changed
 
-- `--clean` uses the film type when no clear film in the frame measures the red leakage into infrared. It then uses the leakage that Nikon's ICE engine uses: 0.14 for slide film and Kodachrome, and 0.17 for negative film. Before, it used no leakage.
-- `--clean` rebuilds dust about ten times faster on one thread and about eight times faster on many threads. On a 2048 x 2048 frame it takes 0.12 s on one thread and 15 ms on 24 threads, where Nikon's ICE engine takes 0.75 s on one thread of the same CPU under Wine. It works on tiles 256 columns wide, so each tile's rows fit in the L2 cache, and every loop runs over rows of that fixed width in whole vectors with no bounds checks. It uses AVX2 or AVX-512 when the CPU has them. The rebuild of each pixel and the dither have no branches and no loads that depend on a setting, so they also run in vector lanes on NEON (Apple silicon and other ARM CPUs) and SSE2. With SSE2 alone the frame takes 0.19 s on one thread. The result is the same to within float rounding.
-- When an SA-21 loses the strip partway through a thumbnail, as it does at torn perforations, nkscan reports "the adapter could not feed the film; check its perforations" (sense 04h-53h-00h). Before, it reported a hardware error.
+- When no clear film measures the red leakage into infrared, `--clean` uses the leakage of Nikon's ICE engine for the film type: 0.14 for slides and 0.17 for negatives. Before, it used none.
+- `--clean` is about ten times faster. A 2048 x 2048 frame takes 0.12 s on one thread and 15 ms on 24 threads. Nikon's ICE engine takes 0.75 s on one thread. It uses AVX2, AVX-512, NEON or SSE2. The result is the same to within float rounding.
+- When an SA-21 cannot feed a strip, as at torn perforations, nkscan reports a feed failure. Before, it reported a hardware error.
 - **Breaking:** `protocol::sense::Failure` has the new variant `Feed`.
 - **Breaking:** `Quirks::INFRARED_EVERY_READING` is now `Quirks::INFRARED_FIRST_READING`, and the LS-5000 and LS-9000 have it.
 - **Breaking:** `dust::calibrate` and `scan::clean::clean_frame` take the `Film`.
-- **Breaking:** `dust::gate`, `dust::confidence`, `dust::decide` and `dust::reconstruct_core` are removed. `dust::clean` runs these steps together for each tile of rows and columns.
+- **Breaking:** `dust::gate`, `dust::confidence`, `dust::decide` and `dust::reconstruct_core` are removed. Use `dust::clean`.
 
 ## [0.19.0]
 

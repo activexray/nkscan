@@ -279,16 +279,14 @@ const EXP2_FIT: [f32; 7] = [
 /// The exponents [`from_density_scalar`] keeps to, inside the normal `f32` range
 const EXP2_LIMIT: f32 = 100.0;
 
-/// `D^-1(d) = 2^(16d/M) - 1`, rounded and clamped to a 16-bit sample
-///
-/// In arithmetic alone, not a call to `exp2f`, so a loop of it runs in vector lanes
+/// `D^-1(d) = 2^(16d/M) - 1` as a 16-bit sample, in arithmetic and not `exp2f`, so a loop of it vectorizes
 #[inline(always)]
 fn from_density_scalar(d: f32) -> u16 {
     let x = (d * (16.0 / M)).clamp(-EXP2_LIMIT, EXP2_LIMIT);
     let n = nearest(x);
     let n = if n > x { n - 1.0 } else { n };
     let fit = EXP2_FIT.iter().rev().fold(0.0, |acc, &k| acc * (x - n) + k);
-    // `2^n` from its biased exponent, which the mantissa of `MAGIC + n + bias` holds
+    // `2^n` from its biased exponent, which is the mantissa of `MAGIC + n + bias`
     let scale =
         f32::from_bits(integer(n + (f32::MAX_EXP - 1) as f32) << (f32::MANTISSA_DIGITS - 1));
     // Rounded half away from zero, as `round` does
@@ -300,8 +298,7 @@ fn from_density_scalar(d: f32) -> u16 {
 /// `1.5 * 2^23`, where a float's last mantissa bit is 1 for any whole number within `2^22` of it
 const ROUNDER: f32 = 1.5 * MAGIC;
 
-/// `v` rounded to the nearest whole number, ties to even, for `|v| < 2^22`.
-/// Plain arithmetic, so it runs in vector lanes on SSE2, which has no vector rounding
+/// `v` to the nearest whole number, ties to even, for `|v| < 2^22`. SSE2 has no vector instruction for `round`
 #[inline(always)]
 fn nearest(v: f32) -> f32 {
     (ROUNDER + v) - ROUNDER
@@ -310,8 +307,7 @@ fn nearest(v: f32) -> f32 {
 /// `2^23`, where a float's last mantissa bit is 1
 const MAGIC: f32 = (1u32 << (f32::MANTISSA_DIGITS - 1)) as f32;
 
-/// The whole number `v` in `[0, 2^23)` as an integer, from the bits of `MAGIC + v`.
-/// Exact, and unlike `as` it has no saturation to check, so a loop of it runs in vector lanes
+/// The whole number `v` in `[0, 2^23)` as an integer. Unlike `as`, it has no saturation, so a loop of it vectorizes
 #[inline(always)]
 fn integer(v: f32) -> u32 {
     (MAGIC + v).to_bits() - MAGIC.to_bits()
@@ -378,7 +374,7 @@ pub struct Calibration {
 /// Step 2: measure `c` and `IR_ref` from a low-resolution scan of the frame.
 ///
 /// Returns `None` when the prescan holds no clear film to measure against, which would otherwise divide by zero and poison the whole pass.
-/// Where no clear tile measures `c`, the leakage ICE keeps for `film` stands in.
+/// Where no clear tile measures `c`, it uses the leakage ICE uses for `film`.
 pub fn calibrate(prescan: &Prescan, film: Film) -> Option<Calibration> {
     // Log-densities of the red and IR channels
     let d_r = to_density(prescan.red);
@@ -480,10 +476,7 @@ pub fn calibrate(prescan: &Prescan, film: Film) -> Option<Calibration> {
     })
 }
 
-// ----- steps 3 to 9, one band of rows at a time
-//
-// Every step reads a few rows either side of a pixel at most, so a band of rows
-// runs all of them in cache and the frame never holds a gate, weight or mask plane
+// ----- Steps 3 to 9, one band of rows at a time, which fits in cache because no step reads more than a few rows away
 
 /// Rows one task cleans
 const BAND: usize = 32;
@@ -582,12 +575,10 @@ struct Rebuilt {
     rgb: Vec<[u16; 3]>,
 }
 
-/// One row of a tile at the width of the widest tile, so a loop over it needs no bounds checks.
-/// A narrower tile leaves the columns past its own unread
+/// One row of a tile at the widest tile's width, so a loop over it needs no bounds checks
 type Row = [f32; SPAN];
 
-/// A padded row's length: `REACH` zeros before the row and `3 * REACH` after it, 16 lanes more in all,
-/// so a loop over it ends on a whole vector
+/// A padded row's length: `REACH` zeros before the row and `3 * REACH` after it, so a loop ends on a whole vector
 const PADDED: usize = SPAN + 4 * REACH;
 
 /// A row with zeros either side
@@ -611,7 +602,7 @@ fn inner(row: &Padded) -> &Row {
     row[REACH..][..SPAN].try_into().expect("a row")
 }
 
-/// A thread's working rows, kept across the tiles it takes so a tile allocates only what it returns
+/// A thread's working rows, kept from tile to tile so a tile allocates only its output
 #[derive(Default)]
 struct Scratch {
     /// Steps 3 and 4 over the band's rows and halo, zero past both ends
@@ -685,10 +676,7 @@ fn gate_and_weigh(
     }
 }
 
-/// Step 5: the pixels of rows `y0..y1` worth rebuilding, as frame indices
-///
-/// A pixel is kept unless the film is dark across 9 columns 4 rows above or below it,
-/// or across 9 rows 4 columns either side, each window clamped to the frame
+/// Step 5: the pixels of rows `y0..y1` to rebuild, those not dark across 9 columns 4 rows away or 9 rows 4 columns away
 #[inline(always)]
 fn decide(f: &Frame, p: &Params, s: &mut Scratch, r0: usize, y0: usize, y1: usize) {
     let (rows, cols) = (f.rows, f.cols);
@@ -710,8 +698,7 @@ fn decide(f: &Frame, p: &Params, s: &mut Scratch, r0: usize, y0: usize, y1: usiz
         dark.extend(g[REACH..][..cols].iter().map(|&g| u8::from(g < p.phi)));
     }
 
-    // Across 9 columns, every row of the band and its halo. Past both ends counts as dark,
-    // so the clamped window is the full one. Each pass doubles the run it ANDs: 2, 4, 8, then 9
+    // Past both ends counts as dark, so a window at an edge is a full one. Each pass doubles the run it ANDs
     row_dark.clear();
     row_dark.resize(dark.len(), 0);
     for (src, dst) in dark.chunks_exact(cols).zip(row_dark.chunks_exact_mut(cols)) {
@@ -735,8 +722,7 @@ fn decide(f: &Frame, p: &Params, s: &mut Scratch, r0: usize, y0: usize, y1: usiz
     let (own, n) = (f.own.clone(), f.own.len());
     mask.clear();
     for y in y0..y1 {
-        // Across 9 rows, this row only, `DARK_REACH` columns past each end that repeat the edge one,
-        // so each side of `x` is `x` and `x + 2 * DARK_REACH`
+        // The edge columns repeat for `DARK_REACH` columns, so the two sides of `x` are `x` and `x + 2 * DARK_REACH`
         let sides = &mut col_dark[..cols + 2 * DARK_REACH];
         sides.fill(1);
         for r in y.saturating_sub(DARK_REACH)..=(y + DARK_REACH).min(rows - 1) {
@@ -799,8 +785,7 @@ fn row_quantities(f: &Frame, local: &Local, slot: &mut [Padded], r: usize) {
     }
 }
 
-/// The rows of one quantity an octagon sums down at `x`, from `v[REACH + dy]`, the row `dy` away:
-/// `wide[k - 1]` sums the rows at least `k` columns either side
+/// The rows `v[REACH + dy]` an octagon sums down at `x`: `wide[k - 1]` sums the rows `k` or more columns wide
 #[inline(always)]
 fn octagon_down(spans: &[(i32, i32, i32)], v: &[f32; RING], wide: &mut [Padded; REACH], x: usize) {
     let mut reach = 0;
@@ -818,8 +803,7 @@ fn octagon_down(spans: &[(i32, i32, i32)], v: &[f32; RING], wide: &mut [Padded; 
     }
 }
 
-/// The octagon `spans` across the rows [`octagon_down`] summed, into `out`: each column offset `dx`
-/// takes the rows for `max(|dx|, 1)`
+/// The octagon `spans` across the sums of [`octagon_down`]: column offset `dx` uses the rows for `max(|dx|, 1)`
 #[inline(always)]
 fn octagon_across(spans: &[(i32, i32, i32)], wide: &[Padded; REACH], out: &mut Row) {
     let mut reach = 0;
@@ -835,9 +819,7 @@ fn octagon_across(spans: &[(i32, i32, i32)], wide: &[Padded; REACH], out: &mut R
     }
 }
 
-/// The level sums of row `y` from the ring into `out`, `[level][quantity]`
-///
-/// Each quantity sums down once for every level, reading each ring row once, then across
+/// The level sums of row `y`, `[level][quantity]`. All levels sum down together, so each ring row is read once
 #[inline(always)]
 fn level_sums(ring: &[Padded], down: &mut Down, out: &mut [Row], r0: usize, r1: usize, y: usize) {
     for qty in 0..QUANTITIES {
@@ -898,8 +880,7 @@ fn gate_pyramid(sums: &[Row], g: &Row, p: &mut [Edged], cols: usize) {
 struct RowView<'a> {
     /// The level sums, `[level][quantity]`
     sums: [[&'a Row; QUANTITIES]; SUMMED],
-    /// The gate pyramids of the rows above, here and below, then of the columns left and right
-    /// of here, `[neighbor][level]`. A row or column past the frame repeats this one, which adds no contrast
+    /// The gate pyramids above, here, below, left and right, `[neighbor][level]`. Past the frame, this one repeats
     pyramids: [[&'a Row; SUMMED + 1]; 5],
     /// The weight, level 3 of `C`
     w: &'a Row,
@@ -965,9 +946,7 @@ fn dither(x: f32, u: f32, channel: usize, eta: [f32; 2]) -> f32 {
     if inside { d } else { 0.0 }
 }
 
-/// The rebuilt densities at `x` before dither, with the pixels `left` and `right` of it
-///
-/// Branch-free, so a row of it runs in vector lanes
+/// The rebuilt densities at `x` before dither, with no branch so a row of it vectorizes
 #[inline(always)]
 fn rebuild_at<const CROSS: bool>(p: &Params, v: &RowView, x: usize) -> [f32; 3] {
     let center = v.levels(x);
@@ -993,7 +972,7 @@ fn rebuild_at<const CROSS: bool>(p: &Params, v: &RowView, x: usize) -> [f32; 3] 
         // the blurred base plus the light the 9x9 window lost
         let mut a = center.l[ch][0] + p.gamma[ch] * (p.ir_ref - center.p[0]);
 
-        // each detail band, dead-zoned against the IR contrast and scaled by how much clean film backed the estimate
+        // Each detail band past the IR contrast, scaled by how much clean film the estimate used
         for level in 1..=3 {
             let detail = (center.l[ch][level] - center.l[ch][level - 1]) * p.detail_gain;
             let (a_hi, a_lo) = p.a[ch][level - 1];
@@ -1004,8 +983,7 @@ fn rebuild_at<const CROSS: bool>(p: &Params, v: &RowView, x: usize) -> [f32; 3] 
                 (a_lo, a_hi)
             };
             let (lo_t, hi_t) = (a_lo * lo[level], a_hi * hi[level]);
-            // The part of `detail` outside `[lo_t, hi_t]`. Every profile has `a_hi >= a_lo` (a test checks), so
-            // `lo_t <= hi_t` and at most one term is not zero. No branch, so NEON keeps it in vector lanes
+            // No branch, so it vectorizes. Every profile has `a_hi >= a_lo`, so `lo_t <= hi_t` and one term at most is not zero
             let r = (detail - lo_t).min(0.0) + (detail - hi_t).max(0.0);
             let confidence = match level {
                 1 => (2.0 * center.c[1]).min(1.0),
@@ -1019,9 +997,7 @@ fn rebuild_at<const CROSS: bool>(p: &Params, v: &RowView, x: usize) -> [f32; 3] 
     out
 }
 
-/// The masked pixels of row `y`, rebuilt into `out` as 16-bit samples
-///
-/// The whole row runs in vector lanes into `dense`, then the masked pixels take theirs
+/// Rebuild row `y` into `dense` in vector lanes, then copy its masked pixels into `lanes`
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn rebuild_row(
@@ -1432,8 +1408,7 @@ pub fn clean(
     let p = Params::new(opts, cal);
     let kernel = band_kernel();
 
-    // Each tile owns `step` columns and reads `SPAN` columns, at least `COL_HALO` more either side.
-    // A whole number of vectors wide, so no loop ends on a part of one
+    // Each tile rebuilds `step` columns and reads `SPAN`, a whole number of vectors with `COL_HALO` or more either side
     let tiles = cols.div_ceil(SPAN - 2 * COL_HALO);
     let (step, span) = (cols.div_ceil(tiles), SPAN.min(cols));
     // Every tile reads the planes as they scanned, so none writes until all have run

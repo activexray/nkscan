@@ -19,9 +19,7 @@ pub enum Failure {
     Aborted, // 0Bh-4Bh data phase, 0Bh-4Eh overlapped
     #[error("hardware error")]
     Hardware, // 04h
-    /// Neither spec lists this one. It is SPC's MEDIA LOAD OR EJECT FAILED,
-    /// and an SA-21 reports it partway through a thumbnail when the feed loses
-    /// the strip, as it does at torn perforations
+    /// SPC's MEDIA LOAD OR EJECT FAILED, which neither spec lists. An SA-21 reports it at torn perforations
     #[error("the adapter could not feed the film; check its perforations")]
     Feed, // 04h-53h-00h
     #[error("medium error")]
@@ -415,7 +413,7 @@ mod tests {
         ));
     }
 
-    /// A strip the feed lost is told apart from any other hardware error
+    /// A feed failure is not a hardware error
     #[test]
     fn a_failed_feed_is_its_own_failure() {
         let completion = Completion {

@@ -293,8 +293,7 @@ impl Recipe {
         }
 
         let (x, y) = (&caps.address.x_axis, &caps.address.y_axis);
-        let clamp =
-            |v: u32, axis: &Axis| v.clamp(axis.address_range.start, axis.address_range.last);
+        let clamp = |v: u32, axis: &Axis| v.clamp(axis.origins().start, axis.origins().last);
         let origin = (clamp(frame.left, x), clamp(frame.top, y));
 
         // Measured from where the window actually starts, so growing the extent
@@ -644,6 +643,22 @@ pub(crate) mod tests {
         .windows(&caps(), frame)
         .expect("windows");
         assert_eq!(single[0].size.1, 8819);
+    }
+
+    /// LS-50 firmware 1.02 takes X 1000 although C1h gives X 0 to 0 (issue #77)
+    #[test]
+    fn an_x_crop_keeps_its_left_edge_when_the_axis_reports_no_range() {
+        let mut caps = caps();
+        caps.address.x_axis.address_range = (0..=0).into();
+        caps.address.x_axis.boundary = 3946;
+        let frame = Rect {
+            top: 2236,
+            left: 1000,
+            bottom: 2236 + 5959,
+            right: 3000,
+        };
+        let windows = recipe().windows(&caps, frame).expect("windows");
+        assert_eq!((windows[0].origin.0, windows[0].size.0), (1000, 2000));
     }
 
     /// Growing the extent cannot push the far edge past the axis

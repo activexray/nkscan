@@ -448,12 +448,13 @@ impl Window {
             (x, 'X', self.origin.0, self.size.0),
             (y, 'Y', self.origin.1, self.size.1),
         ] {
-            if !axis.address_range.contains(&origin) {
+            let origins = axis.origins();
+            if !origins.contains(&origin) {
                 return Err(bad(
                     "window origin",
                     format!(
                         "{name} {origin} is outside {} to {}",
-                        axis.address_range.start, axis.address_range.last
+                        origins.start, origins.last
                     ),
                 ));
             }
@@ -994,6 +995,39 @@ mod tests {
             ))
             .is_err()
         );
+    }
+
+    /// LS-50 firmware 1.02 takes an X origin up to 3945 although C1h gives X 0 to 0 (issue #77)
+    #[test]
+    fn an_x_origin_inside_the_boundary_is_taken_when_the_axis_reports_no_range() {
+        let mut p = vec![0u8; 91];
+        p[1] = Address::PAGE_CODE;
+        p[3] = 87;
+        p[18..20].copy_from_slice(&4000u16.to_be_bytes());
+        p[20..22].copy_from_slice(&4000u16.to_be_bytes());
+        p[22..24].copy_from_slice(&90u16.to_be_bytes());
+        p[36..40].copy_from_slice(&3946u32.to_be_bytes()); // X boundary
+        p[46..50].copy_from_slice(&47672u32.to_be_bytes()); // Y address max
+        p[58..62].copy_from_slice(&5959u32.to_be_bytes()); // Y boundary
+        p[83..85].copy_from_slice(&3946u16.to_be_bytes()); // CCD pixels
+        p[85] = 1;
+        p[86] = 2;
+        let caps = caps_from(p);
+
+        let mut w = Window::try_from(&[0u8; LENGTH][..]).unwrap();
+        w.id = 1;
+        w.composition = Composition::MultilevelBW;
+        w.bpp = 16;
+        w.resolution = (4000, 4000);
+        w.scanning_kind = ScanKind::IMAGE;
+        w.scanning_mode = ScanMode::NORMAL_QUALITY;
+        w.color_interleaving = ColorInterleaving::LINE_WITHOUT_DISTANCE;
+        w.size = (2000, 5959);
+
+        w.origin = (1000, 0);
+        assert!(w.validate(&caps).is_ok());
+        w.origin = (3946, 0);
+        assert!(w.validate(&caps).is_err());
     }
 
     /// Address publishes a separate resolution range for thumbnails, far below the

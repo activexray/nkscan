@@ -91,6 +91,15 @@ impl Axis {
     pub fn croppable(&self) -> bool {
         (self.address_range.last == 0) || (self.address_range.start != self.address_range.last)
     }
+
+    /// The window origins the unit takes. The 35mm firmware leaves a maximum of 0 unset and takes any origin inside the boundary
+    pub fn origins(&self) -> RangeInclusive<u32> {
+        let range = self.address_range;
+        match range.last {
+            0 => (range.start..=range.start + self.boundary.saturating_sub(1)).into(),
+            _ => range,
+        }
+    }
 }
 
 bitflags! {
@@ -514,5 +523,20 @@ mod tests {
         let reversed = parse(&p).coordinate_base;
         assert!(reversed.contains(CoordinateBase::X_ORIGIN_REVERSED));
         assert!(reversed.contains(CoordinateBase::Y_ORIGIN_REVERSED));
+    }
+
+    /// The 35mm units leave the X maximum at 0 and take any origin inside the boundary (issue #77)
+    #[test]
+    fn an_x_maximum_of_0_lets_the_origin_reach_the_boundary() {
+        let origins = |unit: &str| {
+            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/thumbnail_window")
+                .join(unit)
+                .join("page_c1.bin");
+            parse(&std::fs::read(path).expect("page")).x_axis.origins()
+        };
+        assert_eq!(origins("ls4000"), (0..=3945).into());
+        assert_eq!(origins("ls50"), (0..=3945).into());
+        assert_eq!(origins("ls9000"), (0..=8963).into());
     }
 }

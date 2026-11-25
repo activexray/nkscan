@@ -212,9 +212,12 @@ pub fn frames(caps: &Capabilities) -> Result<Boundary, Error> {
 
 /// Put `frame` in the unit's frame table before a pass over it
 ///
-/// Only for a unit that positions the film by that table. Such a unit reads a
-/// rectangle that is not in the table as an offset into the frame that holds
-/// its top, and sends black data past the end of that frame. The unit accepts
+/// Only for a unit that positions the film by that table. A unit with a 2-11-6
+/// table homes the stage to reach a window that no frame holds, so the frame
+/// that overlaps `frame` most moves to hold it, as Nikon Scan does when the user
+/// moves a frame. A unit with a 2-11-9 table reads a rectangle that is not in
+/// the table as an offset into the frame that holds its top, and sends black
+/// data past the end of that frame. The unit accepts
 /// the table only as a whole, so this starts from the table the session knows,
 /// or from the unit's table if the session knows none. A top already in the
 /// table is left alone.
@@ -223,6 +226,31 @@ pub fn frames(caps: &Capabilities) -> Result<Boundary, Error> {
 /// back, because [`BoundaryType2::register`](crate::protocol::data::BoundaryType2::register)
 /// replaces an entry and does not add one
 pub async fn register(session: &mut Session, frame: Rect) -> Result<bool, Error> {
+    if let Some(table) = session.frames() {
+        if table.holding(frame).is_some() {
+            return Ok(false);
+        }
+        let mut table = table.clone();
+        let overlap = |f: &Rect| {
+            f.bottom
+                .min(frame.bottom)
+                .saturating_sub(f.top.max(frame.top))
+        };
+        let Some(held) = table.frames.iter_mut().max_by_key(|f| overlap(f)) else {
+            return Ok(false);
+        };
+        let length = (held.bottom - held.top).max(frame.bottom - frame.top);
+        reachable(session.capabilities(), length)?;
+        *held = Rect {
+            top: frame.top,
+            bottom: frame.top + length,
+            left: held.left.min(frame.left),
+            right: held.right.max(frame.right),
+        };
+        debug!(?frame, held = ?*held, "moved a frame to hold the window");
+        session.set_boundaries(&table).await?;
+        return Ok(true);
+    }
     if Framing::choose(session.capabilities()) != Framing::Perforation {
         return Ok(false);
     }

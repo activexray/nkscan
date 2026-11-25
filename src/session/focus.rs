@@ -5,7 +5,7 @@ use super::Session;
 use crate::{
     error::Error,
     protocol::{
-        caps::{address::Axis, other::HostCooperation},
+        caps::other::HostCooperation,
         data::{Op, Operation, Rect},
         sense::{Failure, Fault},
     },
@@ -39,9 +39,9 @@ impl Session {
     /// calling it an address on the medium: the captures focus a window at top
     /// 10512 length 6696 at 13860, its center.
     ///
-    /// Some addresses inside the range are still answered instantly with out of
-    /// focus, having moved nothing. What bounds that is not yet known, so this
-    /// only checks the range the axis reports.
+    /// The C1h address range limits a window origin and not this point. Nikon
+    /// Scan limits the point to the frame rect alone (`CNkCapImageAutoFocusPt`),
+    /// and the frame table check here does the same.
     ///
     /// `color` picks the channel, which needs the unit to offer
     /// `Op::ColorAutoFocus`; `None` uses `Op::AutoFocus` and lets it choose.
@@ -60,22 +60,6 @@ impl Session {
                 op: "autofocus",
                 reason: "this unit leaves focusing to the driver".into(),
             });
-        }
-
-        let caps = self.capabilities();
-        for (axis, name, value) in [
-            (&caps.address.x_axis, 'X', x),
-            (&caps.address.y_axis, 'Y', y),
-        ] {
-            if !axis.address_range.contains(&value) {
-                return Err(Error::Unsupported {
-                    op: "autofocus address",
-                    reason: format!(
-                        "{name} {value} is outside {} to {}",
-                        axis.address_range.start, axis.address_range.last
-                    ),
-                });
-            }
         }
 
         // The unit resolves the address against its frame table, and answers one
@@ -142,25 +126,11 @@ impl Session {
             Focus::Hold => Ok(Focused::Skipped),
             Focus::At(position) => self.focus_to(position).await.map(|()| Focused::Yes),
             Focus::Auto { at, color } => {
-                let caps = self.capabilities();
-                let point = |axis: &Axis, origin: u32, size: u32, fraction: f32| {
-                    let offset = (size as f32 * fraction.clamp(0.0, 1.0)) as u32;
-                    origin
-                        .saturating_add(offset)
-                        .clamp(axis.address_range.start, axis.address_range.last)
+                let point = |origin: u32, size: u32, fraction: f32| {
+                    origin.saturating_add((size as f32 * fraction.clamp(0.0, 1.0)) as u32)
                 };
-                let x = point(
-                    &caps.address.x_axis,
-                    frame.left,
-                    frame.right.saturating_sub(frame.left),
-                    at.0,
-                );
-                let y = point(
-                    &caps.address.y_axis,
-                    frame.top,
-                    frame.bottom.saturating_sub(frame.top),
-                    at.1,
-                );
+                let x = point(frame.left, frame.right.saturating_sub(frame.left), at.0);
+                let y = point(frame.top, frame.bottom.saturating_sub(frame.top), at.1);
 
                 debug!(x, y, "focusing");
                 match self.autofocus(x, y, color).await {

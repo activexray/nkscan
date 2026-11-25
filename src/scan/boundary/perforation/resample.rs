@@ -131,10 +131,10 @@ pub(crate) fn resample(
     let first = next_phase(records, 0);
     out.extend(0..first);
     let mut cur = first;
-    let mut j = phases as i64 - leading;
+    let mut j = i64::from(phases) - leading;
     loop {
         j += 1;
-        if phases as i64 <= j {
+        if i64::from(phases) <= j {
             break;
         }
         let e = next_phase(records, cur);
@@ -153,7 +153,7 @@ pub(crate) fn resample(
     let mut c = next_perforation(records, cur);
     loop {
         let e = next_perforation(records, c);
-        if !(e < n && !records[e].count_switching_flag) {
+        if e >= n || records[e].count_switching_flag {
             break;
         }
         thin(&mut out, n, c, e, e as i64 - c as i64 - k - 1);

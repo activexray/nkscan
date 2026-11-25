@@ -281,8 +281,7 @@ fn score(detail: &Detail, first: usize, pitch: usize, frames: usize, levels: &mu
 /// a frame edge or on the holder then does not answer for the rest
 fn disagreement(levels: &mut [f32]) -> f32 {
     fn median(v: &mut [f32]) -> f32 {
-        *v.select_nth_unstable_by(v.len() / 2, |a, b| a.total_cmp(b))
-            .1
+        *v.select_nth_unstable_by(v.len() / 2, f32::total_cmp).1
     }
     let middle = median(levels);
     for l in levels.iter_mut() {

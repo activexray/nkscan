@@ -95,7 +95,7 @@ impl Page {
                 page: code,
                 byte: 1,
                 what: "page code",
-                value: bytes[1] as u32,
+                value: u32::from(bytes[1]),
             });
         }
         Ok(Self { code, bytes })

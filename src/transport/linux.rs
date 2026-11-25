@@ -259,7 +259,7 @@ impl SgTransport {
         };
 
         let mut hdr = SgIoHdr {
-            interface_id: b'S' as i32,
+            interface_id: i32::from(b'S'),
             dxfer_direction: dir,
             cmd_len: cmd.len() as u8,
             mx_sb_len: sb.len() as u8,
@@ -268,7 +268,7 @@ impl SgTransport {
             dxferp: data,
             cmdp: cmd.as_mut_ptr(),
             sbp: sb.as_mut_ptr(),
-            timeout: timeout.as_millis().min(u32::MAX as u128) as u32,
+            timeout: timeout.as_millis().min(u128::from(u32::MAX)) as u32,
             flags: Flags::empty(),
             pack_id: 0,
             usr_ptr: null_mut(),

@@ -51,7 +51,7 @@ impl Inquiry {
         [
             0x12,
             // Byte 1: LUN and reserved are zero, bit 0 is EVPD
-            self.page.is_some() as u8,
+            u8::from(self.page.is_some()),
             // Byte 2: only meaningful when EVPD is set
             self.page.unwrap_or(0),
             0,
@@ -200,7 +200,7 @@ impl GetWindow {
         let [_, hi, mid, lo] = self.transfer_length.to_be_bytes();
         [
             0x25,
-            self.window.is_some() as u8,
+            u8::from(self.window.is_some()),
             0,
             0,
             0,

@@ -270,7 +270,7 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
             frames
                 .iter()
                 .map(|&idx| {
-                    discovery.frames.get(idx - 1).cloned().ok_or(anyhow!(
+                    discovery.frames.get(idx - 1).copied().ok_or(anyhow!(
                         "Requested frame {} not available. Frames detected: {}",
                         idx,
                         discovery.frames.len()

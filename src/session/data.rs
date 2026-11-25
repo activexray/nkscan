@@ -305,13 +305,12 @@ impl Session {
             return false;
         };
         let rows = usize::from(self.caps.address.lines).max(1);
-        let (_, values) = match self
+        let Ok((_, values)) = self
             .read_data(data::DataType::CcdData, 0)
             .await
             .inspect_err(|e| debug!(%e, "no CCD curves to correct with"))
-        {
-            Ok(v) => v,
-            Err(_) => return false,
+        else {
+            return false;
         };
         let data::Values::Words(words) = values else {
             debug!("CcdData did not come back as words");

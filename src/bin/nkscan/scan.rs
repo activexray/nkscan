@@ -239,7 +239,7 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
                         bar = Some(pass_bar("thumbnail", p.total));
                     }
                     if let Some(bar) = &bar {
-                        bar.report(p);
+                        report(bar, p);
                     }
                     if cancel::requested() {
                         ControlFlow::Break(())
@@ -335,7 +335,7 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
                                     bar.set_message(format!("meter {pass}"));
                                     shown = pass;
                                 }
-                                bar.report(p);
+                                report(bar, p);
                             }
                         }
                         Phase::Scan => {
@@ -346,7 +346,7 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
                                 scan_bar = Some(pass_bar(format!("frame {}", n + 1), p.total));
                             }
                             if let Some(bar) = &scan_bar {
-                                bar.report(p);
+                                report(bar, p);
                             }
                         }
                     }
@@ -622,15 +622,9 @@ fn pass_bar(label: impl Into<Cow<'static, str>>, total: u64) -> ProgressBar {
 }
 
 /// Moving a pass's progress onto a bar
-trait Report {
-    fn report(&self, progress: Progress);
-}
-
-impl Report for ProgressBar {
-    fn report(&self, progress: Progress) {
-        // The layout's own total, which the cooperative modes can make wrong, so
-        // it is set every time rather than once
-        self.set_length(progress.total);
-        self.set_position(progress.bytes);
-    }
+fn report(bar: &ProgressBar, progress: Progress) {
+    // The layout's own total, which the cooperative modes can make wrong, so
+    // it is set every time rather than once
+    bar.set_length(progress.total);
+    bar.set_position(progress.bytes);
 }

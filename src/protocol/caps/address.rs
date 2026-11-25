@@ -91,15 +91,6 @@ impl Axis {
     pub fn croppable(&self) -> bool {
         (self.address_range.last == 0) || (self.address_range.start != self.address_range.last)
     }
-
-    /// The window origins the unit takes. The 35mm firmware leaves a maximum of 0 unset and takes any origin inside the boundary
-    pub fn origins(&self) -> RangeInclusive<u32> {
-        let range = self.address_range;
-        match range.last {
-            0 => (range.start..=range.start + self.boundary.saturating_sub(1)).into(),
-            _ => range,
-        }
-    }
 }
 
 bitflags! {
@@ -201,6 +192,12 @@ impl Address {
     pub fn registration_gap(&self, dpi: u16) -> u32 {
         let optical = u32::from(self.y_axis.optical_dpi).max(u32::from(self.x_axis.optical_dpi));
         u32::from(self.line_gap) / self.pitch_rule.snap(optical / u32::from(dpi).max(1))
+    }
+
+    /// The X window origins the unit takes. The firmware limits the X origin by the sensor, not by the address range, which an LS-9000 with a holder reports as 0 to 8963
+    pub fn x_origins(&self) -> RangeInclusive<u32> {
+        let start = self.x_axis.address_range.start;
+        (start..=start.max(u32::from(self.ccd_pixels).saturating_sub(1))).into()
     }
 }
 
@@ -525,18 +522,19 @@ mod tests {
         assert!(reversed.contains(CoordinateBase::Y_ORIGIN_REVERSED));
     }
 
-    /// The 35mm units leave the X maximum at 0 and take any origin inside the boundary (issue #77)
+    /// Every unit takes an X origin anywhere on the sensor, whatever X maximum it reports
     #[test]
-    fn an_x_maximum_of_0_lets_the_origin_reach_the_boundary() {
+    fn the_x_origin_reaches_across_the_sensor() {
         let origins = |unit: &str| {
             let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/thumbnail_window")
                 .join(unit)
                 .join("page_c1.bin");
-            parse(&std::fs::read(path).expect("page")).x_axis.origins()
+            parse(&std::fs::read(path).expect("page")).x_origins()
         };
         assert_eq!(origins("ls4000"), (0..=3945).into());
         assert_eq!(origins("ls50"), (0..=3945).into());
-        assert_eq!(origins("ls9000"), (0..=8963).into());
+        // LS-9000 firmware 1.02 takes an X origin up to 9999 with any holder
+        assert_eq!(origins("ls9000"), (0..=9999).into());
     }
 }

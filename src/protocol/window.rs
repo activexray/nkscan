@@ -448,7 +448,10 @@ impl Window {
             (x, 'X', self.origin.0, self.size.0),
             (y, 'Y', self.origin.1, self.size.1),
         ] {
-            let origins = axis.origins();
+            let origins = match name {
+                'X' => caps.address.x_origins(),
+                _ => axis.address_range,
+            };
             if !origins.contains(&origin) {
                 return Err(bad(
                     "window origin",
@@ -997,7 +1000,7 @@ mod tests {
         );
     }
 
-    /// LS-50 firmware 1.02 takes an X origin up to 3945 although C1h gives X 0 to 0 (issue #77)
+    /// LS-50 firmware 1.02 takes an X origin up to 3945 although C1h gives X 0 to 0
     #[test]
     fn an_x_origin_inside_the_boundary_is_taken_when_the_axis_reports_no_range() {
         let mut p = vec![0u8; 91];

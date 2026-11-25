@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Autofocus on an LS-40, LS-4000, LS-50 or LS-5000 aims at the middle of the frame. Before, it aimed at X 0, the left edge, because nkscan limited the point to the C1h address range, which is 0 to 0 in X on these units (#77).
-- An X crop on an LS-40, LS-4000, LS-50 or LS-5000 keeps its left edge. Before, nkscan moved the window origin to X 0, so the scan ran from the left edge of the frame to the right edge of the crop. A C1h address maximum of 0 now means that the unit reports no range, and the X boundary limits the origin (#77).
+- An X crop on an LS-40, LS-4000, LS-50 or LS-5000 keeps its left edge. Before, nkscan moved the window origin to X 0, so the scan ran from the left edge of the frame to the right edge of the crop (#77).
+- On an LS-8000 or LS-9000 with a holder, a crop that starts past X 8963 keeps its left edge. Before, nkscan moved the origin to 8963, the C1h address maximum. The sensor width now limits the X origin, as the firmware does (#77).
 
 ## [0.20.0]
 

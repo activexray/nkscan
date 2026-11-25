@@ -9,7 +9,6 @@ use crate::{
     protocol::{
         caps::{
             Capabilities,
-            address::Axis,
             set_window::{ColorComponents, ColorInterleaving, ScanKind, ScanMode},
         },
         data::Rect,
@@ -293,8 +292,11 @@ impl Recipe {
         }
 
         let (x, y) = (&caps.address.x_axis, &caps.address.y_axis);
-        let clamp = |v: u32, axis: &Axis| v.clamp(axis.origins().start, axis.origins().last);
-        let origin = (clamp(frame.left, x), clamp(frame.top, y));
+        let (xs, ys) = (caps.address.x_origins(), y.address_range);
+        let origin = (
+            frame.left.clamp(xs.start, xs.last),
+            frame.top.clamp(ys.start, ys.last),
+        );
 
         // Measured from where the window actually starts, so growing the extent
         // cannot push the far edge off the axis
@@ -370,6 +372,7 @@ pub(crate) mod tests {
             p[axis + 4..axis + 6].copy_from_slice(&666u16.to_be_bytes());
         }
         p[24..28].copy_from_slice(&20000u32.to_be_bytes());
+        p[83..85].copy_from_slice(&10000u16.to_be_bytes());
         p[85] = 12;
         p[86] = 3;
         p[36..40].copy_from_slice(&10000u32.to_be_bytes());
@@ -645,12 +648,13 @@ pub(crate) mod tests {
         assert_eq!(single[0].size.1, 8819);
     }
 
-    /// LS-50 firmware 1.02 takes X 1000 although C1h gives X 0 to 0 (issue #77)
+    /// LS-50 firmware 1.02 takes X 1000 although C1h gives X 0 to 0
     #[test]
     fn an_x_crop_keeps_its_left_edge_when_the_axis_reports_no_range() {
         let mut caps = caps();
         caps.address.x_axis.address_range = (0..=0).into();
         caps.address.x_axis.boundary = 3946;
+        caps.address.ccd_pixels = 3946;
         let frame = Rect {
             top: 2236,
             left: 1000,

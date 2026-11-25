@@ -8,7 +8,6 @@ use crate::{cache, cancel, cli, io};
 use anyhow::{anyhow, bail};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use nkscan::{
-    device,
     error::Error,
     protocol::decode::Samples,
     scan::{
@@ -44,13 +43,7 @@ const SPINNER_TICK: Duration = Duration::from_millis(120);
 /// Scan what the flags ask for
 pub async fn run(args: cli::Scan) -> anyhow::Result<()> {
     // First grab the requested device, or the first one
-    let (_, transport) = (if let Some(d) = args.device.clone() {
-        device::Selector::Location(d)
-    } else {
-        device::Selector::Only
-    })
-    .open()
-    .await?;
+    let (_, transport) = crate::open(args.device.clone()).await?;
 
     // Start up a scan session. The session is opened here rather than inside
     // the run below so that a cancel is caught while it is still open: a

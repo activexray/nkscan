@@ -1,24 +1,10 @@
-use anyhow::{Result, anyhow};
-use nkscan::{device, error::Error, protocol::sense::Intervention, session::Session};
+use anyhow::Result;
+use nkscan::{error::Error, protocol::sense::Intervention, session::Session};
 
 use crate::cli::Eject;
 
 pub async fn run(args: Eject) -> Result<()> {
-    let selector = match args.device {
-        Some(d) => device::Selector::Location(d),
-        None => device::Selector::Only,
-    };
-    let (device, transport) = match selector.open().await {
-        Ok(opened) => opened,
-        Err(e) => {
-            let list: Vec<_> = device::list()
-                .await
-                .iter()
-                .map(ToString::to_string)
-                .collect();
-            return Err(anyhow!("{e}\n\nattached:\n  {}", list.join("\n  ")));
-        }
-    };
+    let (device, transport) = crate::open(args.device).await?;
 
     println!("{device}");
 

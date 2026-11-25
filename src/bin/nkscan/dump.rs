@@ -3,7 +3,6 @@
 use crate::cli;
 use anyhow::{anyhow, bail};
 use nkscan::{
-    device,
     protocol::{
         caps::{
             self, Page, address::Address, ccd::CcdMeasurement, frames::Frames, other::Features,
@@ -17,21 +16,7 @@ use nkscan::{
 
 /// Dump every INQUIRY page the named unit carries
 pub async fn run(args: cli::Dump) -> anyhow::Result<()> {
-    let selector = match args.device {
-        Some(d) => device::Selector::Location(d),
-        None => device::Selector::Only,
-    };
-    let (device, mut transport) = match selector.open().await {
-        Ok(opened) => opened,
-        Err(e) => {
-            let list: Vec<_> = device::list()
-                .await
-                .iter()
-                .map(ToString::to_string)
-                .collect();
-            return Err(anyhow!("{e}\n\nattached:\n  {}", list.join("\n  ")));
-        }
-    };
+    let (device, mut transport) = crate::open(args.device).await?;
 
     println!("{device}\n");
 

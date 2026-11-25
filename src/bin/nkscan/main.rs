@@ -1,6 +1,6 @@
 use clap::Parser;
 use cli::Cli;
-use nkscan::device;
+use nkscan::{device, transport::Transport};
 use std::io::{IsTerminal, stderr};
 use tracing_subscriber::EnvFilter;
 
@@ -38,6 +38,22 @@ fn enable_ansi_support() {
 
 #[cfg(not(target_os = "windows"))]
 fn enable_ansi_support() {}
+
+/// Open the `--device` unit, or the only one attached, and list what is attached if that fails
+async fn open(location: Option<String>) -> anyhow::Result<(device::Device, Box<dyn Transport>)> {
+    let selector = location.map_or(device::Selector::Only, device::Selector::Location);
+    match selector.open().await {
+        Ok(opened) => Ok(opened),
+        Err(e) => {
+            let list: Vec<_> = device::list()
+                .await
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            Err(anyhow::anyhow!("{e}\n\nattached:\n  {}", list.join("\n  ")))
+        }
+    }
+}
 
 fn main() -> anyhow::Result<()> {
     enable_ansi_support();

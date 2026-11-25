@@ -23,7 +23,6 @@ use nkscan::{
     session::Session,
 };
 use std::{
-    borrow::Cow,
     io::{IsTerminal, Write},
     ops::ControlFlow,
     time::Duration,
@@ -228,11 +227,8 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
             None => {
                 let mut bar: Option<ProgressBar> = None;
                 let discovery = framing::discover_with(session, format, film, &mut samples, |p| {
-                    if takes_pass && bar.is_none() && p.total > 0 {
-                        bar = Some(pass_bar("thumbnail", p.total));
-                    }
-                    if let Some(bar) = &bar {
-                        report(bar, p);
+                    if takes_pass {
+                        report(&mut bar, || "thumbnail".into(), p);
                     }
                     if cancel::requested() {
                         ControlFlow::Break(())
@@ -313,34 +309,20 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
                 |phase, p| {
                     match phase {
                         Phase::Meter(pass) => {
-                            // A pass does not know how long it is until its
-                            // first chunk lands, so a bar made when the phase
-                            // starts draws `0 B/0 B` and sits at it. Waiting for
-                            // a length keeps that line off the screen, and names
-                            // the bar for the pass it is rather than renaming it
-                            if meter_bar.is_none() && p.total > 0 {
-                                meter_bar = Some(pass_bar(format!("meter {pass}"), p.total));
-                                shown = pass;
+                            // Each pass starts over, so say which one it is
+                            if pass != shown
+                                && let Some(bar) = &meter_bar
+                            {
+                                bar.set_message(format!("meter {pass}"));
                             }
-                            if let Some(bar) = &meter_bar {
-                                // Each pass starts over, so say which one it is
-                                if pass != shown {
-                                    bar.set_message(format!("meter {pass}"));
-                                    shown = pass;
-                                }
-                                report(bar, p);
-                            }
+                            shown = pass;
+                            report(&mut meter_bar, || format!("meter {pass}"), p);
                         }
                         Phase::Scan => {
                             if let Some(bar) = meter_bar.take() {
                                 crate::progress::done(bar);
                             }
-                            if scan_bar.is_none() && p.total > 0 {
-                                scan_bar = Some(pass_bar(format!("frame {}", n + 1), p.total));
-                            }
-                            if let Some(bar) = &scan_bar {
-                                report(bar, p);
-                            }
+                            report(&mut scan_bar, || format!("frame {}", n + 1), p);
                         }
                     }
                     if cancel::requested() {
@@ -592,32 +574,32 @@ fn confirm(prompt: &str) -> anyhow::Result<bool> {
     }
 }
 
-/// A bar for one pass
+/// Move a pass's progress onto `bar`, making the bar named `label` on the first report that has a length
 ///
-/// The length is not known until the first chunk arrives, so it starts empty
-/// and learns. Hidden by indicatif when stderr is not a terminal, and drawn no
-/// more than 20 times a second, which is what keeps the callback off the
-/// scanner's back
-fn pass_bar(label: impl Into<Cow<'static, str>>, total: u64) -> ProgressBar {
-    // A bar built the usual way draws straight to stderr, so styling and naming
-    // it here would leave that first line behind the moment `add` moves it onto
-    // the shared draw target. Built hidden, it draws nothing until it is added
-    let bar = ProgressBar::with_draw_target(Some(total), ProgressDrawTarget::hidden());
-    bar.set_style(
-        ProgressStyle::with_template(
-            "{msg:<9} [{bar:30}] {bytes}/{total_bytes}  {bytes_per_sec}  eta {eta}",
-        )
-        .expect("a template of ours")
-        .progress_chars("=> "),
-    );
-    bar.set_message(label.into());
-    crate::progress::add(bar)
-}
-
-/// Moving a pass's progress onto a bar
-fn report(bar: &ProgressBar, progress: Progress) {
-    // The layout's own total, which the cooperative modes can make wrong, so
-    // it is set every time rather than once
-    bar.set_length(progress.total);
-    bar.set_position(progress.bytes);
+/// A pass does not know how long it is until its first chunk lands, and a bar
+/// made sooner draws `0 B/0 B` and sits at it. Hidden by indicatif when stderr
+/// is not a terminal, and drawn no more than 20 times a second, which is what
+/// keeps the callback off the scanner's back
+fn report(bar: &mut Option<ProgressBar>, label: impl FnOnce() -> String, progress: Progress) {
+    if bar.is_none() && progress.total > 0 {
+        // A bar built the usual way draws straight to stderr, so styling and naming
+        // it here would leave that first line behind the moment `add` moves it onto
+        // the shared draw target. Built hidden, it draws nothing until it is added
+        let new = ProgressBar::with_draw_target(Some(progress.total), ProgressDrawTarget::hidden());
+        new.set_style(
+            ProgressStyle::with_template(
+                "{msg:<9} [{bar:30}] {bytes}/{total_bytes}  {bytes_per_sec}  eta {eta}",
+            )
+            .expect("a template of ours")
+            .progress_chars("=> "),
+        );
+        new.set_message(label());
+        *bar = Some(crate::progress::add(new));
+    }
+    if let Some(bar) = bar {
+        // The layout's own total, which the cooperative modes can make wrong, so
+        // it is set every time rather than once
+        bar.set_length(progress.total);
+        bar.set_position(progress.bytes);
+    }
 }

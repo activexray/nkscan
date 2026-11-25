@@ -1,6 +1,6 @@
 //! READ and SEND data types. Section 2-11
 
-use super::{caps::other::DataTypes, sense::Coop};
+use super::{be16, be32, caps::other::DataTypes, sense::Coop};
 use crate::error::Error;
 use bitflags::bitflags;
 
@@ -391,7 +391,6 @@ impl Boundary {
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
         let head: &[u8; Self::HEAD] = b.get(..Self::HEAD)?.try_into().ok()?;
         let count = usize::from(head[2]);
-        let be32 = |s: &[u8], i: usize| u32::from_be_bytes([s[i], s[i + 1], s[i + 2], s[i + 3]]);
 
         let mut frames = Vec::with_capacity(count);
         for n in 0..count {
@@ -687,8 +686,6 @@ impl Setup {
 
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
         let head: &[u8; Self::HEAD] = b.get(..Self::HEAD)?.try_into().ok()?;
-        let be16 = |s: &[u8], i: usize| u16::from_be_bytes([s[i], s[i + 1]]);
-        let be32 = |s: &[u8], i: usize| u32::from_be_bytes([s[i], s[i + 1], s[i + 2], s[i + 3]]);
 
         let count = usize::from(head[13]);
         let mut images = Vec::with_capacity(count);
@@ -798,11 +795,10 @@ impl Operation {
 
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
         let b: &[u8; Self::LENGTH] = b.get(..Self::LENGTH)?.try_into().ok()?;
-        let be32 = |i: usize| u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
         Some(Self {
             color: b[0],
-            first: be32(1),
-            second: be32(5),
+            first: be32(b, 1),
+            second: be32(b, 5),
         })
     }
 
@@ -841,14 +837,13 @@ impl Geometry {
 
     fn from_bytes(b: &[u8]) -> Option<Self> {
         let b: &[u8; Self::LENGTH] = b.get(..Self::LENGTH)?.try_into().ok()?;
-        let be16 = |i: usize| u16::from_be_bytes([b[i], b[i + 1]]);
         Some(Self {
-            bytes_per_line: be16(5),
-            entire_lines: be16(7),
+            bytes_per_line: be16(b, 5),
+            entire_lines: be16(b, 7),
             bits_per_color: b[9],
-            lines_per_image: be16(10),
+            lines_per_image: be16(b, 10),
             readings_per_line: b[12],
-            registration_gap: be16(13),
+            registration_gap: be16(b, 13),
         })
     }
 }
@@ -906,10 +901,9 @@ impl Truncation {
 
     fn from_bytes(b: &[u8]) -> Option<Self> {
         let b: &[u8; Self::LENGTH] = b.get(..Self::LENGTH)?.try_into().ok()?;
-        let be16 = |i: usize| u16::from_be_bytes([b[i], b[i + 1]]);
         let edges = |i: usize| Edges {
-            first: be16(i),
-            last: be16(i + 2),
+            first: be16(b, i),
+            last: be16(b, i + 2),
         };
         Some(Self {
             position: Position::from_bits_truncate(u16::from(b[5]) | u16::from(b[6]) << 8),

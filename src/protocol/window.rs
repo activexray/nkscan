@@ -1,6 +1,9 @@
 //! Data around the GET/SET WINDOW commands. Section 2-10
 
-use super::caps::set_window::{BitDepth, ColorInterleaving, ScanKind, ScanMode};
+use super::{
+    be16, be32,
+    caps::set_window::{BitDepth, ColorInterleaving, ScanKind, ScanMode},
+};
 use crate::{error::Error, protocol::caps::Capabilities};
 use bitflags::bitflags;
 use tracing::*;
@@ -213,23 +216,21 @@ impl TryFrom<&[u8]> for Window {
             .get(..LENGTH)
             .and_then(|d| d.try_into().ok())
             .ok_or(TooShort { got: d.len() })?;
-        let be16 = |i: usize| u16::from_be_bytes([d[i], d[i + 1]]);
-        let be32 = |i: usize| u32::from_be_bytes([d[i], d[i + 1], d[i + 2], d[i + 3]]);
 
         Ok(Self {
             id: d[0],
             auto: d[1] & 1 != 0,
-            resolution: (be16(2), be16(4)),
-            origin: (be32(6), be32(10)),
-            size: (be32(14), be32(18)),
+            resolution: (be16(d, 2), be16(d, 4)),
+            origin: (be32(d, 6), be32(d, 10)),
+            size: (be32(d, 14), be32(d, 18)),
             brightness: d[22],
             threshold: d[23],
             contrast: d[24],
             composition: d[25].into(),
             bpp: d[26],
-            halftone_pattern: be16(27),
+            halftone_pattern: be16(d, 27),
             padding_type: d[29],
-            bit_ordering: be16(30),
+            bit_ordering: be16(d, 30),
             compression_type: d[32],
             compression_argument: d[33],
             multiple_reading: d[40] >> 4,
@@ -240,7 +241,7 @@ impl TryFrom<&[u8]> for Window {
             scanning_mode: ScanMode::from_bits_truncate(d[43]),
             color_interleaving: ColorInterleaving::from_bits_truncate(d[44]),
             ae_value: d[45],
-            exposure: be32(46),
+            exposure: be32(d, 46),
         })
     }
 }

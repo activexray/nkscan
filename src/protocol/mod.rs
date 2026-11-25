@@ -14,3 +14,13 @@ pub mod mode;
 pub mod model;
 pub mod sense;
 pub mod window;
+
+/// The big-endian `u16` at `i`, in a record already checked to be long enough
+pub(crate) fn be16(b: &[u8], i: usize) -> u16 {
+    u16::from_be_bytes([b[i], b[i + 1]])
+}
+
+/// The big-endian `u32` at `i`, in a record already checked to be long enough
+pub(crate) fn be32(b: &[u8], i: usize) -> u32 {
+    u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]])
+}

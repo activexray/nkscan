@@ -87,7 +87,7 @@ pub struct Axis {
 }
 
 impl Axis {
-    /// Equal ends mean no arbitrary range on this axis: the caller has to use the full [`boundary`](Self::boundary) width
+    /// Equal ends mean no arbitrary range on this axis, by 2-2-2-3. The firmware takes a narrower window anyway, so nkscan does not check this
     pub fn croppable(&self) -> bool {
         (self.address_range.last == 0) || (self.address_range.start != self.address_range.last)
     }

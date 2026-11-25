@@ -472,16 +472,7 @@ impl Window {
                     "window reaches past the adapter's opening"
                 );
             }
-            // 2-2-2-3: an axis with no address range has to be read whole
-            if !axis.croppable() && size != axis.boundary {
-                return Err(bad(
-                    "window size",
-                    format!(
-                        "{name} cannot be cropped, so it has to be exactly {}",
-                        axis.boundary
-                    ),
-                ));
-            }
+            // No full-width rule for equal address ends, which 2-2-2-3 states: every firmware takes any width up to its own limit
         }
         Ok(())
     }

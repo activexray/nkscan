@@ -28,9 +28,9 @@ Each of these was checked in source, not assumed.
 | `thread::sleep` is `memory_atomic_wait32` on wasm | `std/src/sys/thread/wasm.rs`. Needs `+atomics`, and `Atomics.wait` is illegal on the browser main thread. 4 sites: `usb.rs:159`, `windows.rs:176`, `session/mod.rs:497`, `bin/nkscan/scan.rs:538` |
 | `std::thread::spawn` unsupported on wasm | `std/src/sys/thread/unsupported.rs:19`. Breaks the `thread::scope` reader pipeline at `session/scan.rs:166-170` |
 | `DeviceInfo::bus_id()`/`port_chain()` are not available on wasm | `nusb-0.2.7/src/enumeration.rs:182-220` — gated to linux/macos/windows. `Attach::Usb { bus, ports }` (`device.rs:26-31`) has no wasm equivalent |
-| `wide`'s SIMD needs an explicit target feature | `wide-1.6.1/src/f32x4_.rs:15,92` gate the `v128` paths on `target_feature = "simd128"`, off by default. It is also only used in `from_density` (`dust.rs:286-303`); the rest of `dust.rs` relies on autovectorization, which needs the same flag |
+| SIMD needs an explicit target feature | `dust.rs` relies on autovectorization, which emits `v128` code only with `target_feature = "simd128"`, off by default |
 | WebUSB works in a Worker | `nusb-0.2.7/src/platform/webusb/mod.rs:62-70` handles `WorkerGlobalScope` as well as `Window` |
-| `tiff`, `moxcms`, `wide`, `thiserror`, `bitflags`, `tracing` are wasm-clean | No `build.rs`, no C, pure Rust throughout the lock tree |
+| `tiff`, `moxcms`, `thiserror`, `bitflags`, `tracing` are wasm-clean | No `build.rs`, no C, pure Rust throughout the lock tree |
 
 ### Memory ceiling
 
@@ -207,4 +207,4 @@ implies:
    browser and diff the TIFFs. They should be identical; `dust.rs` and `protocol/decode.rs`
    are the same code on both paths.
 5. Confirm rayon actually engages in the browser (compare `dust::clean` wall time against
-   a `parallel`-off build) and that `+simd128` is active (compare `from_density` timing).
+   a `parallel`-off build) and that `+simd128` is active (compare `dust::clean` timing with and without it).

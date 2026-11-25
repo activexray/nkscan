@@ -24,29 +24,11 @@ use crate::{
 };
 use tracing::*;
 
-/// Stage addresses one thumbnail column spans
-///
-/// The optical resolution over the resolution the pass asks for, rounded down,
-/// which is the pass's own `line_pitch` computed without the pass
-pub(crate) fn line_pitch(caps: &Capabilities) -> u32 {
-    let optical =
-        u32::from(caps.address.y_axis.optical_dpi).max(u32::from(caps.address.x_axis.optical_dpi));
-    match u32::from(caps.address.thumbnail_resolution.start) {
-        0 => 1,
-        asked => (optical / asked).max(1),
-    }
-}
-
 /// The Y addresses between two thumbnail lines
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LinePitch(pub(crate) u32);
 
 impl LinePitch {
-    /// The pitch the pass asks for
-    pub fn computed(caps: &Capabilities) -> Self {
-        Self(line_pitch(caps))
-    }
-
     /// The pitch `pass` took
     pub(crate) fn of(pass: &Pass) -> Self {
         Self(pass.layout.line_pitch.max(1))

@@ -6,7 +6,6 @@
 use crate::scan::profile::Film;
 use rayon::prelude::*;
 use std::sync::LazyLock;
-use wide::f32x4;
 
 // -----  constants
 
@@ -323,30 +322,6 @@ pub fn to_density(samples: &[u16]) -> Vec<f32> {
         .for_each(|(src, dst)| {
             for (&s, d) in src.iter().zip(dst) {
                 *d = lut[usize::from(s)];
-            }
-        });
-    out
-}
-
-/// Step 9: a whole plane of densities back to linear samples
-pub fn from_density(values: &[f32]) -> Vec<u16> {
-    let scale = f32x4::splat(16.0 / M);
-    let mut out = vec![0u16; values.len()];
-    values
-        .par_chunks(CHUNK)
-        .zip(out.par_chunks_mut(CHUNK))
-        .for_each(|(src, dst)| {
-            let (src_lanes, src_tail) = src.as_chunks::<4>();
-            let (dst_lanes, dst_tail) = dst.as_chunks_mut::<4>();
-            for (s, d) in src_lanes.iter().zip(dst_lanes) {
-                let v = (f32x4::new(*s) * scale).exp2() - f32x4::ONE;
-                *d = v
-                    .round_int()
-                    .to_array()
-                    .map(|v| v.clamp(0, i32::from(u16::MAX)) as u16);
-            }
-            for (&s, d) in src_tail.iter().zip(dst_tail) {
-                *d = from_density_scalar(s);
             }
         });
     out

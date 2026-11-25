@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On an LS-8000 or LS-9000 with a holder, a crop that starts past X 8963 keeps its left edge. Before, nkscan moved the origin to 8963, the C1h address maximum. The sensor width now limits the X origin, as the firmware does (#77).
 - On an LS-8000 or LS-9000, a frame that no 88h frame holds, such as a frame the caller moved or a frame across two frames, is scanned where the caller asks. nkscan moves the frame that overlaps it most to hold it, as Nikon Scan does when the user moves a frame. Before, the stage homed to reach the window, and autofocus refused a point outside the frames.
 
+### Removed
+
+- **Breaking:** `scan::thumbnail::LinePitch::computed`, `dust::from_density`, `protocol::caps::set_window::SetWindowFunction::permits` and `protocol::cdbs::GetWindow::single` are removed. Nothing in nkscan called them. The `wide` dependency goes with `from_density`.
+
 ## [0.20.0]
 
 ### Fixed

@@ -157,13 +157,6 @@ impl Component {
 
 impl SetWindowFunction {
     pub const PAGE_CODE: u8 = 0xD1;
-
-    /// Whether `component` may be read in `position` (0-based)
-    pub fn permits(&self, position: usize, component: Component) -> bool {
-        self.order
-            .get(position)
-            .is_none_or(|slot| slot.is_none_or(|c| c == component))
-    }
 }
 
 impl TryFrom<&Page> for SetWindowFunction {
@@ -283,8 +276,6 @@ mod tests {
                 Some(Component::Other(4)),
             ]
         );
-        assert!(five.permits(0, Component::Red));
-        assert!(!five.permits(1, Component::Red));
     }
 
     /// 2-2-2-4 gives byte 4 as 03h and calls bits 3 and 4 reserved; hardware

@@ -188,14 +188,6 @@ impl GetWindow {
         }
     }
 
-    /// One window by identifier
-    pub fn single(window: u8, transfer_length: u32) -> Self {
-        Self {
-            window: Some(window),
-            transfer_length,
-        }
-    }
-
     pub fn allocation_length(&self) -> usize {
         self.transfer_length as usize
     }

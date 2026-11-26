@@ -54,7 +54,7 @@
           };
           nativeBuildInputs = with pkgs;
             [python]
-            ++ lib.optionals stdenv.isDarwin [libiconv];
+            ++ lib.optionals stdenv.hostPlatform.isDarwin [libiconv];
           buildInputs = [];
         };
 

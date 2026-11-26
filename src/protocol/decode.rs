@@ -640,8 +640,8 @@ mod tests {
         assert_eq!(d.shape(), (4, 3));
         for s in 0..4usize {
             for f in 0..3usize {
-                for c in 0..3usize {
-                    let got = samples.colors[c][(4 - 1 - s) * 3 + f];
+                for (c, plane) in samples.colors.iter().enumerate() {
+                    let got = plane[(4 - 1 - s) * 3 + f];
                     assert_eq!(got, (f * 1000 + s * 10 + c) as u16, "{s},{f},{c}");
                 }
             }
@@ -700,19 +700,15 @@ mod tests {
         // One block is one feed position read into the whole sensor bar, so
         // column 0 carries the first wire line and nothing else has moved
         for (y, s) in [(0usize, 3usize), (1, 2), (2, 1), (3, 0)] {
-            for c in 0..3usize {
-                assert_eq!(
-                    samples.colors[c][y * cols],
-                    (s * 10 + c) as u16,
-                    "row {y} ch {c}"
-                );
+            for (c, plane) in samples.colors.iter().enumerate() {
+                assert_eq!(plane[y * cols], (s * 10 + c) as u16, "row {y} ch {c}");
             }
         }
         // The other feed positions have not arrived, so their columns are blank
         for y in 0..4usize {
             for x in 1..3usize {
-                for c in 0..3usize {
-                    assert_eq!(samples.colors[c][y * cols + x], 0, "row {y} col {x} ch {c}");
+                for (c, plane) in samples.colors.iter().enumerate() {
+                    assert_eq!(plane[y * cols + x], 0, "row {y} col {x} ch {c}");
                 }
             }
         }
@@ -863,9 +859,9 @@ mod transposed {
                 let x = line * gap as usize + stage;
                 for pixel in 0..rows {
                     let y = rows - 1 - pixel;
-                    for channel in 0..3 {
+                    for (channel, plane) in samples.colors.iter().enumerate() {
                         assert_eq!(
-                            samples.colors[channel][y * cols + x],
+                            plane[y * cols + x],
                             tag(stage, channel, pixel, line),
                             "stage {stage} line {line} pixel {pixel} channel {channel}"
                         );
@@ -894,10 +890,10 @@ mod transposed {
                 let pixel_at = y * cols + x;
                 // Infrared is read once, at wire slot 3, whatever the reading count
                 assert_eq!(ir[pixel_at], tag(0, 3, pixel, line));
-                for c in 0..3 {
+                for (c, plane) in samples.colors.iter().enumerate() {
                     let first = tag(0, c, pixel, line);
                     let second = tag(0, 4 + c, pixel, line);
-                    assert_eq!(samples.colors[c][pixel_at], (first + second) / 2);
+                    assert_eq!(plane[pixel_at], (first + second) / 2);
                 }
             }
         }
@@ -969,12 +965,12 @@ mod transposed {
                     tag(stage, 3, pixel, 0),
                     "stage {stage} pixel {pixel} IR"
                 );
-                for c in 0..3 {
+                for (c, plane) in samples.colors.iter().enumerate() {
                     let slots = [c, 4 + c, 7 + c, 10 + c];
                     let reads: Vec<u16> = slots.iter().map(|&s| tag(stage, s, pixel, 0)).collect();
                     let want = reads.iter().map(|&s| u32::from(s)).sum::<u32>() / 4;
                     assert_eq!(
-                        samples.colors[c][pixel_at], want as u16,
+                        plane[pixel_at], want as u16,
                         "stage {stage} pixel {pixel} color {c}"
                     );
                 }
@@ -1016,9 +1012,9 @@ mod transposed {
                     average(stage, 3, pixel),
                     "stage {stage} pixel {pixel} IR"
                 );
-                for c in 0..3 {
+                for (c, plane) in samples.colors.iter().enumerate() {
                     assert_eq!(
-                        samples.colors[c][pixel_at],
+                        plane[pixel_at],
                         average(stage, c, pixel),
                         "stage {stage} pixel {pixel} color {c}"
                     );

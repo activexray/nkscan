@@ -39,7 +39,7 @@ fn enable_ansi_support() {
 #[cfg(not(target_os = "windows"))]
 fn enable_ansi_support() {}
 
-/// Open the `--device` unit, or the only one attached, and list what is attached if that fails
+/// Open the `--device` unit, or the only attached unit. If this fails, list the attached units
 async fn open(location: Option<String>) -> anyhow::Result<(device::Device, Box<dyn Transport>)> {
     let selector = location.map_or(device::Selector::Only, device::Selector::Location);
     match selector.open().await {

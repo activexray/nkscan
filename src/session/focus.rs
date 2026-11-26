@@ -39,9 +39,9 @@ impl Session {
     /// calling it an address on the medium: the captures focus a window at top
     /// 10512 length 6696 at 13860, its center.
     ///
-    /// The C1h address range limits a window origin and not this point. Nikon
-    /// Scan limits the point to the frame rect alone (`CNkCapImageAutoFocusPt`),
-    /// and the frame table check here does the same.
+    /// The C1h address range limits a window origin. It does not limit this
+    /// point. Nikon Scan limits the point only to the frame rect
+    /// (`CNkCapImageAutoFocusPt`), and the frame table check here does the same.
     ///
     /// `color` picks the channel, which needs the unit to offer
     /// `Op::ColorAutoFocus`; `None` uses `Op::AutoFocus` and lets it choose.

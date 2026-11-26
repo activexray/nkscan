@@ -87,7 +87,7 @@ pub struct Axis {
 }
 
 impl Axis {
-    /// Equal ends mean no arbitrary range on this axis, by 2-2-2-3. The firmware takes a narrower window anyway, so nkscan does not check this
+    /// Equal ends mean no arbitrary range on this axis (2-2-2-3). The firmware accepts a narrower window, so nkscan does not check this
     pub fn croppable(&self) -> bool {
         (self.address_range.last == 0) || (self.address_range.start != self.address_range.last)
     }
@@ -194,7 +194,7 @@ impl Address {
         u32::from(self.line_gap) / self.pitch_rule.snap(optical / u32::from(dpi).max(1))
     }
 
-    /// The X window origins the unit takes. The firmware limits the X origin by the sensor, not by the address range, which an LS-9000 with a holder reports as 0 to 8963
+    /// The X window origins that the unit accepts. The firmware limits the X origin to the sensor width and ignores the address range, which is 0 to 8963 on an LS-9000 with a holder
     pub fn x_origins(&self) -> RangeInclusive<u32> {
         let start = self.x_axis.address_range.start;
         (start..=start.max(u32::from(self.ccd_pixels).saturating_sub(1))).into()
@@ -522,7 +522,7 @@ mod tests {
         assert!(reversed.contains(CoordinateBase::Y_ORIGIN_REVERSED));
     }
 
-    /// Every unit takes an X origin anywhere on the sensor, whatever X maximum it reports
+    /// Each unit accepts an X origin across the full sensor width, whatever X maximum it reports
     #[test]
     fn the_x_origin_reaches_across_the_sensor() {
         let origins = |unit: &str| {
@@ -534,7 +534,7 @@ mod tests {
         };
         assert_eq!(origins("ls4000"), (0..=3945).into());
         assert_eq!(origins("ls50"), (0..=3945).into());
-        // LS-9000 firmware 1.02 takes an X origin up to 9999 with any holder
+        // LS-9000 firmware 1.02 accepts an X origin up to 9999 with all holders
         assert_eq!(origins("ls9000"), (0..=9999).into());
     }
 }

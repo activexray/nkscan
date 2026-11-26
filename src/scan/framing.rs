@@ -213,14 +213,13 @@ pub fn frames(caps: &Capabilities) -> Result<Boundary, Error> {
 /// Put `frame` in the unit's frame table before a pass over it
 ///
 /// Only for a unit that positions the film by that table. A unit with a 2-11-6
-/// table homes the stage to reach a window that no frame holds, so the frame
-/// that overlaps `frame` most moves to hold it, as Nikon Scan does when the user
-/// moves a frame. A unit with a 2-11-9 table reads a rectangle that is not in
-/// the table as an offset into the frame that holds its top, and sends black
-/// data past the end of that frame. The unit accepts
-/// the table only as a whole, so this starts from the table the session knows,
-/// or from the unit's table if the session knows none. A top already in the
-/// table is left alone.
+/// table homes the stage when no frame holds the window. Thus the frame that
+/// overlaps `frame` most moves to hold it. Nikon Scan does the same when the
+/// user moves a frame. A unit with a 2-11-9 table reads a rectangle that is not
+/// in the table as an offset into the frame that holds its top. Past the end of
+/// that frame, it sends black data. The unit accepts the table only as a whole.
+/// Thus this starts from the table that the session knows, or from the unit's
+/// table if the session knows none. A top that is in the table does not change.
 ///
 /// Answers whether a table was written. The caller must put the measured table
 /// back, because [`BoundaryType2::register`](crate::protocol::data::BoundaryType2::register)

@@ -473,7 +473,7 @@ impl Window {
                     "window reaches past the adapter's opening"
                 );
             }
-            // No full-width rule for equal address ends, which 2-2-2-3 states: every firmware takes any width up to its own limit
+            // 2-2-2-3 gives a full-width rule for equal address ends, but each firmware accepts all widths up to its limit
         }
         Ok(())
     }
@@ -992,7 +992,7 @@ mod tests {
         );
     }
 
-    /// LS-50 firmware 1.02 takes an X origin up to 3945 although C1h gives X 0 to 0
+    /// LS-50 firmware 1.02 accepts an X origin up to 3945, although C1h gives X 0 to 0
     #[test]
     fn an_x_origin_inside_the_boundary_is_taken_when_the_axis_reports_no_range() {
         let mut p = vec![0u8; 91];

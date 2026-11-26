@@ -309,7 +309,7 @@ async fn run_cancellable(session: &mut Session, args: cli::Scan) -> anyhow::Resu
                 |phase, p| {
                     match phase {
                         Phase::Meter(pass) => {
-                            // Each pass starts over, so say which one it is
+                            // Each pass starts again, so show which pass it is
                             if pass != shown
                                 && let Some(bar) = &meter_bar
                             {
@@ -574,17 +574,17 @@ fn confirm(prompt: &str) -> anyhow::Result<bool> {
     }
 }
 
-/// Move a pass's progress onto `bar`, making the bar named `label` on the first report that has a length
+/// Show the progress of a pass on `bar`. Make the bar, with the name `label`, at the first report that has a length
 ///
-/// A pass does not know how long it is until its first chunk lands, and a bar
-/// made sooner draws `0 B/0 B` and sits at it. Hidden by indicatif when stderr
-/// is not a terminal, and drawn no more than 20 times a second, which is what
-/// keeps the callback off the scanner's back
+/// A pass knows its length only when its first chunk arrives. A bar made before
+/// then shows `0 B/0 B` and does not move. indicatif hides the bar when stderr
+/// is not a terminal, and draws it a maximum of 20 times each second. Thus the
+/// callback does not slow the scanner
 fn report(bar: &mut Option<ProgressBar>, label: impl FnOnce() -> String, progress: Progress) {
     if bar.is_none() && progress.total > 0 {
-        // A bar built the usual way draws straight to stderr, so styling and naming
-        // it here would leave that first line behind the moment `add` moves it onto
-        // the shared draw target. Built hidden, it draws nothing until it is added
+        // A usual bar draws directly to stderr. If it gets its style and name here,
+        // its first line stays on the screen when `add` moves it to the shared draw
+        // target. A hidden bar draws nothing until `add`
         let new = ProgressBar::with_draw_target(Some(progress.total), ProgressDrawTarget::hidden());
         new.set_style(
             ProgressStyle::with_template(

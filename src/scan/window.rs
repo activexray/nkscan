@@ -648,7 +648,7 @@ pub(crate) mod tests {
         assert_eq!(single[0].size.1, 8819);
     }
 
-    /// LS-50 firmware 1.02 takes X 1000 although C1h gives X 0 to 0
+    /// LS-50 firmware 1.02 accepts X 1000, although C1h gives X 0 to 0
     #[test]
     fn an_x_crop_keeps_its_left_edge_when_the_axis_reports_no_range() {
         let mut caps = caps();

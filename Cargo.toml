@@ -1,6 +1,6 @@
 [package]
 name = "nkscan"
-version = "0.20.0"
+version = "0.21.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "A platform-agnostic, performant driver for Nikon film scanners"
@@ -78,7 +78,7 @@ web-time = "1"
 gloo-timers = { version = "0.4", features = ["futures"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-nix = { version = "0.31", features = ["ioctl"] }
+nix = { version = "0.32", features = ["ioctl"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = [

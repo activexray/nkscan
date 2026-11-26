@@ -5,18 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.21.0]
 
 ### Fixed
 
-- Autofocus on an LS-40, LS-4000, LS-50 or LS-5000 aims at the middle of the frame. Before, it aimed at X 0, the left edge, because nkscan limited the point to the C1h address range, which is 0 to 0 in X on these units (#77).
-- An X crop on an LS-40, LS-4000, LS-50 or LS-5000 keeps its left edge. Before, nkscan moved the window origin to X 0, so the scan ran from the left edge of the frame to the right edge of the crop (#77).
-- On an LS-8000 or LS-9000 with a holder, a crop that starts past X 8963 keeps its left edge. Before, nkscan moved the origin to 8963, the C1h address maximum. The sensor width now limits the X origin, as the firmware does (#77).
-- On an LS-8000 or LS-9000, a frame that no 88h frame holds, such as a frame the caller moved or a frame across two frames, is scanned where the caller asks. nkscan moves the frame that overlaps it most to hold it, as Nikon Scan does when the user moves a frame. Before, the stage homed to reach the window, and autofocus refused a point outside the frames.
+- Autofocus on an LS-40, LS-4000, LS-50 or LS-5000 aims at the middle of the frame. Before, it aimed at X 0, the left edge. The cause was that nkscan limited the point to the C1h address range, which is 0 to 0 in X on these units (#77).
+- An X crop on an LS-40, LS-4000, LS-50 or LS-5000 keeps its left edge. Before, nkscan moved the window origin to X 0. Thus the scan started at the left edge of the frame and stopped at the right edge of the crop (#77).
+- On an LS-8000 or LS-9000 with a holder, a crop that starts past X 8963 keeps its left edge. Before, nkscan moved the origin to 8963, the C1h address maximum. Now the sensor width limits the X origin, as in the firmware (#77).
+- On an LS-8000 or LS-9000, nkscan scans a frame at the position that the caller asks for, also when no 88h frame holds it. Examples are a frame that the caller moved and a frame across two frames. nkscan moves the 88h frame that overlaps it most to hold it. Nikon Scan does the same when the user moves a frame. Before, the stage homed to reach the window, and autofocus refused a point outside the frames.
 
 ### Removed
 
-- **Breaking:** `scan::thumbnail::LinePitch::computed`, `dust::from_density`, `protocol::caps::set_window::SetWindowFunction::permits` and `protocol::cdbs::GetWindow::single` are removed. Nothing in nkscan called them. The `wide` dependency goes with `from_density`.
+- **Breaking:** `scan::thumbnail::LinePitch::computed`, `dust::from_density`, `protocol::caps::set_window::SetWindowFunction::permits` and `protocol::cdbs::GetWindow::single` are removed. nkscan did not use them. The `wide` dependency is removed with `from_density`.
 
 ## [0.20.0]
 

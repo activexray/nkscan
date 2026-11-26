@@ -333,7 +333,7 @@ pub fn find(image: &Image, length: usize) -> Option<Strip> {
     }
 
     let (contrast, first, pitch, frames) = best?;
-    let found: Vec<Range<usize>> = (0..frames).map(|k| picture(first, pitch, k)).collect();
+    let found = Vec::from_fn(frames, |k| picture(first, pitch, k));
     debug!(?found, pitch, contrast, "fitted the strip");
     Some(Strip {
         frames: found,

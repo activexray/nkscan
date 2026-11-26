@@ -58,7 +58,7 @@ impl Curves {
         // the others sit either side of, so it moves the fewest samples
         let reference = curve(rows / 2).to_vec();
         Some(Self {
-            rows: (0..rows).map(|r| table(curve(r), &reference)).collect(),
+            rows: Vec::from_fn(rows, |r| table(curve(r), &reference)),
         })
     }
 

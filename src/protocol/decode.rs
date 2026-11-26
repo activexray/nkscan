@@ -1076,7 +1076,7 @@ mod transposed {
         assert_eq!(average(14, &[16383; 16]).0, u16::MAX);
         assert_eq!(average(8, &[255; 16]).0, u16::MAX);
         assert_eq!(average(14, &[0; 16]).0, 0);
-        let reads: Vec<u16> = (0..16).map(|r| 8000 + r % 3).collect();
+        let reads = Vec::from_fn(16, |r| 8000 + r as u16 % 3);
         let mean = reads.iter().map(|&r| f64::from(r)).sum::<f64>() / 16.0;
         let want = mean * 65535.0 / 16383.0;
         assert!((f64::from(average(14, &reads).0) - want).abs() <= 0.5);

@@ -722,7 +722,7 @@ mod tests {
     /// An LS-40 READ that starts with the last 1522 bytes of a 1722-byte line
     #[test]
     fn a_read_after_a_split_line_takes_whole_lines() {
-        let data: Vec<u8> = (0..20_000).map(|i| i as u8).collect();
+        let data = Vec::from_fn(20_000, |i| i as u8);
         let mut steps = vec![Step::Out(vec![0x28; 10]), check(), phase(PHASE_DATA_IN)];
         steps.extend(
             std::iter::once(&data[..1522])
